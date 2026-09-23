@@ -578,20 +578,13 @@ export class App {
   private visual(c: Component) {
     const s = this.sim.state(c.id);
     return {
-      brightness: c.type === "lamp" || c.type === "led" ? this.sim.overload(c) : 0,
+      brightness: 0,
       heat: s.heat,
       burned: s.burned,
       shorted: this.sim.isShorted(c),
       time: this.time,
-      display:
-        c.type === "psu"
-          ? {
-              volts: Math.abs(this.sim.branch(c.id).voltage),
-              amps: Math.max(0, this.sim.branch(c.id).current),
-              mode: this.sim.psuMode.get(c.id) ?? "CV",
-              on: c.on,
-            }
-          : undefined,
+      display: undefined,
+      ...part(c).visual?.(c, this.sim),
     };
   }
 
@@ -656,7 +649,7 @@ export class App {
       if (this.sparkTimer <= 0) {
         this.sparkTimer = 0.12 + Math.random() * 0.25;
         for (const c of this.scene.components) {
-          if (c.type === "battery" && this.sim.isShorted(c)) {
+          if (this.sim.isShorted(c)) {
             this.world.emitSparks(this.views.get(c.id)!.pins[Math.random() < 0.5 ? 0 : 1], 6);
           }
         }
@@ -851,13 +844,13 @@ export class App {
     if (this.ui.schematic) this.bindSchematicDrag(this.ui.schematic);
     this.ui.schematic?.addEventListener("click", (e) => {
       if (this.schJustDragged) return;
-      const part = (e.target as Element).closest<SVGGElement>("[data-part]");
-      const c = part ? this.component(part.dataset.part!) : undefined;
+      const el = (e.target as Element).closest<SVGGElement>("[data-part]");
+      const c = el ? this.component(el.dataset.part!) : undefined;
       if (!c) return;
       this.setProjectsOpen(false);
       if (this.tool !== "select") this.setTool("select");
-      if (c.type === "switch") {
-        c.closed = !c.closed;
+      if (part(c).clickToggles) {
+        part(c).toggle!(c);
         this.changed();
       } else {
         this.selected = c.id;
@@ -1424,8 +1417,8 @@ export class App {
         } else if (target) {
           const c = id ? this.component(id) : undefined;
           // Тумблер просто щёлкается
-          if (c?.type === "switch") {
-            c.closed = !c.closed;
+          if (c && part(c).clickToggles) {
+            part(c).toggle!(c);
             this.changed();
             return;
           }
@@ -1545,7 +1538,8 @@ export class App {
       if (!to) return undefined;
       const owner = occ.get(to.id);
       if (owner && owner !== c.id) return undefined;
-      if ((c.type === "transistor" || c.type === "mosfet") && to.kind === "rail") return undefined;
+      // Трёхвыводная деталь в шине замкнула бы все выводы
+      if (part(c).pins > 2 && to.kind === "rail") return undefined;
       out.push(to.id);
     }
     return out;
@@ -2077,14 +2071,12 @@ export class App {
     root.querySelectorAll<HTMLInputElement>("input[type=range][data-field]").forEach((inp) => {
       inp.addEventListener("input", () => {
         const c = this.selected ? this.component(this.selected) : undefined;
-        if (c?.type !== "psu") return;
-        const v = Number(inp.value);
-        if (inp.dataset.field === "psuV") c.volts = v;
-        if (inp.dataset.field === "psuA") c.amps = v;
+        if (!c) return;
+        part(c).edit?.(c, inp.dataset.field!, inp.value);
         this.sim.solve();
         this.save();
         const label = inp.previousElementSibling?.querySelector("b");
-        if (label) label.textContent = formatSI(v, inp.dataset.field === "psuV" ? "В" : "А");
+        if (label) label.textContent = formatSI(Number(inp.value), inp.dataset.unit ?? "");
       });
       inp.addEventListener("change", () => {
         inp.blur();
@@ -2147,17 +2139,10 @@ export class App {
           this.burnedAt.delete(id);
           this.changed();
         }
-        if (act === "psuToggle") {
-          const c = this.component(id);
-          if (c?.type === "psu") {
-            c.on = !c.on;
-            this.changed();
-          }
-        }
         if (act === "toggle") {
           const c = this.component(id);
-          if (c?.type === "switch") {
-            c.closed = !c.closed;
+          if (c && part(c).toggle) {
+            part(c).toggle!(c);
             this.changed();
           }
         }

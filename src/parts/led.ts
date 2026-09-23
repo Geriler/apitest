@@ -49,6 +49,7 @@ export const led: PartDef<Led> = {
   reversedPill: REVERSED_PILL,
   nearLimitOk: true,
   actual: (c, tol) => actualRow("Прямое напряжение при 20 мА", formatSI(tolerance.ledVf(c, tol), "В")),
+  visual: (c, sim) => ({ brightness: sim.overload(c) }),
   view: ledView,
 };
 

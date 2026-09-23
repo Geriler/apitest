@@ -220,5 +220,17 @@ export const mosfet: PartDef<Mosfet> = {
     const m = tolerance.mosfetParams(c, tol);
     return actualRow("Порог этого экземпляра", `${MOSFETS[c.kind].channel === "p" ? "−" : ""}${formatSI(m.vth, "В")}`);
   },
+  symbol3(c) {
+    const arrow = MOSFETS[c.kind].channel === "n" ? `<path d="M-4 0L2 -3V3Z" class="fill"/>` : `<path d="M8 0L2 -3V3Z" class="fill"/>`;
+    return {
+      roles: { up: mosfetPin(c.kind, "D"), ctrl: mosfetPin(c.kind, "G"), down: mosfetPin(c.kind, "S") },
+      body:
+        `<circle r="17"/><path d="M-9 -10V10" /><path d="M-4 -11V-5M-4 -3V3M-4 5V11" class="thick"/>` +
+        `<path d="M-4 -8H8V-17M-4 8H8V17M-4 0H8V8"/>${arrow}`,
+      ctrlX: -9,
+    };
+  },
+  // На схеме — ток канала, без паразитного диода
+  schematicCurrent: (c, sim) => sim.mosfet(c).id,
   view: transistorView,
 };

@@ -29,6 +29,10 @@ export const switchPart: PartDef<Switch> = {
     editor: `<div class="row"><button class="btn inline" data-act="toggle" id="btn-toggle">${c.closed ? "Разомкнуть" : "Замкнуть"}</button></div>`,
   }),
   status: (c) => (c.closed ? pill("ok", "ЗАМКНУТ") : pill("warn", "РАЗОМКНУТ")),
+  toggle(c) {
+    c.closed = !c.closed;
+  },
+  clickToggles: true,
   view: switchView,
 };
 

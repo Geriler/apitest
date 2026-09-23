@@ -9,17 +9,7 @@
  */
 
 import { HOLE_BY_ID } from "../model/breadboard";
-import {
-  MOSFETS,
-  TRANSISTORS,
-  mosfetPin,
-  type Component,
-  type Mosfet,
-  type Pin,
-  type Scene,
-  type SchematicLayout,
-  type Transistor,
-} from "../model/types";
+import type { Component, Pin, Scene, SchematicLayout } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { endpointNode, pinNode, type Simulation } from "../sim/simulation";
 import { part } from "../parts";
@@ -101,7 +91,7 @@ function formatVolts(v: number): string {
   return `${t} В`;
 }
 
-const isSource = (c: Component) => c.type === "battery" || c.type === "psu";
+const isSource = (c: Component) => !!part(c).source;
 
 /**
  * Порядок цепей сверху вниз — только по соединениям, не по напряжениям, чтобы чертёж не
@@ -178,7 +168,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
   const Y = (net: number) => layout.y?.[keys[net]] ?? TOP + row.get(net)! * ROW;
 
   // Сначала источники, потом остальное — по верхней и нижней цепи
-  const rank = (c: Component) => (c.type === "battery" || c.type === "psu" ? 0 : 1);
+  const rank = (c: Component) => (isSource(c) ? 0 : 1);
   const span = (c: Component) => pins.get(c.id)!.map((n) => row.get(n)!);
   const parts = [...scene.components].sort(
     (a, b) => rank(a) - rank(b) || Math.min(...span(a)) - Math.min(...span(b)) || Math.max(...span(a)) - Math.max(...span(b)),
@@ -191,7 +181,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
     const auto = part(c).pins === 2 ? x : x + COL * 0.4;
     // Ручной сдвиг детали по горизонтали: остальные остаются на своих местах
     const px = layout.x?.[c.id] ?? auto;
-    const current = Math.abs(c.type === "transistor" ? sim.transistor(c).ic : c.type === "mosfet" ? sim.mosfet(c).id : sim.current(c));
+    const current = Math.abs(part(c).schematicCurrent?.(c, sim) ?? sim.current(c));
     const label = (lx: number, ly: number) =>
       `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(part(c).value(c))}</text>` +
       `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`;
@@ -222,13 +212,10 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
       x += COL;
     } else {
       // Транзистор: основной путь (К–Э или С–И) вертикально, управляющий вывод — слева
-      const t = c as Transistor | Mosfet;
+      const sym = part(c).symbol3!(c);
       x += COL * 0.4;
       const tx = px;
-      const roles =
-        t.type === "transistor"
-          ? { up: 0 as Pin, ctrl: 1 as Pin, down: 2 as Pin }
-          : { up: mosfetPin(t.kind, "D"), ctrl: mosfetPin(t.kind, "G"), down: mosfetPin(t.kind, "S") };
+      const roles = sym.roles;
       const yUp = Y(netOf[roles.up]);
       const yDown = Y(netOf[roles.down]);
       const swap = yUp > yDown; // коллектор (сток) ниже эмиттера (истока) — рисуем перевёрнутым
@@ -248,26 +235,13 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
       }
       const yc = (top + bottom) / 2;
       const yCtrl = Y(netOf[roles.ctrl]);
-      let body: string;
-      if (t.type === "transistor") {
-        const npn = TRANSISTORS[t.kind].polarity === "npn";
-        // Эмиттер внизу (в своей системе); стрелка у n-p-n — от базы, у p-n-p — к базе
-        const arrow = npn ? `<path d="M8 13L1.2 11.8L4.2 7.6Z" class="fill"/>` : `<path d="M-6 6L0.4 5.6L-2.6 10.4Z" class="fill"/>`;
-        body = `<circle r="17"/><path d="M-6 -11V11" class="thick"/><path d="M-6 -5L8 -13V-17M-6 5L8 13V17"/>${arrow}`;
-      } else {
-        const n = MOSFETS[t.kind].channel === "n";
-        const arrow = n ? `<path d="M-4 0L2 -3V3Z" class="fill"/>` : `<path d="M8 0L2 -3V3Z" class="fill"/>`;
-        body =
-          `<circle r="17"/><path d="M-9 -10V10" /><path d="M-4 -11V-5M-4 -3V3M-4 5V11" class="thick"/>` +
-          `<path d="M-4 -8H8V-17M-4 8H8V17M-4 0H8V8"/>${arrow}`;
-      }
       // Управляющий вывод: от затвора / базы влево и к своей цепи
-      const gx = t.type === "transistor" ? -6 : -9;
+      const gx = sym.ctrlX;
       const svg =
         `<rect class="hit" x="${num(tx - 22)}" y="${num(yc - 34)}" width="110" height="56"/>` +
         `<path d="M${num(lx)} ${num(top)}V${num(yc - 17)}M${num(lx)} ${num(yc + 17)}V${num(bottom)}"/>${extra}` +
         `<path d="M${num(tx + gx)} ${num(yc)}H${num(tx - 30)}V${num(yCtrl)}"/>` +
-        `<g transform="translate(${num(tx)} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${body}</g>` +
+        `<g transform="translate(${num(tx)} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${sym.body}</g>` +
         label(tx + 24, yc - 20);
       placed.push({ c, x: tx, attach, svg, bottom: Math.max(bottom, yCtrl) });
       x += COL * 1.1;

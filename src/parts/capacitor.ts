@@ -78,6 +78,10 @@ export const capacitor: PartDef<Capacitor> = {
     const f = tolerance.capacitance(c, tol);
     return actualRow("Ёмкость фактически", `${formatFarads(f * 1e6)} (${pct(f * 1e6, c.uF)})`);
   },
+  energy(c, sim) {
+    const v = sim.voltage(c);
+    return 0.5 * tolerance.capacitance(c, sim.tolerance) * v * v;
+  },
   view: capacitorView,
 };
 

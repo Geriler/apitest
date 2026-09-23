@@ -51,6 +51,7 @@ export const battery: PartDef<Battery> = {
     const b = tolerance.battery(c, tol);
     return actualRow("ЭДС фактически", formatSI(b.emf, "В")) + actualRow("Внутр. сопротивление", formatOhms(b.rInt));
   },
+  source: true,
   view: batteryView,
 };
 

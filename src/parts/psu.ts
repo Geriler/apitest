@@ -44,10 +44,10 @@ export const psu: PartDef<PowerSupply> = {
   panel: (c) => ({
     title: "Лабораторный блок питания",
     body: `<div class="field"><label for="f-psuV">Напряжение: <b>${formatSI(c.volts, "В")}</b></label>
-            <input type="range" id="f-psuV" data-field="psuV" min="0" max="${PSU_LIMITS.maxV}" step="0.1" value="${c.volts}" /></div>
+            <input type="range" id="f-psuV" data-field="psuV" data-unit="В" min="0" max="${PSU_LIMITS.maxV}" step="0.1" value="${c.volts}" /></div>
           <div class="field"><label for="f-psuA">Ограничение тока: <b>${formatSI(c.amps, "А")}</b></label>
-            <input type="range" id="f-psuA" data-field="psuA" min="0.01" max="${PSU_LIMITS.maxA}" step="0.01" value="${c.amps}" /></div>
-          <div class="row"><button class="btn inline" data-act="psuToggle" id="btn-psu">${c.on ? "Выключить выход" : "Включить выход"}</button></div>
+            <input type="range" id="f-psuA" data-field="psuA" data-unit="А" min="0.01" max="${PSU_LIMITS.maxA}" step="0.01" value="${c.amps}" /></div>
+          <div class="row"><button class="btn inline" data-act="toggle" id="btn-psu">${c.on ? "Выключить выход" : "Включить выход"}</button></div>
           <p class="sub">Держит заданное напряжение (CV), пока нагрузка берёт меньше тока, чем ограничение. Если больше — держит ток (CC), а напряжение само падает. Поэтому короткое замыкание ему не страшно, а светодиод можно питать без резистора, выставив 20 мА.</p>`,
   }),
   readout: (c, sim) => readout(-sim.voltage(c), Math.abs(sim.current(c)), sim.power(c)),
@@ -56,6 +56,23 @@ export const psu: PartDef<PowerSupply> = {
     return sim.psuMode.get(c.id) === "CC" ? pill("warn", "CC — ОГРАНИЧЕНИЕ ТОКА") : pill("ok", "CV — ДЕРЖИТ НАПРЯЖЕНИЕ");
   },
   noFlip: true,
+  source: true,
+  visual: (c, sim) => ({
+    display: {
+      volts: Math.abs(sim.branch(c.id).voltage),
+      amps: Math.max(0, sim.branch(c.id).current),
+      mode: sim.psuMode.get(c.id) ?? "CV",
+      on: c.on,
+    },
+  }),
+  toggle(c) {
+    c.on = !c.on;
+  },
+  // Ползунки панели: уставка напряжения и ограничение тока
+  edit(c, field, value) {
+    if (field === "psuV") c.volts = Number(value);
+    if (field === "psuA") c.amps = Number(value);
+  },
   view: psuView,
 };
 

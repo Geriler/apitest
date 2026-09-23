@@ -209,11 +209,9 @@ export class Simulation {
     return part(c).power?.(c, this) ?? this.branch(c.id).power;
   }
 
-  /** Энергия, запасённая в конденсаторе, Дж. */
+  /** Запасённая энергия (в конденсаторе), Дж. */
   energy(c: Component): number {
-    if (c.type !== "capacitor") return 0;
-    const v = this.voltage(c);
-    return 0.5 * tolerance.capacitance(c, this.tolerance) * v * v;
+    return part(c).energy?.(c, this) ?? 0;
   }
 
   load(c: Component): Load | undefined {

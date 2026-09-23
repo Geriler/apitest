@@ -4,11 +4,11 @@
  * в описании её типа (PARTS[c.type]). Новая деталь = новый файл в этой папке + строка в index.ts.
  */
 
-import type { Component } from "../model/types";
+import type { Component, Pin } from "../model/types";
 import type { Load, Simulation } from "../sim/simulation";
 import type { Branch, Extras } from "../sim/solver";
 import type { Tolerance } from "../sim/tolerance";
-import type { ComponentView } from "../view/kit";
+import type { ComponentView, Visual } from "../view/kit";
 
 /** Куда деталь складывает свои ветви для решателя. */
 export interface Stamp {
@@ -21,6 +21,16 @@ export interface Thermal {
   threshold: number;
   rate: number;
   cooling: number;
+}
+
+/** Обозначение трёхвыводной детали на схеме: основной путь вертикально, управляющий вывод слева. */
+export interface Symbol3 {
+  /** Выводы: верх основного пути (коллектор, сток), управляющий (база, затвор), низ (эмиттер, исток). */
+  roles: { up: Pin; ctrl: Pin; down: Pin };
+  /** Обозначение в своей системе координат: круг радиусом 17 с центром в начале координат. */
+  body: string;
+  /** Где линия управляющего вывода касается обозначения, по x. */
+  ctrlX: number;
 }
 
 export interface PartDef<C extends Component = Component> {
@@ -46,6 +56,12 @@ export interface PartDef<C extends Component = Component> {
   rated?(c: C): number;
   /** Заголовок и пояснение уведомления, когда деталь выходит из строя. */
   burn(c: C): [string, string];
+  /**
+   * Обозначение трёхвыводной детали на схеме (обязательно, если выводов три).
+   */
+  symbol3?(c: C): Symbol3;
+  /** Источник питания: на схеме его плюс (вывод 1) — верхняя цепь, минус (вывод 0) — нижняя. */
+  source?: boolean;
   /** 3D-вид детали на столе или на плате (без припоя — его добавляет builders.ts). */
   view(c: C): ComponentView;
 
@@ -71,6 +87,10 @@ export interface PartDef<C extends Component = Component> {
   current?(c: C, sim: Simulation): number;
   /** Мощность, которая выделяется теплом, Вт (по умолчанию — по своей ветви). */
   power?(c: C, sim: Simulation): number;
+  /** Ток для подписи на схеме (по умолчанию — ток от вывода 0 к выводу 1). */
+  schematicCurrent?(c: C, sim: Simulation): number;
+  /** Запасённая энергия, Дж (у конденсатора). */
+  energy?(c: C, sim: Simulation): number;
   /** Нагрузка относительно предела (для перегрева и панели). */
   load?(c: C, sim: Simulation): Load | undefined;
   thermal?: Thermal;
@@ -78,6 +98,15 @@ export interface PartDef<C extends Component = Component> {
   shorted?(c: C, sim: Simulation): boolean;
   /** Включена наоборот и напряжение приложено против неё. */
   reversed?(c: C, sim: Simulation): boolean;
+
+  // ─── Вид и управление ────────────────────────────────────────────────────
+
+  /** Что показать на 3D-модели, кроме нагрева: яркость свечения, показания дисплея. */
+  visual?(c: C, sim: Simulation): Partial<Visual>;
+  /** Переключить: тумблер, выход блока питания (кнопка data-act="toggle" в панели). */
+  toggle?(c: C): void;
+  /** Обычный щелчок переключает деталь (toggle), а не выделяет её. */
+  clickToggles?: boolean;
 
   // ─── Панель свойств ─────────────────────────────────────────────────────
 

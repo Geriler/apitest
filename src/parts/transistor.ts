@@ -194,6 +194,15 @@ export const transistor: PartDef<Transistor> = {
   },
   where: (_c, holes) => `К ${holeLabel(holes[0])}, Б ${holeLabel(holes[1])}, Э ${holeLabel(holes[2])}`,
   actual: (c, tol) => actualRow("β этого экземпляра", String(Math.round(tolerance.betaF(c, tol)))),
+  symbol3(c) {
+    // Эмиттер внизу; стрелка у n-p-n — от базы, у p-n-p — к базе
+    const arrow = TRANSISTORS[c.kind].polarity === "npn" ? `<path d="M8 13L1.2 11.8L4.2 7.6Z" class="fill"/>` : `<path d="M-6 6L0.4 5.6L-2.6 10.4Z" class="fill"/>`;
+    return {
+      roles: { up: 0, ctrl: 1, down: 2 },
+      body: `<circle r="17"/><path d="M-6 -11V11" class="thick"/><path d="M-6 -5L8 -13V-17M-6 5L8 13V17"/>${arrow}`,
+      ctrlX: -6,
+    };
+  },
   view: transistorView,
 };
 

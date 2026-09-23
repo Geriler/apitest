@@ -41,6 +41,7 @@ export const lamp: PartDef<Lamp> = {
   warmWord: (k) => (k <= 1.05 ? "ПОЛНЫЙ НАКАЛ" : "ГРЕЕТСЯ"),
   nearLimitOk: true,
   actual: (c, tol) => actualRow("Нить фактически", formatOhms(tolerance.lampResistance(c, tol))),
+  visual: (c, sim) => ({ brightness: sim.overload(c) }),
   view: lampView,
 };
 
