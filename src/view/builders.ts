@@ -6,7 +6,10 @@ import {
   LEDS,
   SMD_SIZES,
   MOSFETS,
-  THT_RESISTOR,
+  capacitorVolts,
+  diodeSpec,
+  ledSpec,
+  thtResistorSpec,
   TRANSISTORS,
   TRACE_WIDTH_MM,
   electrolyticSize,
@@ -202,8 +205,9 @@ function radialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, sp
 // ─── Резисторы ─────────────────────────────────────────────────────────────
 
 function thtBody(c: Resistor) {
-  const L = mm(THT_RESISTOR.lengthMm);
-  const r = mm(THT_RESISTOR.diameterMm) / 2;
+  const spec = thtResistorSpec(c);
+  const L = mm(spec.lengthMm);
+  const r = mm(spec.diameterMm) / 2;
   const body = new THREE.Group();
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0xd8c496, roughness: 0.55 });
   const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(r, L - 2 * r, 6, 20), bodyMat);
@@ -554,7 +558,7 @@ function batteryView(c: Battery): ComponentView {
 // ─── Конденсаторы ──────────────────────────────────────────────────────────
 
 /** Оболочка электролита: тёмно-синяя, со светлой полосой «−» по центру развёртки (u = 0,25 → +X). */
-function sleeveTexture(uF: number): THREE.CanvasTexture {
+function sleeveTexture(uF: number, volts: number): THREE.CanvasTexture {
   const w = 512, h = 256;
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -575,7 +579,7 @@ function sleeveTexture(uF: number): THREE.CanvasTexture {
   g.fillStyle = "#e9eef5";
   g.font = `600 ${h * 0.16}px "IBM Plex Mono", ui-monospace, monospace`;
   g.fillText(`${uF}µF`, w * 0.75, h * 0.38);
-  g.fillText("16V", w * 0.75, h * 0.62);
+  g.fillText(`${volts}V`, w * 0.75, h * 0.62);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -608,10 +612,10 @@ function capacitorView(c: Capacitor): ComponentView {
   let layout: { pins: THREE.Vector3[]; hotspot: THREE.Vector3 };
 
   if (c.variant === "electrolytic") {
-    const size = electrolyticSize(c.uF);
+    const size = electrolyticSize(c.uF, capacitorVolts(c));
     const r = mm(size.diaMm) / 2;
     const h = mm(size.heightMm);
-    bodyMat = new THREE.MeshStandardMaterial({ map: sleeveTexture(c.uF), roughness: 0.45 });
+    bodyMat = new THREE.MeshStandardMaterial({ map: sleeveTexture(c.uF, capacitorVolts(c)), roughness: 0.45 });
     const can = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 40, 1, true), bodyMat);
     can.position.y = h / 2;
     body.add(can);
@@ -658,19 +662,25 @@ function capacitorView(c: Capacitor): ComponentView {
   };
 }
 
-// ─── Диод 1N4007 ───────────────────────────────────────────────────────────
+// ─── Диоды 1N4148, 1N4007, 1N5408 ───────────────────────────────────────────────────────────
 
 function diodeView(c: Diode): ComponentView {
   const group = new THREE.Group();
-  const L = mm(5.2);
-  const r = mm(2.7) / 2;
+  const spec = diodeSpec(c);
+  const L = mm(spec.lengthMm);
+  const r = mm(spec.diameterMm) / 2;
   const body = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.35 });
+  // 1N4148 — в прозрачном оранжевом стекле с чёрным кольцом, выпрямительные — в чёрном пластике с серым
+  const baseColor = spec.glass ? 0xd9772a : 0x1b1c1f;
+  const bodyMat = spec.glass
+    ? new THREE.MeshPhysicalMaterial({ color: baseColor, roughness: 0.1, transmission: 0.3, transparent: true, opacity: 0.85 })
+    : new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.35 });
   const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(r, L - 2 * r, 6, 20), bodyMat);
   capsule.rotation.z = Math.PI / 2;
   body.add(capsule);
   // Серебристое кольцо — катод (вывод 1, локальная +X)
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.03, r * 1.03, L * 0.14, 20), new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.6, roughness: 0.35 }));
+  const bandMat = spec.glass ? new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.5 }) : new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.6, roughness: 0.35 });
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.03, r * 1.03, L * 0.14, 20), bandMat);
   band.rotation.z = Math.PI / 2;
   band.position.x = L * 0.3;
   body.add(band);
@@ -681,7 +691,7 @@ function diodeView(c: Diode): ComponentView {
     pins,
     hotspot,
     update(v) {
-      bodyMat.color.set(v.burned ? 0x0c0b0a : 0x1b1c1f);
+      bodyMat.color.set(v.burned ? 0x0c0b0a : baseColor);
       bodyMat.emissive.setRGB(1, 0.3, 0.05).multiplyScalar(!v.burned && v.heat > 0.3 ? (v.heat - 0.3) * 1.2 : 0);
     },
     dispose: () => disposeGroup(group),
@@ -693,8 +703,10 @@ function diodeView(c: Diode): ComponentView {
 function ledView(c: Led): ComponentView {
   const group = new THREE.Group();
   const spec = LEDS[c.color];
-  const r = mm(2.5);
-  const h = mm(5.8);
+  const power = ledSpec(c).ratedA > 0.1;
+  // Мощный: низкий чёрный корпус Ø 8 мм с прозрачной линзой Ø 5,5 мм сверху
+  const r = mm(power ? 2.75 : 2.5);
+  const h = mm(power ? 6.3 : 5.8);
   const glassMat = new THREE.MeshPhysicalMaterial({
     color: spec.glass,
     roughness: 0.15,
@@ -705,21 +717,38 @@ function ledView(c: Led): ComponentView {
     emissiveIntensity: 0,
   });
   const body = new THREE.Group();
-  const rim = new THREE.Mesh(new THREE.CylinderGeometry(mm(2.9), mm(2.9), mm(1), 32), glassMat);
-  rim.position.y = mm(0.5);
-  body.add(rim);
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h - r, 32), glassMat);
-  barrel.position.y = (h - r) / 2;
-  body.add(barrel);
-  const dome = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), glassMat);
-  dome.position.y = h - r;
-  body.add(dome);
-  // Кристалл внутри
   const chipMat = new THREE.MeshStandardMaterial({ color: 0x777066, emissive: new THREE.Color(spec.hex), emissiveIntensity: 0 });
-  const chip = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.12, 0.22), chipMat);
-  chip.position.y = h * 0.45;
-  body.add(chip);
-  const light = new THREE.PointLight(spec.hex, 0, 10, 2);
+  if (power) {
+    const base = mm(3.3);
+    const housing = new THREE.Mesh(new THREE.CylinderGeometry(mm(4), mm(4), base, 40), blackPlastic);
+    housing.position.y = base / 2;
+    body.add(housing);
+    // Окно под линзой, белый корпус излучателя
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(mm(2.9), mm(2.9), mm(0.2), 32), new THREE.MeshStandardMaterial({ color: 0xeeeeea, roughness: 0.4 }));
+    pad.position.y = base + mm(0.1);
+    body.add(pad);
+    const lens = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), glassMat);
+    lens.position.y = base;
+    body.add(lens);
+    const chip = new THREE.Mesh(new THREE.BoxGeometry(mm(1), mm(0.3), mm(1)), chipMat);
+    chip.position.y = base + mm(0.3);
+    body.add(chip);
+  } else {
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(mm(2.9), mm(2.9), mm(1), 32), glassMat);
+    rim.position.y = mm(0.5);
+    body.add(rim);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h - r, 32), glassMat);
+    barrel.position.y = (h - r) / 2;
+    body.add(barrel);
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), glassMat);
+    dome.position.y = h - r;
+    body.add(dome);
+    // Кристалл внутри
+    const chip = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.12, 0.22), chipMat);
+    chip.position.y = h * 0.45;
+    body.add(chip);
+  }
+  const light = new THREE.PointLight(spec.hex, 0, power ? 30 : 10, 2);
   light.position.y = h * 0.6;
   body.add(light);
 
@@ -759,7 +788,8 @@ function ledView(c: Led): ComponentView {
       const glow = b < 0.005 ? 0 : 0.25 + b;
       glassMat.emissiveIntensity = glow * 1.6;
       chipMat.emissiveIntensity = glow * 9;
-      light.intensity = glow * 6;
+      // Мощный светит в разы сильнее
+      light.intensity = glow * (power ? 40 : 6);
     },
     dispose: () => disposeGroup(group),
   };

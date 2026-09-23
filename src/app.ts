@@ -22,16 +22,21 @@ import {
 import {
   BATTERIES,
   CERAMICS,
-  CERAMIC_RATED_V,
-  DIODE_1N4007,
+  CERAMIC_VOLTAGES,
+  DIODES,
   ELECTROLYTICS,
-  ELECTROLYTIC_RATED_V,
+  ELECTROLYTIC_VOLTAGES,
+  LED_SIZES,
   LAMPS,
   LEDS,
   MOSFETS,
   PSU_LIMITS,
   SMD_SIZES,
-  THT_RESISTOR,
+  THT_RESISTORS,
+  capacitorVolts,
+  diodeSpec,
+  ledSpec,
+  thtResistorSpec,
   TRANSISTORS,
   canGoOnBoard,
   formatFarads,
@@ -42,6 +47,8 @@ import {
   sameEndpoint,
   sceneBoards,
   type BatteryKind,
+  type DiodeKind,
+  type LedSize,
   type Component,
   type Endpoint,
   type LampKind,
@@ -160,6 +167,13 @@ export class App {
     capVariant: "electrolytic" as "electrolytic" | "ceramic",
     electrolyticUF: 1000,
     ceramicUF: 0.1,
+    /** Мощность выводного резистора, Вт. */
+    watts: 0.25,
+    /** Номинальное напряжение конденсаторов, В. */
+    electrolyticV: 16,
+    ceramicV: 50,
+    diode: "1N4007" as DiodeKind,
+    ledSize: "5mm" as LedSize,
     led: "red" as LedColor,
     transistor: "BC547" as TransistorKind,
     mosfet: "2N7000" as MosfetKind,
@@ -735,7 +749,7 @@ export class App {
   private newComponent(tool: PlaceTool, placement: Component["placement"]): Component {
     switch (tool) {
       case "tht":
-        return { id: this.nextId("resistor"), type: "resistor", variant: "tht", ohms: this.defaults.ohms, smdSize: this.defaults.smdSize, placement };
+        return { id: this.nextId("resistor"), type: "resistor", variant: "tht", ohms: this.defaults.ohms, smdSize: this.defaults.smdSize, watts: this.defaults.watts, placement };
       case "smd":
         return { id: this.nextId("resistor"), type: "resistor", variant: "smd", ohms: this.defaults.ohms, smdSize: this.defaults.smdSize, placement };
       case "lamp":
@@ -747,12 +761,13 @@ export class App {
       case "cap": {
         const variant = this.defaults.capVariant;
         const uF = variant === "electrolytic" ? this.defaults.electrolyticUF : this.defaults.ceramicUF;
-        return { id: this.nextId("capacitor"), type: "capacitor", variant, uF, placement };
+        const volts = variant === "electrolytic" ? this.defaults.electrolyticV : this.defaults.ceramicV;
+        return { id: this.nextId("capacitor"), type: "capacitor", variant, uF, volts, placement };
       }
       case "diode":
-        return { id: this.nextId("diode"), type: "diode", placement };
+        return { id: this.nextId("diode"), type: "diode", kind: this.defaults.diode, placement };
       case "led":
-        return { id: this.nextId("led"), type: "led", color: this.defaults.led, placement };
+        return { id: this.nextId("led"), type: "led", color: this.defaults.led, size: this.defaults.ledSize, placement };
       case "bjt":
         return { id: this.nextId("transistor"), type: "transistor", kind: this.defaults.transistor, placement };
       case "fet":
@@ -1481,8 +1496,8 @@ export class App {
           title = `Резистор ${formatOhms(c.ohms)}`;
           const bands = colorBands(c.ohms);
           body = `<div class="bands"><span class="body">${bands.map((x) => `<i style="background:${x.hex}" title="${x.name}"></i>`).join("")}</span></div>
-            <p class="sub">Выводной, ${String(THT_RESISTOR.lengthMm).replace(".", ",")} × ${String(THT_RESISTOR.diameterMm).replace(".", ",")} мм, до ${formatSI(THT_RESISTOR.ratedW, "Вт")}. Полосы: ${bands.map((x) => x.name).join(", ")}.</p>`;
-          editor = this.ohmsSelect(c.ohms);
+            <p class="sub">Выводной, ${String(thtResistorSpec(c).lengthMm).replace(".", ",")} × ${String(thtResistorSpec(c).diameterMm).replace(".", ",")} мм, до ${formatW(thtResistorSpec(c).ratedW)}. Полосы: ${bands.map((x) => x.name).join(", ")}.</p>`;
+          editor = this.ohmsSelect(c.ohms) + this.wattsSelect(thtResistorSpec(c).ratedW);
         }
         break;
       }
@@ -1506,14 +1521,14 @@ export class App {
       case "capacitor": {
         const v = this.sim.voltage(c);
         if (c.variant === "electrolytic") {
-          title = `Конденсатор ${formatFarads(c.uF)}, ${ELECTROLYTIC_RATED_V} В`;
+          title = `Конденсатор ${formatFarads(c.uF)}, ${formatV(capacitorVolts(c))}`;
           body = `<p class="sub">Электролитический, <b>полярный</b>: на плюсе должен быть бо́льший потенциал. Полоса с «−» на корпусе — со стороны минуса. Заряд хранится, даже если отключить батарею.</p>`;
-          editor = this.selectField("uF", "Ёмкость", ELECTROLYTICS.map((e) => [String(e.uF), formatFarads(e.uF)]), String(c.uF));
+          editor = this.selectField("uF", "Ёмкость", ELECTROLYTICS.map((e) => [String(e.uF), formatFarads(e.uF)]), String(c.uF)) + this.voltsSelect(c.variant, capacitorVolts(c));
         } else {
           const code = CERAMICS.find((x) => x.uF === c.uF)?.code ?? "";
           title = `Конденсатор ${formatFarads(c.uF)}`;
-          body = `<p class="sub">Керамический, неполярный, до ${CERAMIC_RATED_V} В. Код <b>${code}</b>: ${code.slice(0, 2)} × 10${superscript(Number(code[2]))} пФ.</p>`;
-          editor = this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(c.uF));
+          body = `<p class="sub">Керамический, неполярный, до ${formatV(capacitorVolts(c))}. Код <b>${code}</b>: ${code.slice(0, 2)} × 10${superscript(Number(code[2]))} пФ.</p>`;
+          editor = this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(c.uF)) + this.voltsSelect(c.variant, capacitorVolts(c));
         }
         if (Math.abs(v) > 0.05) {
           editor += `<div class="row"><button class="btn inline" data-act="discharge" id="btn-discharge">Разрядить</button></div>`;
@@ -1521,8 +1536,9 @@ export class App {
         break;
       }
       case "diode":
-        title = `Диод ${DIODE_1N4007.label}`;
-        body = `<p class="sub">Пропускает ток только от анода к катоду, падение ≈ 0,6–0,8 В. Кольцо на корпусе — катод. До ${formatSI(DIODE_1N4007.maxA, "А")}.</p>`;
+        title = `Диод ${diodeSpec(c).label}`;
+        body = `<p class="sub">Пропускает ток только от анода к катоду, падение ≈ 0,6–0,9 В. Кольцо на корпусе — катод. До ${formatSI(diodeSpec(c).maxA, "А")}.</p>`;
+        editor = this.diodeSelect(c.kind ?? "1N4007");
         break;
       case "psu": {
         title = "Лабораторный блок питания";
@@ -1568,10 +1584,13 @@ export class App {
       }
       case "led": {
         const spec = LEDS[c.color];
-        const vf = String(spec.vf).replace(".", ",");
-        title = `Светодиод ${spec.label}`;
-        body = `<p class="sub">Прямое падение ≈ ${vf} В, номинальный ток 20 мА. <b>Без резистора сгорает.</b> Длинная ножка — анод (+). Резистор: R = (U<sub>бат</sub> − ${vf}) / 0,02.</p>`;
-        editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), c.color);
+        const size = ledSpec(c);
+        const vfNum = spec.vf + size.vfAdd;
+        const vf = String(Math.round(vfNum * 10) / 10).replace(".", ",");
+        const amps = String(size.ratedA).replace(".", ",");
+        title = `Светодиод ${spec.label}${c.size === "1W" ? ", 1 Вт" : ""}`;
+        body = `<p class="sub">Прямое падение ≈ ${vf} В, номинальный ток ${formatSI(size.ratedA, "А")}. <b>Без резистора сгорает.</b> ${c.size === "1W" ? "Минус помечен на корпусе." : "Длинная ножка — анод (+)."} Резистор: R = (U<sub>бат</sub> − ${vf}) / ${amps}.</p>`;
+        editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), c.color) + this.ledSizeSelect(c.size ?? "5mm");
         break;
       }
     }
@@ -1697,10 +1716,11 @@ export class App {
 
   private newPartPanel(tool: PlaceTool): [string, string] {
     const names: Record<PlaceTool, string> = {
-      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: "Диод 1N4007", led: "Светодиод", bjt: "Транзистор", fet: "MOSFET", psu: "Блок питания", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
+      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: `Диод ${DIODES[this.defaults.diode].label}`, led: "Светодиод", bjt: "Транзистор", fet: "MOSFET", psu: "Блок питания", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
     };
     let editor = "";
-    if (tool === "tht" || tool === "smd") editor = this.ohmsSelect(this.defaults.ohms) + (tool === "smd" ? this.smdSelect(this.defaults.smdSize) : "");
+    if (tool === "tht" || tool === "smd") editor = this.ohmsSelect(this.defaults.ohms) + (tool === "smd" ? this.smdSelect(this.defaults.smdSize) : this.wattsSelect(this.defaults.watts));
+    if (tool === "diode") editor = this.diodeSelect(this.defaults.diode);
     if (tool === "lamp") editor = this.selectField("lamp", "Лампа", Object.entries(LAMPS).map(([k, v]) => [k, v.label]), this.defaults.lamp);
     if (tool === "battery") editor = this.selectField("battery", "Батарея", Object.entries(BATTERIES).map(([k, v]) => [k, v.label]), this.defaults.battery);
     if (tool === "cap") {
@@ -1709,9 +1729,10 @@ export class App {
         this.selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"]], this.defaults.capVariant) +
         (el
           ? this.selectField("uF", "Ёмкость", ELECTROLYTICS.map((e) => [String(e.uF), formatFarads(e.uF)]), String(this.defaults.electrolyticUF))
-          : this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(this.defaults.ceramicUF)));
+          : this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(this.defaults.ceramicUF))) +
+        this.voltsSelect(this.defaults.capVariant, el ? this.defaults.electrolyticV : this.defaults.ceramicV);
     }
-    if (tool === "led") editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), this.defaults.led);
+    if (tool === "led") editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), this.defaults.led) + this.ledSizeSelect(this.defaults.ledSize);
     if (tool === "fet") {
       editor = this.selectField(
         "fet",
@@ -1735,7 +1756,11 @@ export class App {
         : tool === "diode"
           ? `<p class="sub">Пропускает ток в одну сторону.</p>${polarNote}`
           : tool === "led"
-            ? `<p class="sub">Ставьте последовательно с резистором: от 9 В для красного ≈ 330–470 Ом.</p>${polarNote}`
+            ? `<p class="sub">${
+                this.defaults.ledSize === "1W"
+                  ? "Мощному нужно 350 мА: от 9 В для красного — резистор ≈ 20 Ом на 2 Вт, а лучше блок питания с ограничением тока."
+                  : "Ставьте последовательно с резистором: от 9 В для красного ≈ 330–470 Ом."
+              }</p>${polarNote}`
             : tool === "fet"
               ? `<p class="sub">Полевой транзистор: управляется <b>напряжением</b> на затворе, ток через затвор не течёт. Ставьте резистор 10–100 кОм от затвора к истоку, иначе затвор «зависнет». Порядок ножек у корпусов разный: сейчас <b>${mosfetPinNames(this.defaults.mosfet)}</b>.</p>`
             : tool === "bjt"
@@ -1743,7 +1768,7 @@ export class App {
             : tool === "smd"
         ? `<p class="sub">Электрически это тот же резистор, но корпус меньше — и рассеять он может меньше: 1206 до 0,25 Вт, 0402 всего до 0,063 Вт.</p>`
         : tool === "tht"
-          ? `<p class="sub">Выводной резистор 0,25 Вт, маркировка — цветные полосы. Мощность больше номинала — перегреется и сгорит.</p>`
+          ? `<p class="sub">Выводной резистор, маркировка — цветные полосы. Мощность больше номинала — перегреется и сгорит; чем мощнее резистор, тем он крупнее.</p>`
           : "";
     const html = `<div class="eyebrow">новая деталь</div><h2>${names[tool]}</h2>${note}${editor}`;
     return [`n:${tool}`, html];
@@ -1793,6 +1818,24 @@ export class App {
 
   private ohmsSelect(value: number): string {
     return this.selectField("ohms", "Сопротивление (ряд E12)", e12Values().map((v) => [String(v), formatOhms(v)]), String(value));
+  }
+
+  private wattsSelect(value: number): string {
+    return this.selectField("watts", "Мощность", THT_RESISTORS.map((r) => [String(r.ratedW), `${formatW(r.ratedW)} — ${String(r.lengthMm).replace(".", ",")} × ${String(r.diameterMm).replace(".", ",")} мм`]), String(value));
+  }
+
+  private voltsSelect(variant: "electrolytic" | "ceramic", value: number): string {
+    const list = variant === "electrolytic" ? ELECTROLYTIC_VOLTAGES : CERAMIC_VOLTAGES;
+    return this.selectField("capV", "Напряжение (не больше)", list.map((v) => [String(v), formatV(v)]), String(value));
+  }
+
+  private diodeSelect(value: DiodeKind): string {
+    const note: Record<DiodeKind, string> = { "1N4148": "импульсный, стекло", "1N4007": "выпрямительный", "1N5408": "выпрямительный, мощный" };
+    return this.selectField("diode", "Модель", (Object.keys(DIODES) as DiodeKind[]).map((k) => [k, `${DIODES[k].label} — до ${formatSI(DIODES[k].maxA, "А")}, ${note[k]}`]), value);
+  }
+
+  private ledSizeSelect(value: LedSize): string {
+    return this.selectField("ledSize", "Мощность", (Object.keys(LED_SIZES) as LedSize[]).map((k) => [k, LED_SIZES[k].label]), value);
   }
 
   private smdSelect(value: SmdSize): string {
@@ -1927,6 +1970,13 @@ export class App {
         else this.defaults.ceramicUF = Number(value);
       }
       if (field === "led") this.defaults.led = value as LedColor;
+      if (field === "watts") this.defaults.watts = Number(value);
+      if (field === "capV") {
+        if (this.defaults.capVariant === "electrolytic") this.defaults.electrolyticV = Number(value);
+        else this.defaults.ceramicV = Number(value);
+      }
+      if (field === "diode") this.defaults.diode = value as DiodeKind;
+      if (field === "ledSize") this.defaults.ledSize = value as LedSize;
       if (field === "bjt") this.defaults.transistor = value as TransistorKind;
       if (field === "fet") this.defaults.mosfet = value as MosfetKind;
       this.inspectorHtml = "";
@@ -1940,6 +1990,10 @@ export class App {
     if (c.type === "battery" && field === "battery") c.kind = value as BatteryKind;
     if (c.type === "capacitor" && field === "uF") c.uF = Number(value);
     if (c.type === "led" && field === "led") c.color = value as LedColor;
+    if (c.type === "resistor" && field === "watts") c.watts = Number(value);
+    if (c.type === "capacitor" && field === "capV") c.volts = Number(value);
+    if (c.type === "diode" && field === "diode") c.kind = value as DiodeKind;
+    if (c.type === "led" && field === "ledSize") c.size = value as LedSize;
     if (c.type === "transistor" && field === "bjt") c.kind = value as TransistorKind;
     if (c.type === "mosfet" && field === "fet") c.kind = value as MosfetKind;
     // Поменяли номинал — значит, поставили новую деталь
@@ -1958,7 +2012,7 @@ export class App {
 function label(c: Component): string {
   switch (c.type) {
     case "resistor":
-      return `${formatOhms(c.ohms)}${c.variant === "smd" ? ` SMD ${c.smdSize}` : ""}`;
+      return `${formatOhms(c.ohms)}${c.variant === "smd" ? ` SMD ${c.smdSize}` : `, ${formatW(thtResistorSpec(c).ratedW)}`}`;
     case "lamp":
       return `лампа ${LAMPS[c.kind].label}`;
     case "switch":
@@ -1966,11 +2020,11 @@ function label(c: Component): string {
     case "battery":
       return BATTERIES[c.kind].label;
     case "capacitor":
-      return `${formatFarads(c.uF)}${c.variant === "electrolytic" ? "" : " керамический"}`;
+      return `${formatFarads(c.uF)} ${formatV(capacitorVolts(c))}${c.variant === "electrolytic" ? "" : " керамический"}`;
     case "diode":
-      return DIODE_1N4007.label;
+      return diodeSpec(c).label;
     case "led":
-      return `светодиод ${LEDS[c.color].label}`;
+      return `светодиод ${LEDS[c.color].label}${c.size === "1W" ? " 1 Вт" : ""}`;
     case "transistor":
       return `транзистор ${TRANSISTORS[c.kind].label}, I<sub>к</sub>`;
     case "mosfet":
@@ -1996,11 +2050,14 @@ function burnMessage(c: Component): [string, string] {
     case "resistor":
       return c.variant === "smd"
         ? [`Резистор ${c.id} сгорел`, `Корпус ${c.smdSize} рассеивает не больше ${formatSI(SMD_SIZES[c.smdSize].ratedW, "Вт")}. Возьмите корпус крупнее или резистор с бо́льшим сопротивлением.`]
-        : [`Резистор ${c.id} сгорел`, `Номинал ${formatSI(THT_RESISTOR.ratedW, "Вт")}. Увеличьте сопротивление или понизьте напряжение.`];
-    case "led":
-      return [`Светодиод ${c.id} сгорел`, `Ток больше 30 мА. Поставьте последовательно резистор: R = (U − ${String(LEDS[c.color].vf).replace(".", ",")} В) / 0,02 А.`];
+        : [`Резистор ${c.id} сгорел`, `Номинал ${formatW(thtResistorSpec(c).ratedW)}. Возьмите резистор мощнее, увеличьте сопротивление или понизьте напряжение.`];
+    case "led": {
+      const s = ledSpec(c);
+      const vf = String(Math.round((LEDS[c.color].vf + s.vfAdd) * 10) / 10).replace(".", ",");
+      return [`Светодиод ${c.id} сгорел`, `Ток больше ${formatSI(s.ratedA * 1.5, "А")}. Поставьте последовательно резистор: R = (U − ${vf} В) / ${String(s.ratedA).replace(".", ",")} А.`];
+    }
     case "diode":
-      return [`Диод ${c.id} сгорел`, "Ток больше 1 А. Ограничьте ток резистором."];
+      return [`Диод ${c.id} сгорел`, `Ток больше ${formatSI(diodeSpec(c).maxA, "А")}. Ограничьте ток резистором или возьмите диод мощнее.`];
     case "mosfet":
       return [
         `MOSFET ${c.id} сгорел`,
@@ -2013,11 +2070,21 @@ function burnMessage(c: Component): [string, string] {
       ];
     case "capacitor":
       return c.variant === "electrolytic"
-        ? [`Конденсатор ${c.id} вздулся`, `Электролит не терпит обратной полярности и напряжения выше ${ELECTROLYTIC_RATED_V} В. Проверьте, где плюс (F — перевернуть).`]
-        : [`Конденсатор ${c.id} пробит`, `Напряжение выше ${CERAMIC_RATED_V} В.`];
+        ? [`Конденсатор ${c.id} вздулся`, `Электролит не терпит обратной полярности и напряжения выше ${formatV(capacitorVolts(c))}. Проверьте, где плюс (F — перевернуть), или возьмите конденсатор на большее напряжение.`]
+        : [`Конденсатор ${c.id} пробит`, `Напряжение выше ${formatV(capacitorVolts(c))}. Возьмите конденсатор на большее напряжение.`];
     default:
       return [`${c.id} вышел из строя`, ""];
   }
+}
+
+/** «0,125 Вт», «2 Вт». */
+function formatW(w: number): string {
+  return `${String(w).replace(".", ",")} Вт`;
+}
+
+/** «6,3 В», «50 В». */
+function formatV(v: number): string {
+  return `${String(v).replace(".", ",")} В`;
 }
 
 function smdExplain(ohms: number): string {

@@ -39,18 +39,16 @@ export function traceResistance(aId: string, bId: string): number {
   return Math.max(1e-4, mmLen * TRACE_OHM_PER_MM);
 }
 import {
-  CERAMIC_RATED_V,
-  DIODE_1N4007,
-  ELECTROLYTIC_RATED_V,
   ELECTROLYTIC_REVERSE_V,
   LED_N,
-  LED_RATED_A,
-  LED_RS,
   MOSFETS,
   SWITCH_RESISTANCE,
   TRACE_OHM_PER_MM,
   TRANSISTORS,
   FLAT_WIRE_EXTRA,
+  capacitorVolts,
+  diodeSpec,
+  ledSpec,
   WIRE_OHM_PER_MM,
   isFlatWire,
   type WireShape,
@@ -106,13 +104,23 @@ export interface DiodeParams {
   rs: number;
 }
 
+/** «0,125 Вт», «20 мА», «6,3 В» — предел для подписи в панели. */
+function formatLimit(v: number, unit: string): string {
+  if (v < 1 && unit === "А") return `${Math.round(v * 1000)} мА`;
+  return `${String(v).replace(".", ",")} ${unit}`;
+}
+
 /** Параметры диода или светодиода для уравнения Шокли. */
 export function diodeParams(c: Component, tol: Tolerance = NO_TOLERANCE): DiodeParams {
-  if (c.type === "diode") return { ...DIODE_1N4007, is: tolerance.diodeIs(c, tol) };
+  if (c.type === "diode") {
+    const d = diodeSpec(c);
+    return { is: tolerance.diodeIs(c, tol), n: d.n, rs: d.rs };
+  }
   if (c.type === "led") {
-    // Is подбирается так, чтобы при 20 мА на выводах было vf (с учётом падения на Rs).
-    const vj = tolerance.ledVf(c, tol) - LED_RATED_A * LED_RS;
-    return { is: LED_RATED_A / Math.exp(vj / (LED_N * VT)), n: LED_N, rs: LED_RS };
+    // Is подбирается так, чтобы при номинальном токе на выводах было vf (с учётом падения на Rs).
+    const s = ledSpec(c);
+    const vj = tolerance.ledVf(c, tol) + s.vfAdd - s.ratedA * s.rs;
+    return { is: s.ratedA / Math.exp(vj / (LED_N * VT)), n: LED_N, rs: s.rs };
   }
   throw new Error(`${c.id} — не диод`);
 }
@@ -660,17 +668,22 @@ export class Simulation {
       case "resistor":
       case "lamp": {
         const rated = ratedPower(c)!;
-        return { ratio: this.branch(c.id).power / rated, what: "мощность", limit: `${rated} Вт` };
+        return { ratio: this.branch(c.id).power / rated, what: "мощность", limit: formatLimit(rated, "Вт") };
       }
-      case "led":
-        return { ratio: Math.max(0, this.current(c)) / LED_RATED_A, what: "ток", limit: "20 мА" };
-      case "diode":
-        return { ratio: Math.max(0, this.current(c)) / DIODE_1N4007.maxA, what: "ток", limit: "1 А" };
+      case "led": {
+        const rated = ledSpec(c).ratedA;
+        return { ratio: Math.max(0, this.current(c)) / rated, what: "ток", limit: formatLimit(rated, "А") };
+      }
+      case "diode": {
+        const maxA = diodeSpec(c).maxA;
+        return { ratio: Math.max(0, this.current(c)) / maxA, what: "ток", limit: formatLimit(maxA, "А") };
+      }
       case "capacitor": {
         const v = this.voltage(c);
-        if (c.variant === "ceramic") return { ratio: Math.abs(v) / CERAMIC_RATED_V, what: "напряжение", limit: `${CERAMIC_RATED_V} В` };
+        const rated = capacitorVolts(c);
+        if (c.variant === "ceramic") return { ratio: Math.abs(v) / rated, what: "напряжение", limit: formatLimit(rated, "В") };
         if (v < 0) return { ratio: -v / ELECTROLYTIC_REVERSE_V, what: "обратное напряжение", limit: `${ELECTROLYTIC_REVERSE_V} В` };
-        return { ratio: v / ELECTROLYTIC_RATED_V, what: "напряжение", limit: `${ELECTROLYTIC_RATED_V} В` };
+        return { ratio: v / rated, what: "напряжение", limit: formatLimit(rated, "В") };
       }
       case "mosfet": {
         const spec = MOSFETS[c.kind];

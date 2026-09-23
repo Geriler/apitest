@@ -15,6 +15,23 @@ export const SMD_SIZES: Record<SmdSize, { lengthMm: number; widthMm: number; hei
 /** Выводной резистор 0,25 Вт: корпус ≈ 6,3 × 2,4 мм. */
 export const THT_RESISTOR = { lengthMm: 6.3, diameterMm: 2.4, ratedW: 0.25 };
 
+/**
+ * Выводные резисторы разной мощности: типичные размеры корпусов (металлоплёночные до 0,5 Вт,
+ * металлооксидные 1 и 2 Вт). Чем мощнее, тем крупнее — больше площадь, лучше отдаёт тепло.
+ */
+export const THT_RESISTORS = [
+  { ratedW: 0.125, lengthMm: 3.5, diameterMm: 1.8 },
+  { ratedW: 0.25, lengthMm: 6.3, diameterMm: 2.4 },
+  { ratedW: 0.5, lengthMm: 9, diameterMm: 3.2 },
+  { ratedW: 1, lengthMm: 11, diameterMm: 4.5 },
+  { ratedW: 2, lengthMm: 15.5, diameterMm: 5 },
+] as const;
+
+/** Корпус выводного резистора по его мощности (в старых схемах мощности нет — 0,25 Вт). */
+export function thtResistorSpec(c: { watts?: number }) {
+  return THT_RESISTORS.find((r) => r.ratedW === (c.watts ?? 0.25)) ?? THT_RESISTORS[1];
+}
+
 export const BATTERIES = {
   "9V": { label: "Крона 9 В", emf: 9, rInt: 1.5 },
   "4.5V": { label: "3 × AA, 4,5 В", emf: 4.5, rInt: 0.45 },
@@ -45,6 +62,8 @@ export const ELECTROLYTICS = [
   { uF: 4700, diaMm: 16, heightMm: 26 },
 ] as const;
 export const ELECTROLYTIC_RATED_V = 16;
+/** Ряд номинальных напряжений электролитов, В. */
+export const ELECTROLYTIC_VOLTAGES = [6.3, 10, 16, 25, 35, 50, 63] as const;
 /** Допустимое обратное напряжение электролита, В (ориентир, не паспортное значение). */
 export const ELECTROLYTIC_REVERSE_V = 1;
 
@@ -55,6 +74,13 @@ export const CERAMICS = [
   { uF: 1, code: "105" },
 ] as const;
 export const CERAMIC_RATED_V = 50;
+/** Ряд номинальных напряжений керамических конденсаторов, В. */
+export const CERAMIC_VOLTAGES = [16, 50, 100] as const;
+
+/** Номинальное напряжение конденсатора (в старых схемах нет: электролит 16 В, керамика 50 В). */
+export function capacitorVolts(c: { variant: "electrolytic" | "ceramic"; volts?: number }): number {
+  return c.volts ?? (c.variant === "electrolytic" ? ELECTROLYTIC_RATED_V : CERAMIC_RATED_V);
+}
 
 /**
  * Параметры диодов для уравнения Шокли I = Is·(e^(V/(n·Vt)) − 1) с последовательным Rs.
@@ -62,6 +88,23 @@ export const CERAMIC_RATED_V = 50;
  * при 20 мА падение было около vf (типовое значение, у конкретных светодиодов разброс).
  */
 export const DIODE_1N4007 = { label: "1N4007", is: 7.03e-9, n: 1.808, rs: 0.034, maxA: 1 };
+
+/**
+ * Выпрямительные и импульсные диоды: чем больше допустимый ток, тем крупнее корпус.
+ * 1N4148 и 1N4007 — распространённые SPICE-модели; 1N5408 — подобрано по паспорту
+ * (≈ 0,75 В при 1 А, ≈ 0,8 В при 3 А), это ориентир, не модель производителя.
+ */
+export const DIODES = {
+  "1N4148": { label: "1N4148", is: 2.52e-9, n: 1.752, rs: 0.568, maxA: 0.2, lengthMm: 3.8, diameterMm: 1.8, glass: true },
+  "1N4007": { ...DIODE_1N4007, lengthMm: 5.2, diameterMm: 2.7, glass: false },
+  "1N5408": { label: "1N5408", is: 63e-9, n: 1.7, rs: 0.014, maxA: 3, lengthMm: 9.5, diameterMm: 5.3, glass: false },
+} as const;
+export type DiodeKind = keyof typeof DIODES;
+
+/** Модель диода (в старых схемах нет — 1N4007). */
+export function diodeSpec(c: { kind?: DiodeKind }) {
+  return DIODES[c.kind ?? "1N4007"];
+}
 
 export const LEDS = {
   red: { label: "красный", vf: 2.0, hex: "#ff2a1a", glass: "#b8221a" },
@@ -75,6 +118,21 @@ export type LedColor = keyof typeof LEDS;
 export const LED_RATED_A = 0.02;
 export const LED_N = 2;
 export const LED_RS = 8;
+
+/**
+ * Светодиоды по мощности: обычный 5 мм на 20 мА и мощный на 1 Вт (350 мА).
+ * У мощного прямое напряжение при номинальном токе на ≈ 0,3 В выше, сопротивление меньше.
+ */
+export const LED_SIZES = {
+  "5mm": { label: "5 мм, 20 мА", ratedA: LED_RATED_A, rs: LED_RS, vfAdd: 0 },
+  "1W": { label: "мощный 1 Вт, 350 мА", ratedA: 0.35, rs: 1, vfAdd: 0.3 },
+} as const;
+export type LedSize = keyof typeof LED_SIZES;
+
+/** Вид светодиода (в старых схемах нет — 5 мм). */
+export function ledSpec(c: { size?: LedSize }) {
+  return LED_SIZES[c.size ?? "5mm"];
+}
 
 /**
  * Биполярные транзисторы в корпусе TO-92, модель Эберса–Молла.
@@ -138,6 +196,8 @@ export interface Resistor extends Base {
   variant: "tht" | "smd";
   ohms: number;
   smdSize: SmdSize;
+  /** Мощность выводного резистора, Вт (нет — 0,25 Вт). */
+  watts?: number;
 }
 
 export interface Lamp extends Base {
@@ -160,15 +220,21 @@ export interface Capacitor extends Base {
   type: "capacitor";
   variant: "electrolytic" | "ceramic";
   uF: number;
+  /** Номинальное напряжение, В (нет — 16 В у электролита, 50 В у керамики). */
+  volts?: number;
 }
 
 export interface Diode extends Base {
   type: "diode";
+  /** Модель (нет — 1N4007). */
+  kind?: DiodeKind;
 }
 
 export interface Led extends Base {
   type: "led";
   color: LedColor;
+  /** Обычный 5 мм или мощный 1 Вт (нет — 5 мм). */
+  size?: LedSize;
 }
 
 /** Биполярный транзистор. Выводы: 0 — коллектор, 1 — база, 2 — эмиттер. */
@@ -288,8 +354,15 @@ export function pinCount(c: Component): number {
   return c.type === "transistor" || c.type === "mosfet" ? 3 : 2;
 }
 
-export function electrolyticSize(uF: number) {
-  return ELECTROLYTICS.find((e) => e.uF === uF) ?? ELECTROLYTICS[ELECTROLYTICS.length - 1];
+/**
+ * Размер банки электролита. Таблица — для 16 В; на другое напряжение объём растёт примерно
+ * пропорционально ему, поэтому диаметр и высота — как корень кубический из V / 16
+ * (1000 мкФ: 6,3 В ≈ 7 × 12 мм, 35 В ≈ 13 × 21 мм, 63 В ≈ 16 × 25 мм — близко к каталогам).
+ */
+export function electrolyticSize(uF: number, volts = ELECTROLYTIC_RATED_V) {
+  const base = ELECTROLYTICS.find((e) => e.uF === uF) ?? ELECTROLYTICS[ELECTROLYTICS.length - 1];
+  const k = Math.cbrt(volts / ELECTROLYTIC_RATED_V);
+  return { uF: base.uF, diaMm: Math.round(base.diaMm * k * 10) / 10, heightMm: Math.round(base.heightMm * k * 10) / 10 };
 }
 
 /** «4700 мкФ», «100 нФ». */
@@ -302,7 +375,7 @@ export function formatFarads(uF: number): string {
 export function ratedPower(c: Component): number | undefined {
   switch (c.type) {
     case "resistor":
-      return c.variant === "smd" ? SMD_SIZES[c.smdSize].ratedW : THT_RESISTOR.ratedW;
+      return c.variant === "smd" ? SMD_SIZES[c.smdSize].ratedW : thtResistorSpec(c).ratedW;
     case "lamp": {
       const l = LAMPS[c.kind];
       return l.ratedV * l.ratedA;

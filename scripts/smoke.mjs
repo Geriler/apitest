@@ -497,6 +497,33 @@ try {
       const pcbDemo = await page.evaluate(() => ({ parts: window.maketka.scene.components.length, traces: window.maketka.scene.traces.length, hl1: window.maketka.sim.current(window.maketka.component("HL1")) }));
       check(pcbDemo.parts === 5 && pcbDemo.traces > 0 && pcbDemo.hl1 > 0.01, `пример «Печатная плата» после «Очистить»: ${pcbDemo.parts} деталей, ${pcbDemo.traces} дорожек, HL1 ${(pcbDemo.hl1 * 1000).toFixed(1)} мА`);
       await page.screenshot({ path: "screenshots/desktop-mosfet-panel.png" });
+
+      // Номиналы: у резистора в панели меняется мощность — меняются предел и размер корпуса
+      await page.selectOption("#demo-select", "lamps");
+      await page.waitForTimeout(500);
+      const sizeOf = () =>
+        page.evaluate(() => {
+          const g = window.maketka.views.get("R1").group;
+          let min = Infinity, max = -Infinity;
+          g.traverse((o) => {
+            if (!o.isMesh || o.geometry.type !== "CapsuleGeometry") return;
+            o.geometry.computeBoundingBox();
+            const b = o.geometry.boundingBox;
+            min = Math.min(min, b.min.y);
+            max = Math.max(max, b.max.y);
+          });
+          return max - min;
+        });
+      const rBefore = await sizeOf();
+      await page.evaluate(() => {
+        window.maketka.selected = "R1";
+        window.maketka.renderInspector();
+      });
+      await page.selectOption("#f-watts", "2");
+      await page.waitForTimeout(400);
+      const rated = await page.evaluate(() => ({ watts: window.maketka.component("R1").watts, limit: window.maketka.sim.load(window.maketka.component("R1")).limit }));
+      const rAfter = await sizeOf();
+      check(rated.watts === 2 && rated.limit === "2 Вт" && rAfter > rBefore * 2, `резистор R1 на 2 Вт: предел ${rated.limit}, корпус ${rBefore.toFixed(2)} → ${rAfter.toFixed(2)}`);
     }
 
     check(errors.length === 0, `${viewport.name}: нет ошибок в консоли${errors.length ? ": " + errors.join(" | ") : ""}`);

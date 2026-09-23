@@ -1,6 +1,6 @@
 import {
   BATTERIES,
-  DIODE_1N4007,
+  diodeSpec,
   LAMPS,
   LEDS,
   MOSFETS,
@@ -85,9 +85,9 @@ export function ledVf(c: Extract<Component, { type: "led" }>, tol: Tolerance): n
   return LEDS[c.color].vf + TOLERANCES.ledVf * deviation(tol, c.id, "vf");
 }
 
-/** Ток насыщения 1N4007: множитель 2^u меняет прямое падение на n·Vt·ln 2 ≈ ±32 мВ. */
-export function diodeIs(c: Component, tol: Tolerance): number {
-  return DIODE_1N4007.is * 2 ** deviation(tol, c.id, "is");
+/** Ток насыщения диода: множитель 2^u меняет прямое падение на n·Vt·ln 2 ≈ ±32 мВ (1N4007). */
+export function diodeIs(c: Extract<Component, { type: "diode" }>, tol: Tolerance): number {
+  return diodeSpec(c).is * 2 ** deviation(tol, c.id, "is");
 }
 
 export function betaF(c: Extract<Component, { type: "transistor" }>, tol: Tolerance): number {
