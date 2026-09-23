@@ -1,9 +1,24 @@
-import { HOLE_BY_ID } from "../model/breadboard";
+/**
+ * Симуляция схемы: собирает ветви от деталей (у каждого типа — свой stamp в src/parts),
+ * решает методом узловых потенциалов с итерациями Ньютона, ведёт время, заряд и нагрев.
+ */
 
-/** Выходное сопротивление лабораторного блока в режиме CV, Ом. */
-const PSU_R_CV = 0.005;
-/** В режиме CC блок — источник тока; внутренняя проводимость ничтожна (100 МОм параллельно). */
-const PSU_R_CC = 1e8;
+import { HOLE_BY_ID } from "../model/breadboard";
+import { FLAT_WIRE_EXTRA, TRACE_OHM_PER_MM, WIRE_OHM_PER_MM, isFlatWire, type Component, type ComponentState, type Endpoint, type Mosfet, type Scene, type Transistor, type WireShape } from "../model/types";
+import { part } from "../parts";
+import { mosfetState, type MosfetState } from "../parts/mosfet";
+import { transistorState, type TransistorState } from "../parts/transistor";
+import { endpointNode } from "./nodes";
+import { solveCircuit, type BranchResult, type Solution } from "./solver";
+import * as tolerance from "./tolerance";
+import { NO_TOLERANCE, type Tolerance } from "./tolerance";
+import type { Stamp } from "../parts/types";
+
+export { VT, diodeParams, shockley } from "./devices";
+export { endpointNode, pinNode } from "./nodes";
+export { SHORT_CIRCUIT_FRACTION } from "../parts/battery";
+export { GATE_DRAIN_CAPACITANCE, GATE_SOURCE_CAPACITANCE, mosfetChannel, type MosfetMode, type MosfetState } from "../parts/mosfet";
+export { JUNCTION_CAPACITANCE, type TransistorMode, type TransistorState } from "../parts/transistor";
 
 /** Где на столе конец провода (x, z в шагах 2,54 мм). У детали на столе — её центр (выводы рядом). */
 function endpointXZ(scene: Scene, e: Endpoint): [number, number] {
@@ -38,284 +53,26 @@ export function traceResistance(aId: string, bId: string): number {
   const mmLen = Math.hypot(a.x - b.x, a.z - b.z) * 2.54;
   return Math.max(1e-4, mmLen * TRACE_OHM_PER_MM);
 }
-import {
-  ELECTROLYTIC_REVERSE_V,
-  LED_N,
-  MOSFETS,
-  SWITCH_RESISTANCE,
-  TRACE_OHM_PER_MM,
-  TRANSISTORS,
-  FLAT_WIRE_EXTRA,
-  capacitorVolts,
-  diodeSpec,
-  ledSpec,
-  WIRE_OHM_PER_MM,
-  isFlatWire,
-  type WireShape,
-  mosfetPin,
-  type Component,
-  type ComponentState,
-  type Endpoint,
-  type Mosfet,
-  type Pin,
-  type PowerSupply,
-  type Scene,
-  type Transistor,
-} from "../model/types";
-import { part } from "../parts";
-import { solveCircuit, type Branch, type BranchResult, type Extras, type Solution } from "./solver";
-import * as tolerance from "./tolerance";
-import { NO_TOLERANCE, type Tolerance } from "./tolerance";
 
-/** Электрический узел вывода детали. На плате — узел полосы, иначе собственный узел вывода. */
-export function pinNode(c: Component, pin: Pin): string {
-  if (c.placement.mode === "board") {
-    const hole = HOLE_BY_ID.get(c.placement.holes[pin]);
-    if (!hole) throw new Error(`Нет отверстия ${c.placement.holes[pin]}`);
-    return hole.node;
-  }
-  return `pin:${c.id}:${pin}`;
-}
-
-export function endpointNode(scene: Scene, e: Endpoint): string {
-  if ("hole" in e) {
-    const hole = HOLE_BY_ID.get(e.hole);
-    if (!hole) throw new Error(`Нет отверстия ${e.hole}`);
-    return hole.node;
-  }
-  const c = scene.components.find((x) => x.id === e.comp);
-  if (!c) throw new Error(`Нет детали ${e.comp}`);
-  return pinNode(c, e.pin);
-}
-
-/** Сопротивление нити лампы, Ом (с учётом допусков, если режим включён). */
 export function lampResistance(c: Extract<Component, { type: "lamp" }>, tol: Tolerance = NO_TOLERANCE): number {
   return tolerance.lampResistance(c, tol);
 }
 
-// ─── Диоды ─────────────────────────────────────────────────────────────────
-
-/** Тепловой потенциал kT/q при ~27 °C, В. */
-export const VT = 0.02585;
-
-export interface DiodeParams {
-  is: number;
-  n: number;
-  rs: number;
-}
-
-/** «0,125 Вт», «20 мА», «6,3 В» — предел для подписи в панели. */
-function formatLimit(v: number, unit: string): string {
-  if (v < 1 && unit === "А") return `${Math.round(v * 1000)} мА`;
-  return `${String(v).replace(".", ",")} ${unit}`;
-}
-
-/** Параметры диода или светодиода для уравнения Шокли. */
-export function diodeParams(c: Component, tol: Tolerance = NO_TOLERANCE): DiodeParams {
-  if (c.type === "diode") {
-    const d = diodeSpec(c);
-    return { is: tolerance.diodeIs(c, tol), n: d.n, rs: d.rs };
-  }
-  if (c.type === "led") {
-    // Is подбирается так, чтобы при номинальном токе на выводах было vf (с учётом падения на Rs).
-    const s = ledSpec(c);
-    const vj = tolerance.ledVf(c, tol) + s.vfAdd - s.ratedA * s.rs;
-    return { is: s.ratedA / Math.exp(vj / (LED_N * VT)), n: LED_N, rs: s.rs };
-  }
-  throw new Error(`${c.id} — не диод`);
-}
-
-/** Ток через p-n переход при напряжении vj, А. */
-export function shockley(p: DiodeParams, vj: number): number {
-  return p.is * (Math.exp(vj / (p.n * VT)) - 1);
-}
-
-/**
- * Ограничение шага напряжения на переходе между итерациями Ньютона (как pnjlim в SPICE):
- * без него экспонента переполняется при первом же большом шаге.
- */
-function limitJunction(vnew: number, vold: number, p: DiodeParams): number {
-  const nvt = p.n * VT;
-  const vcrit = nvt * Math.log(nvt / (Math.SQRT2 * p.is));
-  if (vnew > vcrit && Math.abs(vnew - vold) > 2 * nvt) {
-    if (vold > 0) {
-      const arg = 1 + (vnew - vold) / nvt;
-      return arg > 0 ? vold + nvt * Math.log(arg) : vcrit;
-    }
-    return nvt * Math.log(vnew / nvt);
-  }
-  return vnew;
-}
-
-/**
- * Если Ньютон за 20 итераций не сошёлся, он обычно ходит по кругу между «переход заперт» и
- * «переход открыт» (например, светодиод на почти неподключённом стоке закрытого MOSFET).
- * Тогда берём только половину шага — качели гаснут.
- */
-function damp(vnew: number, vold: number, iter: number): number {
-  return iter > 20 ? vold + (vnew - vold) / 2 : vnew;
-}
-
-/**
- * Сошёлся ли переход: напряжение почти не меняется или (как в SPICE) почти не меняется ток.
- * Второе нужно для перехода на «висящем» узле (светодиод последовательно с разомкнутым
- * тумблером): ток там — пикоамперы, и напряжение дрожит в пределах точности вычислений.
- * Ток сравнивается с тем, к которому стремится решение (target — до ограничения шага):
- * иначе запертый в начале расчёта светодиод «сошёлся» бы, не успев открыться.
- */
-function junctionSettled(p: DiodeParams, vold: number, vnew: number, target: number): boolean {
-  if (Math.abs(vnew - vold) <= 1e-7) return true;
-  const i = (v: number) => p.is * (Math.exp(Math.min(v, 5) / (p.n * VT)) - 1);
-  const io = i(vold);
-  const inew = i(target);
-  return Math.abs(inew - io) <= 1e-9 + 1e-6 * Math.max(Math.abs(io), Math.abs(inew));
-}
-
-/** Малая проводимость параллельно переходу: помогает сходимости, на результат не влияет (1 нА на 1 кВ). */
-const GMIN = 1e-12;
-
-/**
- * Линеаризация диода в точке vj: ветвь «ЭДС + сопротивление», которую понимает решатель.
- * Переход заменяется касательной I ≈ Id + Gd·(v − vj), последовательно с Rs.
- */
-function diodeBranch(p: DiodeParams, vj: number): { r: number; emf: number } {
-  const e = Math.exp(vj / (p.n * VT));
-  // Ток утечки GMIN·vj входит и в ток, и в наклон: касательная к I(v) = Is·(e^v/nVt − 1) + GMIN·v.
-  // Если учесть GMIN только в наклоне, узел, который держится на одном запертом диоде
-  // (светодиод последовательно с разомкнутым тумблером), уходит на итерациях вразнос.
-  const id = p.is * (e - 1) + GMIN * vj;
-  const gd = (p.is / (p.n * VT)) * e + GMIN;
-  return { r: 1 / gd + p.rs, emf: id / gd - vj };
-}
-
 // ─── Перегрев и перегрузка ─────────────────────────────────────────────────
-
-/**
- * Нагрузка детали: отношение к пределу. Для резистора и лампы — по мощности,
- * для диодов — по току, для конденсаторов — по напряжению (у электролита и по обратному).
- *
- * Перегрев: пока нагрузка выше порога, «тепло» копится со скоростью (нагрузка − порог) × rate,
- * ниже порога остывает. При тепле ≥ 1 деталь выходит из строя. Это игровая модель,
- * а не теплофизика: резистор при двойной перегрузке сгорает примерно за 1,7 с.
- */
-const THERMAL: Partial<Record<Component["type"], { threshold: number; rate: number; cooling: number }>> = {
-  resistor: { threshold: 1, rate: 0.6, cooling: 0.5 },
-  lamp: { threshold: 1.3, rate: 1.2, cooling: 1 },
-  led: { threshold: 1.5, rate: 1.5, cooling: 1 },
-  diode: { threshold: 1, rate: 0.6, cooling: 0.5 },
-  capacitor: { threshold: 1, rate: 0.4, cooling: 0.3 },
-  transistor: { threshold: 1, rate: 0.6, cooling: 0.5 },
-  mosfet: { threshold: 1, rate: 0.6, cooling: 0.5 },
-};
+//
+// Нагрузка детали (part.load) — отношение к пределу: у резистора и лампы по мощности,
+// у диодов по току, у конденсаторов по напряжению. Перегрев (part.thermal): пока нагрузка
+// выше порога, «тепло» копится со скоростью (нагрузка − порог) × rate, ниже порога остывает.
+// При тепле ≥ 1 деталь выходит из строя. Это игровая модель, а не теплофизика: резистор
+// при двойной перегрузке сгорает примерно за 1,7 с.
 
 /** С какой нагрузки деталь начинает перегреваться (0 — не греется). */
 export function heatThreshold(c: Component): number {
-  return THERMAL[c.type]?.threshold ?? 0;
+  return part(c).thermal?.threshold ?? 0;
 }
-
-/** Батарея считается замкнутой накоротко, если ток больше половины тока КЗ. */
-export const SHORT_CIRCUIT_FRACTION = 0.5;
 
 /** Шаг по времени при наличии конденсаторов, с. */
 export const SUBSTEP = 0.005;
-
-/** Режим работы транзистора. */
-export type TransistorMode = "отсечка" | "усиление" | "насыщение" | "инверсный";
-
-export interface TransistorState {
-  /** Токи в «прямом» смысле: для n-p-n втекают в коллектор и базу, для p-n-p — вытекают. */
-  ic: number;
-  ib: number;
-  ie: number;
-  /** Напряжения в «прямом» смысле: для n-p-n Vбэ = Vб − Vэ, для p-n-p Vэб. */
-  vbe: number;
-  vce: number;
-  vbc: number;
-  mode: TransistorMode;
-}
-
-/**
- * Ёмкость переходов транзистора, Ф. У настоящего BC547 — единицы пикофарад; здесь намеренно 10 нФ:
- * без ёмкостей переключение мгновенное, и у схем с положительной обратной связью (мигалка, триггер)
- * в момент переключения нет непрерывного решения — метод Ньютона блуждает. С ёмкостью переключение
- * занимает микросекунды, для глаза это всё равно мгновенно.
- */
-export const JUNCTION_CAPACITANCE = 10e-9;
-
-/** Модель транзистора: знак (+1 n-p-n, −1 p-n-p) и параметры Эберса–Молла. */
-function bjt(c: Transistor, tol: Tolerance) {
-  const t = TRANSISTORS[c.kind];
-  const sign = t.polarity === "npn" ? 1 : -1;
-  return {
-    sign,
-    is: t.is,
-    /** Переходы как диоды: ток базы через каждый — Is/β. */
-    be: { is: t.is / tolerance.betaF(c, tol), n: 1, rs: 0 },
-    bc: { is: t.is / t.betaR, n: 1, rs: 0 },
-    /** Для ограничения шага: весь ток перехода, а не только базовая часть. */
-    junction: { is: t.is, n: 1, rs: 0 },
-  };
-}
-
-// ─── MOSFET ────────────────────────────────────────────────────────────────
-
-/** Режим MOSFET. «Насыщение» у полевого транзистора — это НЕ «полностью открыт», как у биполярного. */
-export type MosfetMode = "закрыт" | "открыт" | "насыщение" | "диод";
-
-export interface MosfetState {
-  /** Ток стока в «прямом» смысле (для N — втекает в сток, для P — вытекает), без учёта паразитного диода. */
-  id: number;
-  /** Ток через паразитный диод (в его прямом направлении), А. */
-  idiode: number;
-  /** Для N: Uзи, Uси; для P — с обратным знаком (Uиз, Uис). */
-  vgs: number;
-  vds: number;
-  mode: MosfetMode;
-}
-
-/** Коэффициент наклона в подпороговой области (как n в уравнении диода). */
-const MOS_N = 1.5;
-
-/** Плавное «превышение над порогом»: ≈ Uзи − Uпор выше порога и экспоненциально мало ниже. */
-function overdrive(vgs: number, vth: number): number {
-  const s = 2 * MOS_N * VT;
-  const x = (vgs - vth) / s;
-  return s * (x > 30 ? x : Math.log1p(Math.exp(x)));
-}
-
-/**
- * Ток канала для N-MOSFET при Uзи, Uси ≥ 0 (сток и исток симметричны: при Uси < 0 они меняются ролями).
- * Омическая область: K·(Vov·Uси − Uси²/2); насыщение (Uси ≥ Vov): K/2·Vov².
- */
-export function mosfetChannel(k: number, vth: number, vgs: number, vds: number): number {
-  if (vds < 0) return -mosfetChannel(k, vth, vgs - vds, -vds);
-  const vov = overdrive(vgs, vth);
-  return vds < vov ? k * (vov * vds - (vds * vds) / 2) : (k / 2) * vov * vov;
-}
-
-/**
- * Ёмкости затвора, Ф. У 2N7000 входная ёмкость — десятки пикофарад, у IRLZ44N ≈ 1,7 нФ; здесь 10 нФ
- * у всех — как у биполярных, для сходимости на переключениях. Соотношение как у настоящих MOSFET:
- * затвор–сток примерно в 10 раз меньше, чем затвор–исток. Поэтому «висящий» затвор при стоке на 9 В
- * наводкой поднимается примерно до 0,8 В — ниже порога (при равных ёмкостях было бы 4,5 В).
- */
-export const GATE_SOURCE_CAPACITANCE = 10e-9;
-export const GATE_DRAIN_CAPACITANCE = 1e-9;
-
-/** Паразитный диод исток → сток (для N-канала). */
-const BODY_DIODE = { is: 1e-13, n: 1, rs: 0.01 };
-
-function mos(c: Mosfet, tol: Tolerance) {
-  const spec = MOSFETS[c.kind];
-  return {
-    spec,
-    ...tolerance.mosfetParams(c, tol),
-    sign: spec.channel === "n" ? 1 : -1,
-    g: mosfetPin(c.kind, "G"),
-    d: mosfetPin(c.kind, "D"),
-    s: mosfetPin(c.kind, "S"),
-  };
-}
 
 export interface Load {
   ratio: number;
@@ -331,7 +88,7 @@ export class Simulation {
   /** Режим лабораторных блоков: держат напряжение (CV) или ток (CC). */
   readonly psuMode = new Map<string, "CV" | "CC">();
   /** Напряжение на переходе диода с прошлого решения — начальное приближение для Ньютона. */
-  private junction = new Map<string, number>();
+  junction = new Map<string, number>();
   solution: Solution = { nodeOf: new Map(), voltage: new Map(), branches: new Map() };
   /** Сколько итераций Ньютона потребовало последнее решение (для тестов и отладки). */
   lastIterations = 0;
@@ -355,184 +112,31 @@ export class Simulation {
 
   /** Есть ли что-то, что зависит от времени: конденсаторы или транзисторы (у них ёмкости переходов). */
   private hasCapacitors(): boolean {
-    return this.scene.components.some(
-      (c) => (c.type === "capacitor" || c.type === "transistor" || c.type === "mosfet") && !this.state(c.id).burned,
-    );
+    return this.scene.components.some((c) => part(c).dynamic && !this.state(c.id).burned);
   }
 
   /** Схема для решателя при заданных линеаризациях диодов и транзисторов и шаге h для конденсаторов. */
-  private branches(h: number): { out: Branch[]; extras: Required<Extras> } {
+  private branches(h: number): Stamp {
     this.h = h;
-    const out: Branch[] = [];
-    const extras: Required<Extras> = { currents: [], vccs: [] };
-    for (const c of this.scene.components) {
-      const a = pinNode(c, 0);
-      const b = pinNode(c, 1);
-      const burned = this.state(c.id).burned;
-      const open = { id: c.id, a, b, r: Infinity };
-      if (c.type === "transistor") {
-        if (!burned) this.transistorStamps(c, out, extras);
-        continue;
-      }
-      if (c.type === "mosfet") {
-        if (!burned) this.mosfetStamps(c, out, extras);
-        continue;
-      }
-      if (burned && c.type !== "battery" && c.type !== "switch") {
-        out.push(open);
-        continue;
-      }
-      switch (c.type) {
-        case "resistor":
-          out.push({ id: c.id, a, b, r: tolerance.resistance(c, this.tolerance) });
-          break;
-        case "lamp":
-          out.push({ id: c.id, a, b, r: lampResistance(c, this.tolerance) });
-          break;
-        case "battery": {
-          const bat = tolerance.battery(c, this.tolerance);
-          // Вывод 0 — минус, вывод 1 — плюс.
-          out.push({ id: c.id, a, b, r: bat.rInt, emf: bat.emf });
-          break;
-        }
-        case "switch":
-          out.push({ id: c.id, a, b, r: c.closed ? SWITCH_RESISTANCE : Infinity });
-          break;
-        case "psu": {
-          if (!c.on) {
-            out.push(open);
-            break;
-          }
-          // CV: ЭДС = уставка, почти нулевое сопротивление. CC: ток = ограничение (эквивалент Нортона).
-          const cc = this.psuMode.get(c.id) === "CC";
-          out.push(cc ? { id: c.id, a, b, r: PSU_R_CC, emf: c.amps * PSU_R_CC } : { id: c.id, a, b, r: PSU_R_CV, emf: c.volts });
-          break;
-        }
-        case "capacitor": {
-          // Неявный метод Эйлера: I = C·(v − v_пред)/h → ветвь с r = h/C и ЭДС −v_пред.
-          const C = tolerance.capacitance(c, this.tolerance);
-          out.push({ id: c.id, a, b, r: h / C, emf: -(this.capVoltage.get(c.id) ?? 0) });
-          break;
-        }
-        case "diode":
-        case "led": {
-          const p = diodeParams(c, this.tolerance);
-          const { r, emf } = diodeBranch(p, this.junction.get(c.id) ?? 0);
-          out.push({ id: c.id, a, b, r, emf });
-          break;
-        }
-      }
-    }
+    const s: Stamp = { out: [], extras: { currents: [], vccs: [] } };
+    for (const c of this.scene.components) part(c).stamp(c, this, s);
     for (const w of this.scene.wires) {
-      out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: wireResistance(this.scene, w) });
+      s.out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: wireResistance(this.scene, w) });
     }
     for (const t of this.scene.traces ?? []) {
-      out.push({ id: t.id, a: HOLE_BY_ID.get(t.a)!.node, b: HOLE_BY_ID.get(t.b)!.node, r: traceResistance(t.a, t.b) });
+      s.out.push({ id: t.id, a: HOLE_BY_ID.get(t.a)!.node, b: HOLE_BY_ID.get(t.b)!.node, r: traceResistance(t.a, t.b) });
     }
-    return { out, extras };
-  }
-
-  /**
-   * Транзистор по Эберсу–Моллу: два перехода как диоды (дают ток базы) и ток переноса
-   * коллектор → эмиттер It = Is·(e^(Vбэ/Vt) − e^(Vбк/Vt)), линеаризованный в текущей точке.
-   * Для p-n-p все напряжения и токи с обратным знаком.
-   */
-  private transistorStamps(c: Transistor, out: Branch[], extras: Required<Extras>): void {
-    const m = bjt(c, this.tolerance);
-    const [C, B, E] = [pinNode(c, 0), pinNode(c, 1), pinNode(c, 2)];
-    const vbe0 = this.junction.get(`${c.id}:be`) ?? 0;
-    const vbc0 = this.junction.get(`${c.id}:bc`) ?? 0;
-    // Переходы: у n-p-n анод — база, у p-n-p — эмиттер/коллектор
-    const be = diodeBranch(m.be, vbe0);
-    const bc = diodeBranch(m.bc, vbc0);
-    out.push(m.sign > 0 ? { id: `${c.id}:be`, a: B, b: E, ...be } : { id: `${c.id}:be`, a: E, b: B, ...be });
-    out.push(m.sign > 0 ? { id: `${c.id}:bc`, a: B, b: C, ...bc } : { id: `${c.id}:bc`, a: C, b: B, ...bc });
-    // Ёмкости переходов (неявный метод Эйлера, как у конденсатора)
-    for (const [key, a, b] of [[`${c.id}:cbe`, B, E], [`${c.id}:cbc`, B, C]] as const) {
-      out.push({ id: key, a, b, r: this.h / JUNCTION_CAPACITANCE, emf: -(this.capVoltage.get(key) ?? 0) });
-    }
-    const ef = Math.exp(vbe0 / VT);
-    const er = Math.exp(vbc0 / VT);
-    const gf = (m.is / VT) * ef;
-    const gr = (m.is / VT) * er;
-    const it0 = m.is * (ef - er);
-    // I(К→Э) = знак·(It0 − gf·vbe0 + gr·vbc0) + gf·(Vб − Vэ) − gr·(Vб − Vк)
-    extras.currents.push({ a: C, b: E, j: m.sign * (it0 - gf * vbe0 + gr * vbc0) });
-    extras.vccs.push({ a: C, b: E, cp: B, cn: E, g: gf });
-    extras.vccs.push({ a: C, b: E, cp: B, cn: C, g: -gr });
-  }
-
-  /**
-   * MOSFET: ток канала линеаризуется в точке (Uзи, Uси): I ≈ I0 + gm·ΔUзи + gds·ΔUси
-   * (производные — численно). Плюс паразитный диод и ёмкости затвора. Для P-канала — всё с обратным знаком.
-   */
-  private mosfetStamps(c: Mosfet, out: Branch[], extras: Required<Extras>): void {
-    const m = mos(c, this.tolerance);
-    const [G, D, S] = [pinNode(c, m.g), pinNode(c, m.d), pinNode(c, m.s)];
-    const vgs0 = this.junction.get(`${c.id}:vgs`) ?? 0;
-    const vds0 = this.junction.get(`${c.id}:vds`) ?? 0;
-    const f = (vgs: number, vds: number) => mosfetChannel(m.k, m.vth, vgs, vds);
-    const i0 = f(vgs0, vds0);
-    const dv = 1e-6;
-    const gm = (f(vgs0 + dv, vds0) - f(vgs0 - dv, vds0)) / (2 * dv);
-    const gds = (f(vgs0, vds0 + dv) - f(vgs0, vds0 - dv)) / (2 * dv) + GMIN;
-    // I(С→И) = знак·(I0 − gm·vgs0 − gds·vds0) + gm·(Vз − Vи) + gds·(Vс − Vи)
-    extras.currents.push({ a: D, b: S, j: m.sign * (i0 - gm * vgs0 - gds * vds0) });
-    extras.vccs.push({ a: D, b: S, cp: G, cn: S, g: gm });
-    extras.vccs.push({ a: D, b: S, cp: D, cn: S, g: gds });
-    // Паразитный диод: у N — анод исток, у P — анод сток
-    const body = diodeBranch(BODY_DIODE, this.junction.get(`${c.id}:body`) ?? 0);
-    out.push(m.sign > 0 ? { id: `${c.id}:body`, a: S, b: D, ...body } : { id: `${c.id}:body`, a: D, b: S, ...body });
-    // Ёмкости затвора; они же связывают затвор со схемой, даже если он ни к чему не подключён
-    for (const [key, a, b, cap] of [
-      [`${c.id}:cgs`, G, S, GATE_SOURCE_CAPACITANCE],
-      [`${c.id}:cgd`, G, D, GATE_DRAIN_CAPACITANCE],
-    ] as const) {
-      out.push({ id: key, a, b, r: this.h / cap, emf: -(this.capVoltage.get(key) ?? 0) });
-    }
+    return s;
   }
 
   /** Токи и напряжения MOSFET из текущего решения. */
   mosfet(c: Mosfet): MosfetState {
-    const m = mos(c, this.tolerance);
-    const v = (pin: Pin) => this.solution.voltage.get(pinNode(c, pin));
-    const [vg, vd, vs] = [v(m.g), v(m.d), v(m.s)];
-    if (vg === undefined || vd === undefined || vs === undefined) return { id: 0, idiode: 0, vgs: 0, vds: 0, mode: "закрыт" };
-    const vgs = m.sign * (vg - vs);
-    const vds = m.sign * (vd - vs);
-    if (this.state(c.id).burned) return { id: 0, idiode: 0, vgs, vds, mode: "закрыт" };
-    const id = mosfetChannel(m.k, m.vth, vgs, vds);
-    const idiode = this.solution.branches.get(`${c.id}:body`)?.current ?? 0;
-    const vov = overdrive(vgs, m.vth);
-    const mode: MosfetMode =
-      idiode > 1e-4 && vds < 0 ? "диод" : Math.abs(id) < 1e-6 ? "закрыт" : Math.abs(vds) < vov ? "открыт" : "насыщение";
-    return { id, idiode, vgs, vds, mode };
+    return mosfetState(c, this);
   }
 
   /** Токи и напряжения транзистора из текущего решения. */
   transistor(c: Transistor): TransistorState {
-    const zero: TransistorState = { ic: 0, ib: 0, ie: 0, vbe: 0, vce: 0, vbc: 0, mode: "отсечка" };
-    const v = (pin: Pin) => this.solution.voltage.get(pinNode(c, pin));
-    const [vc, vb, ve] = [v(0), v(1), v(2)];
-    if (vc === undefined || vb === undefined || ve === undefined) return zero;
-    const m = bjt(c, this.tolerance);
-    const vbe = m.sign * (vb - ve);
-    const vbc = m.sign * (vb - vc);
-    if (this.state(c.id).burned) return { ...zero, vbe, vbc, vce: vbe - vbc };
-    const ibe = this.solution.branches.get(`${c.id}:be`)?.current ?? 0;
-    const ibc = this.solution.branches.get(`${c.id}:bc`)?.current ?? 0;
-    const it = m.is * (Math.exp(vbe / VT) - Math.exp(vbc / VT));
-    const ic = it - ibc;
-    const ib = ibe + ibc;
-    const mode: TransistorMode =
-      Math.abs(ic) < 1e-6 && Math.abs(ib) < 1e-6
-        ? "отсечка"
-        : vbe < 0.3 && vbc > 0.4
-          ? "инверсный"
-          : vbc > 0.4
-            ? "насыщение"
-            : "усиление";
-    return { ic, ib, ie: ic + ib, vbe, vbc, vce: vbe - vbc, mode };
+    return transistorState(c, this);
   }
 
   /**
@@ -542,7 +146,7 @@ export class Simulation {
   private budget = Infinity;
 
   /** Текущий шаг по времени, с (для ёмкостей). */
-  private h = SUBSTEP;
+  h = SUBSTEP;
 
   /** Сколько решений не сошлось (для тестов и отладки). */
   nonConverged = 0;
@@ -552,11 +156,8 @@ export class Simulation {
    * Возвращает false, если за 100 итераций не сошлось (бывает на резких переключениях).
    */
   private solveAt(h: number): boolean {
-    const diodes = this.scene.components.filter((c) => (c.type === "diode" || c.type === "led") && !this.state(c.id).burned);
-    const bjts = this.scene.components.filter((c): c is Transistor => c.type === "transistor" && !this.state(c.id).burned);
-    const fets = this.scene.components.filter((c): c is Mosfet => c.type === "mosfet" && !this.state(c.id).burned);
-    const psus = this.scene.components.filter((c): c is PowerSupply => c.type === "psu" && c.on);
-    let flips = 0;
+    const nonlinear = this.scene.components.filter((c) => part(c).newton && !this.state(c.id).burned);
+    const shared = { flips: 0 };
     for (let iter = 1; iter <= 100; iter++) {
       const { out, extras } = this.branches(h);
       // Вырожденная или плохо обусловленная система (нечисла в ответе) — итерация не удалась;
@@ -572,63 +173,8 @@ export class Simulation {
       this.lastIterations = iter;
       if (--this.budget < 0) return false;
       let converged = true;
-      // Лабораторный блок: CV, пока ток меньше ограничения; иначе CC, пока напряжение не выше уставки
-      for (const p of psus) {
-        const br = this.solution.branches.get(p.id)!;
-        const mode = this.psuMode.get(p.id) ?? "CV";
-        const next = mode === "CV" ? (br.current > p.amps * (1 + 1e-9) ? "CC" : "CV") : br.voltage > p.volts * (1 + 1e-9) ? "CV" : "CC";
-        if (next !== mode && flips < 8) {
-          this.psuMode.set(p.id, next);
-          flips++;
-          converged = false;
-        }
-      }
-      for (const t of fets) {
-        const m = mos(t, this.tolerance);
-        const volt = (pin: Pin) => this.solution.voltage.get(pinNode(t, pin)) ?? 0;
-        // Шаг по Uзи и Uси ограничен (как fetlim/limvds в SPICE), чтобы Ньютон не перескакивал через порог
-        const steps: [string, number, number][] = [
-          [`${t.id}:vgs`, m.sign * (volt(m.g) - volt(m.s)), 0.5],
-          [`${t.id}:vds`, m.sign * (volt(m.d) - volt(m.s)), 2],
-        ];
-        for (const [key, vterm, maxStep] of steps) {
-          const vold = this.junction.get(key) ?? 0;
-          const vnew = vold + Math.max(-maxStep, Math.min(maxStep, vterm - vold));
-          if (Math.abs(vnew - vold) > 1e-7) converged = false;
-          this.junction.set(key, vnew);
-        }
-        const br = this.solution.branches.get(`${t.id}:body`)!;
-        const vold = this.junction.get(`${t.id}:body`) ?? 0;
-        const target = -br.voltage - br.current * BODY_DIODE.rs;
-        const vnew = limitJunction(target, vold, BODY_DIODE);
-        if (!junctionSettled(BODY_DIODE, vold, vnew, target)) converged = false;
-        this.junction.set(`${t.id}:body`, vnew);
-      }
-      for (const t of bjts) {
-        const m = bjt(t, this.tolerance);
-        const volt = (pin: Pin) => this.solution.voltage.get(pinNode(t, pin)) ?? 0;
-        const targets: [string, number][] = [
-          [`${t.id}:be`, m.sign * (volt(1) - volt(2))],
-          [`${t.id}:bc`, m.sign * (volt(1) - volt(0))],
-        ];
-        for (const [key, vterm] of targets) {
-          const vold = this.junction.get(key) ?? 0;
-          const vnew = limitJunction(vterm, vold, m.junction);
-          if (Math.abs(vnew - vold) > 1e-7) converged = false;
-          this.junction.set(key, vnew);
-        }
-      }
-      for (const d of diodes) {
-        const p = diodeParams(d, this.tolerance);
-        const br = this.solution.branches.get(d.id)!;
-        const vold = this.junction.get(d.id) ?? 0;
-        // Напряжение на выводах минус падение на Rs — напряжение на переходе
-        const vterm = -br.voltage;
-        const target = vterm - br.current * p.rs;
-        const vnew = damp(limitJunction(target, vold, p), vold, iter);
-        if (!junctionSettled(p, vold, vnew, target)) converged = false;
-        this.junction.set(d.id, vnew);
-      }
+      // Каждая деталь двигает только свои переходы, так что порядок не важен
+      for (const c of nonlinear) if (!part(c).newton!(c, this, iter, shared)) converged = false;
       if (converged) return true;
     }
     return false;
@@ -650,48 +196,17 @@ export class Simulation {
 
   /** Напряжение между выводами 0 и 1 (V0 − V1), В. Для диода — прямое напряжение. */
   voltage(c: Component): number {
-    if (c.type === "capacitor") return this.capVoltage.get(c.id) ?? 0;
-    if (c.type === "transistor") return this.transistor(c).vce;
-    if (c.type === "mosfet") return this.mosfet(c).vds;
-    return -this.branch(c.id).voltage;
+    return part(c).voltage?.(c, this) ?? -this.branch(c.id).voltage;
   }
 
   /** Ток от вывода 0 к выводу 1 через деталь, А. */
   current(c: Component): number {
-    if (c.type === "transistor") return this.transistor(c).ic;
-    if (c.type === "mosfet") {
-      const f = this.mosfet(c);
-      return f.id - f.idiode;
-    }
-    return this.branch(c.id).current;
+    return part(c).current?.(c, this) ?? this.branch(c.id).current;
   }
 
   /** Мощность, которая выделяется в детали теплом (у конденсатора — 0, он запасает энергию), Вт. */
   power(c: Component): number {
-    switch (c.type) {
-      case "diode":
-      case "led":
-        return Math.max(0, this.voltage(c) * this.current(c));
-      case "capacitor":
-        return 0;
-      case "transistor": {
-        const t = this.transistor(c);
-        return Math.max(0, t.vce * t.ic + t.vbe * t.ib);
-      }
-      case "mosfet": {
-        const f = this.mosfet(c);
-        return Math.max(0, f.vds * f.id) + Math.max(0, -f.vds * f.idiode);
-      }
-      case "psu":
-        return Math.max(0, this.branch(c.id).current * this.branch(c.id).voltage);
-      case "battery": {
-        // Мощность, которую батарея отдаёт в цепь
-        const bat = tolerance.battery(c, this.tolerance);
-        return Math.abs(this.current(c)) * bat.emf;
-      }
-      default:
-        return this.branch(c.id).power;
-    }
+    return part(c).power?.(c, this) ?? this.branch(c.id).power;
   }
 
   /** Энергия, запасённая в конденсаторе, Дж. */
@@ -702,48 +217,7 @@ export class Simulation {
   }
 
   load(c: Component): Load | undefined {
-    switch (c.type) {
-      case "resistor":
-      case "lamp": {
-        const rated = part(c).rated!(c);
-        return { ratio: this.branch(c.id).power / rated, what: "мощность", limit: formatLimit(rated, "Вт") };
-      }
-      case "led": {
-        const rated = ledSpec(c).ratedA;
-        return { ratio: Math.max(0, this.current(c)) / rated, what: "ток", limit: formatLimit(rated, "А") };
-      }
-      case "diode": {
-        const maxA = diodeSpec(c).maxA;
-        return { ratio: Math.max(0, this.current(c)) / maxA, what: "ток", limit: formatLimit(maxA, "А") };
-      }
-      case "capacitor": {
-        const v = this.voltage(c);
-        const rated = capacitorVolts(c);
-        if (c.variant === "ceramic") return { ratio: Math.abs(v) / rated, what: "напряжение", limit: formatLimit(rated, "В") };
-        if (v < 0) return { ratio: -v / ELECTROLYTIC_REVERSE_V, what: "обратное напряжение", limit: `${ELECTROLYTIC_REVERSE_V} В` };
-        return { ratio: v / rated, what: "напряжение", limit: formatLimit(rated, "В") };
-      }
-      case "mosfet": {
-        const spec = MOSFETS[c.kind];
-        const f = this.mosfet(c);
-        const byI = Math.max(Math.abs(f.id), Math.abs(f.idiode)) / spec.maxId;
-        const byP = this.power(c) / spec.maxP;
-        return byI >= byP
-          ? { ratio: byI, what: "ток", limit: spec.maxId >= 1 ? `${spec.maxId} А` : `${spec.maxId * 1000} мА` }
-          : { ratio: byP, what: "мощность", limit: `${String(spec.maxP).replace(".", ",")} Вт` };
-      }
-      case "transistor": {
-        const spec = TRANSISTORS[c.kind];
-        const t = this.transistor(c);
-        const byI = Math.abs(t.ic) / spec.maxIc;
-        const byP = this.power(c) / spec.maxP;
-        return byI >= byP
-          ? { ratio: byI, what: "ток", limit: `${spec.maxIc * 1000} мА` }
-          : { ratio: byP, what: "мощность", limit: `${spec.maxP} Вт` };
-      }
-      default:
-        return undefined;
-    }
+    return part(c).load?.(c, this);
   }
 
   /** Нагрузка относительно предела (0, если предела нет). */
@@ -752,17 +226,12 @@ export class Simulation {
   }
 
   isShorted(c: Component): boolean {
-    if (c.type !== "battery") return false;
-    const bat = tolerance.battery(c, this.tolerance);
-    return Math.abs(this.branch(c.id).current) > SHORT_CIRCUIT_FRACTION * (bat.emf / bat.rInt);
+    return part(c).shorted?.(c, this) ?? false;
   }
 
   /** Диод включён в обратную сторону и заметное напряжение приложено против него. */
   isReversed(c: Component): boolean {
-    if (c.type === "diode" || c.type === "led") return this.voltage(c) < -0.5;
-    if (c.type === "capacitor" && c.variant === "electrolytic") return this.voltage(c) < -0.2;
-    if (c.type === "transistor") return this.transistor(c).mode === "инверсный";
-    return false;
+    return part(c).reversed?.(c, this) ?? false;
   }
 
   /**
@@ -806,14 +275,7 @@ export class Simulation {
       this.junction = saved;
     }
     for (const c of this.scene.components) {
-      if (this.state(c.id).burned) continue;
-      if (c.type === "capacitor") this.capVoltage.set(c.id, -this.branch(c.id).voltage);
-      if (c.type === "transistor") {
-        for (const key of [`${c.id}:cbe`, `${c.id}:cbc`]) this.capVoltage.set(key, -this.branch(key).voltage);
-      }
-      if (c.type === "mosfet") {
-        for (const key of [`${c.id}:cgs`, `${c.id}:cgd`]) this.capVoltage.set(key, -this.branch(key).voltage);
-      }
+      if (!this.state(c.id).burned) part(c).remember?.(c, this);
     }
     return ok ? this.heat(h) : [];
   }
@@ -821,7 +283,7 @@ export class Simulation {
   private heat(dt: number): Component[] {
     const failed: Component[] = [];
     for (const c of this.scene.components) {
-      const t = THERMAL[c.type];
+      const t = part(c).thermal;
       if (!t) continue;
       const s = this.state(c.id);
       if (s.burned) continue;

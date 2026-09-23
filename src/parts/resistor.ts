@@ -1,5 +1,8 @@
 import { SMD_SIZES, thtResistorSpec, type Resistor } from "../model/types";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
+import * as tolerance from "../sim/tolerance";
+import { formatLimit } from "../sim/devices";
+import { stampBurned, twoPin } from "./common";
 import { formatW } from "./format";
 import type { PartDef } from "./types";
 
@@ -17,4 +20,13 @@ export const resistor: PartDef<Resistor> = {
     c.variant === "smd"
       ? [`Резистор ${c.id} сгорел`, `Корпус ${c.smdSize} рассеивает не больше ${formatSI(SMD_SIZES[c.smdSize].ratedW, "Вт")}. Возьмите корпус крупнее или резистор с бо́льшим сопротивлением.`]
       : [`Резистор ${c.id} сгорел`, `Номинал ${formatW(thtResistorSpec(c).ratedW)}. Возьмите резистор мощнее, увеличьте сопротивление или понизьте напряжение.`],
+
+  stamp(c, sim, { out }) {
+    if (!stampBurned(c, sim, out)) out.push(twoPin(c, tolerance.resistance(c, sim.tolerance)));
+  },
+  load(c, sim) {
+    const rated = resistor.rated!(c);
+    return { ratio: sim.branch(c.id).power / rated, what: "мощность", limit: formatLimit(rated, "Вт") };
+  },
+  thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
 };
