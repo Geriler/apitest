@@ -751,6 +751,15 @@ try {
       const schUndone = await page.evaluate(() => window.maketka.scene.schematic?.x?.R1);
       check(schDragged.x > 0 && schDragged.reset && schUndone === undefined, `R1 на схеме перетащен (x = ${schDragged.x}), «Сбросить» появилась, Ctrl+Z вернул`);
       await page.screenshot({ path: "screenshots/desktop-schematic.png" });
+      // На весь экран и обратно по Esc
+      await page.click("#btn-sch-full");
+      await page.waitForTimeout(300);
+      const fullBox = await page.locator("#schematic").boundingBox();
+      await page.screenshot({ path: "screenshots/desktop-schematic-full.png" });
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(200);
+      const normalBox = await page.locator("#schematic").boundingBox();
+      check(fullBox.width > 1300 && fullBox.height > 800 && normalBox.width < 700, `схема на весь экран: ${Math.round(fullBox.width)}×${Math.round(fullBox.height)}, Esc вернул ${Math.round(normalBox.width)}×${Math.round(normalBox.height)}`);
       await page.click("#btn-schematic");
 
       // Схема пользователя «Элемент ИЛИ» со светодиодами 1 Вт: страница не зависает, ошибок нет

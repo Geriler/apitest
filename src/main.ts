@@ -115,8 +115,29 @@ async function start(): Promise<void> {
     schBtn.setAttribute("aria-pressed", String(on));
   };
   schBtn.addEventListener("click", () => setSchematic(!app.showSchematic));
-  $("btn-sch-close").addEventListener("click", () => setSchematic(false));
+  $("btn-sch-close").addEventListener("click", () => {
+    setSchematic(false);
+    setFull(false);
+  });
   $("btn-sch-reset").addEventListener("click", () => app.resetSchematicLayout());
+  // На весь экран и обратно (кнопка или Esc)
+  const fullBtn = $("btn-sch-full");
+  const setFull = (on: boolean) => {
+    $("schematic").classList.toggle("full", on);
+    fullBtn.setAttribute("aria-pressed", String(on));
+    fullBtn.textContent = on ? "↙ Свернуть" : "⛶ Весь экран";
+  };
+  fullBtn.addEventListener("click", () => setFull(!$("schematic").classList.contains("full")));
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && $("schematic").classList.contains("full")) {
+        setFull(false);
+        e.stopImmediatePropagation();
+      }
+    },
+    true,
+  );
   const zoomBtn = $("btn-sch-zoom");
   zoomBtn.addEventListener("click", () => {
     const actual = $("schematic").classList.toggle("actual");

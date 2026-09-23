@@ -189,6 +189,10 @@
     overflow: hidden;
   }
   #schematic[hidden] { display: none; }
+  /* На весь экран: поверх сцены и панелей */
+  #schematic.full { position: fixed; inset: 16px; width: auto; height: auto; min-width: 0; resize: none; z-index: 20; }
+  /* Во весь экран схема растягивается на окно (пропорции сохраняются); «100 %» — натуральная величина */
+  #schematic.full:not(.actual) .sch { width: 100%; height: 100%; }
   .sch-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
   .sch-head small { color: var(--muted); font-size: 11px; }
   .sch-body { flex: 1; overflow: auto; }
@@ -515,6 +519,7 @@
       <span><span class="eyebrow">схема</span> <small>детали и линии цепей можно двигать мышью; щелчок по детали — её панель</small></span>
       <span class="row" style="margin: 0; flex-wrap: nowrap;">
         <button class="btn inline" id="btn-sch-reset" hidden title="Вернуть автоматическую раскладку">Сбросить</button>
+        <button class="btn inline" id="btn-sch-full" aria-pressed="false" title="На весь экран (Esc — обратно)">⛶ Весь экран</button>
         <button class="btn inline" id="btn-sch-zoom" aria-pressed="false" title="Натуральная величина с прокруткой или по размеру панели">100 %</button>
         <button class="btn inline" id="btn-sch-close" aria-label="Закрыть схему" title="Закрыть">×</button>
       </span>
