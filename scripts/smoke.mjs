@@ -213,6 +213,35 @@ try {
       await page.waitForTimeout(300);
       const wire = await page.evaluate(() => window.maketka.scene.wires.at(-1));
       check(wire.color === "#2f6fd1" && "hole" in wire.a && wire.a.hole === "f2", `провод выбранного цвета: ${wire.color} ${JSON.stringify(wire.a)}`);
+      // По умолчанию — прямая перемычка: лежит на плате (выше поверхности не больше чем на толщину провода)
+      const flatInfo = await page.evaluate((id) => {
+        const a = window.maketka;
+        const v = a.wireViews.get(id);
+        let maxY = -1;
+        v.mesh.traverse((o) => {
+          if (!o.isMesh) return;
+          o.geometry.computeBoundingBox();
+          const b = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
+          maxY = Math.max(maxY, b.max.y);
+        });
+        return { shape: a.scene.wires.find((w) => w.id === id).shape, maxY, top: a.endpointPos({ hole: "f2" }).y };
+      }, wire.id);
+      await page.screenshot({ path: "screenshots/desktop-jumper.png" });
+      check(flatInfo.shape === "flat" && flatInfo.maxY - flatInfo.top < 0.7, `прямая перемычка лежит на плате: верх на ${(flatInfo.maxY - flatInfo.top).toFixed(2)} шага над ней`);
+      // Переключить готовый провод на гибкий из его панели
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("1");
+      await page.evaluate((id) => {
+        window.maketka.selected = id;
+        window.maketka.renderInspector();
+      }, wire.id);
+      await page.click('#inspector [data-shape="arc"]');
+      await page.waitForTimeout(300);
+      const arcInfo = await page.evaluate((id) => {
+        const a = window.maketka;
+        return { shape: a.scene.wires.find((w) => w.id === id).shape, h: a.wireViews.get(id).curve.getPoint(0.5).y - a.endpointPos({ hole: "f2" }).y, title: document.querySelector("#inspector h2").textContent };
+      }, wire.id);
+      check(arcInfo.shape === "arc" && arcInfo.h > 1 && arcInfo.title === "Провод", `в панели провода — «Гибкий, дугой»: середина на ${arcInfo.h.toFixed(1)} шага над платой`);
 
       // Пример 3: мигалка на транзисторах
       await page.keyboard.press("Escape");

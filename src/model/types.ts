@@ -1,6 +1,6 @@
 /** Модель песочницы: что стоит на столе и как соединено. Без Three.js. */
 
-import { DEFAULT_BOARDS, boardsFromLayout, holeIdsFor, type BoardSpec, type Layout } from "./breadboard";
+import { DEFAULT_BOARDS, HOLE_BY_ID, boardsFromLayout, holeIdsFor, type BoardSpec, type Layout } from "./breadboard";
 
 export type SmdSize = "1206" | "0805" | "0603" | "0402";
 
@@ -212,6 +212,24 @@ export interface Wire {
   a: Endpoint;
   b: Endpoint;
   color: string;
+  /**
+   * «flat» — прямая перемычка: лежит на плате, концы загнуты в отверстия. Только если оба конца
+   * в отверстиях одной платы, иначе провод идёт дугой. «arc» или нет (старые схемы) — гибкий провод дугой.
+   */
+  shape?: WireShape;
+}
+
+export type WireShape = "flat" | "arc";
+
+/** Насколько прямая перемычка длиннее расстояния между отверстиями: два загнутых конца, в шагах. */
+export const FLAT_WIRE_EXTRA = 1;
+
+/** Лежит ли провод на плате прямой перемычкой (выбрана перемычка и оба конца на одной плате). */
+export function isFlatWire(w: { a: Endpoint; b: Endpoint; shape?: WireShape }): boolean {
+  if (w.shape !== "flat" || !("hole" in w.a) || !("hole" in w.b)) return false;
+  const a = HOLE_BY_ID.get(w.a.hole);
+  const b = HOLE_BY_ID.get(w.b.hole);
+  return !!a && !!b && a.boardId === b.boardId;
 }
 
 /**

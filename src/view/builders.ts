@@ -1064,7 +1064,7 @@ function buildBaseView(c: Component): ComponentView {
 // ─── Провода ───────────────────────────────────────────────────────────────
 
 export interface WireView {
-  mesh: THREE.Mesh;
+  mesh: THREE.Object3D;
   curve: THREE.Curve<THREE.Vector3>;
   length: number;
   dispose(): void;
@@ -1078,18 +1078,73 @@ export function wireCurve(a: THREE.Vector3, b: THREE.Vector3): THREE.CubicBezier
   return new THREE.CubicBezierCurve3(a, a.clone().setY(top), b.clone().setY(top), b);
 }
 
-export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, color: string): WireView {
-  const curve = wireCurve(a, b);
+/** Радиус провода в изоляции, в шагах. */
+const WIRE_R = mm(0.75);
+
+/**
+ * Прямая перемычка: ножки из отверстий вверх до изоляции, загиб, прямой участок, лежащий
+ * на плате, загиб, ножка вниз. a и b — отверстия на поверхности одной платы.
+ */
+export function flatWireCurve(a: THREE.Vector3, b: THREE.Vector3): THREE.CurvePath<THREE.Vector3> {
+  const y = a.y + WIRE_R;
+  const bottom = a.y - 0.2;
+  const dir = b.clone().sub(a).setY(0).normalize();
+  const bend = Math.min(0.2, a.distanceTo(b) / 4);
+  const corner = (p: THREE.Vector3, sign: number) => [p.clone().setY(y - bend), p.clone().setY(y), p.clone().setY(y).addScaledVector(dir, sign * bend)] as const;
+  const [a0, a1, a2] = corner(a, 1);
+  const [b0, b1, b2] = corner(b, -1);
+  const path = new THREE.CurvePath<THREE.Vector3>();
+  path.add(new THREE.LineCurve3(a.clone().setY(bottom), a0));
+  path.add(new THREE.QuadraticBezierCurve3(a0, a1, a2));
+  path.add(new THREE.LineCurve3(a2, b2));
+  path.add(new THREE.QuadraticBezierCurve3(b2, b1, b0));
+  path.add(new THREE.LineCurve3(b0, b.clone().setY(bottom)));
+  return path;
+}
+
+export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, color: string, flat = false): WireView {
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.45 });
-  const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 48, mm(0.75), 10, false), mat);
-  mesh.castShadow = true;
-  mesh.userData.wireId = id;
+  if (!flat) {
+    const curve = wireCurve(a, b);
+    const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 48, WIRE_R, 10, false), mat);
+    mesh.castShadow = true;
+    mesh.userData.wireId = id;
+    return {
+      mesh,
+      curve,
+      length: curve.getLength(),
+      dispose() {
+        mesh.geometry.dispose();
+        mat.dispose();
+      },
+    };
+  }
+  // Голая медь по всей длине (видна на ножках) и изоляция на прямом участке
+  const curve = flatWireCurve(a, b);
+  const group = new THREE.Group();
+  const copper = new THREE.Mesh(new THREE.TubeGeometry(curve, 64, mm(0.32), 8, false), leadMaterial);
+  group.add(copper);
+  const dir = b.clone().sub(a).setY(0).normalize();
+  const d = a.distanceTo(b);
+  const bare = Math.min(0.35, d * 0.2); // у отверстий изоляция срезана
+  const y = a.y + WIRE_R;
+  const p0 = a.clone().setY(y).addScaledVector(dir, bare);
+  const p1 = b.clone().setY(y).addScaledVector(dir, -bare);
+  const insulation = new THREE.Mesh(new THREE.CylinderGeometry(WIRE_R, WIRE_R, p0.distanceTo(p1), 14, 1), mat);
+  insulation.position.copy(p0).add(p1).multiplyScalar(0.5);
+  insulation.quaternion.setFromUnitVectors(Y, dir);
+  group.add(insulation);
+  group.traverse((o) => {
+    o.userData.wireId = id;
+    o.castShadow = true;
+  });
   return {
-    mesh,
+    mesh: group,
     curve,
     length: curve.getLength(),
     dispose() {
-      mesh.geometry.dispose();
+      copper.geometry.dispose();
+      insulation.geometry.dispose();
       mat.dispose();
     },
   };

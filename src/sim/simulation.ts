@@ -18,13 +18,15 @@ function endpointXZ(scene: Scene, e: Endpoint): [number, number] {
 }
 
 /**
- * Сопротивление провода, Ом: длина дуги провода (как он нарисован — концы поднимаются
- * над платой на 1–7 шагов) × сопротивление меди 22 AWG.
+ * Сопротивление провода, Ом: длина провода, как он нарисован, × сопротивление меди 22 AWG.
+ * Дуга: концы поднимаются над платой на 1–7 шагов. Прямая перемычка: расстояние плюс два
+ * загнутых конца.
  */
-export function wireResistance(scene: Scene, w: { a: Endpoint; b: Endpoint }): number {
+export function wireResistance(scene: Scene, w: { a: Endpoint; b: Endpoint; shape?: WireShape }): number {
   const [ax, az] = endpointXZ(scene, w.a);
   const [bx, bz] = endpointXZ(scene, w.b);
   const d = Math.hypot(ax - bx, az - bz);
+  if (isFlatWire(w)) return (d + FLAT_WIRE_EXTRA) * 2.54 * WIRE_OHM_PER_MM;
   const rise = Math.min(7, Math.max(1, 0.8 + d * 0.22));
   return (d + 2 * rise) * 2.54 * WIRE_OHM_PER_MM;
 }
@@ -48,7 +50,10 @@ import {
   SWITCH_RESISTANCE,
   TRACE_OHM_PER_MM,
   TRANSISTORS,
+  FLAT_WIRE_EXTRA,
   WIRE_OHM_PER_MM,
+  isFlatWire,
+  type WireShape,
   mosfetPin,
   ratedPower,
   type Component,

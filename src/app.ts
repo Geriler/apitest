@@ -35,6 +35,7 @@ import {
   TRANSISTORS,
   canGoOnBoard,
   formatFarads,
+  isFlatWire,
   isPolar,
   boardConflicts,
   pinCount,
@@ -52,12 +53,14 @@ import {
   type SmdSize,
   type Transistor,
   type TransistorKind,
+  type Wire,
+  type WireShape,
 } from "./model/types";
 import { colorBands, e12Values, formatOhms, formatSI, smdCode } from "./sim/resistorCodes";
 import { Simulation, VT, diodeParams, heatThreshold, lampResistance, traceResistance, wireResistance } from "./sim/simulation";
 import * as tolerance from "./sim/tolerance";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
-import { buildComponentView, buildTraceView, buildWireView, wireCurve, mm, type ComponentView, type WireView } from "./view/builders";
+import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
 import type { World } from "./view/world";
 
 type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
@@ -166,6 +169,8 @@ export class App {
     pcbSize: "24x14",
     /** "auto" — красный к плюсу, чёрный к минусу, остальные по кругу; иначе цвет из палитры. */
     wireColor: "auto",
+    /** Какой провод брать: прямую перемычку (если оба конца на одной плате) или гибкий дугой. */
+    wireShape: "flat" as WireShape,
   };
 
   constructor(
@@ -513,7 +518,7 @@ export class App {
       if (this.sim.state(c.id).burned) v.update(this.visual(c));
     }
     for (const w of this.scene.wires) {
-      const wv = buildWireView(w.id, this.endpointPos(w.a), this.endpointPos(w.b), w.color);
+      const wv = buildWireView(w.id, this.endpointPos(w.a), this.endpointPos(w.b), w.color, isFlatWire(w));
       this.wireViews.set(w.id, wv);
       this.world.wireLayer.add(wv.mesh);
     }
@@ -1053,7 +1058,7 @@ export class App {
       return;
     }
     if (sameEndpoint(this.pendingEnd, end)) return this.cancelPending();
-    this.scene.wires.push({ id: this.nextWireId(), a: this.pendingEnd, b: end, color: this.pickWireColor(this.pendingEnd, end) });
+    this.scene.wires.push({ id: this.nextWireId(), a: this.pendingEnd, b: end, color: this.pickWireColor(this.pendingEnd, end), shape: this.defaults.wireShape });
     this.pendingEnd = undefined;
     this.clearGhost();
     this.changed();
@@ -1244,8 +1249,8 @@ export class App {
       const target = h.pin?.pos ?? (h.hole ? new THREE.Vector3(h.hole.x, h.hole.y, h.hole.z) : h.table);
       if (!target) return this.clearGhost();
       const a = this.endpointPos(this.pendingEnd);
-      const geom = new THREE.TubeGeometry(wireCurve(a, target), 40, mm(0.75), 8, false);
-      return this.showGhost(new THREE.Mesh(geom));
+      const flat = !!h.hole && !h.pin && isFlatWire({ a: this.pendingEnd, b: { hole: h.hole.id }, shape: this.defaults.wireShape });
+      return this.showGhost(buildWireView("ghost", a, target, "#ffffff", flat).mesh);
     }
     if (this.tool === "trace" && this.pendingPad && h.hole?.boardId === this.pendingPad.boardId && h.hole.id !== this.pendingPad.id) {
       return this.showGhost(buildTraceView("ghost", this.pendingPad, h.hole).mesh);
@@ -1600,12 +1605,17 @@ export class App {
     const w = this.scene.wires.find((x) => x.id === id)!;
     const b = this.sim.branch(id);
     const name = (e: Endpoint) => ("hole" in e ? holeLabel(e.hole) : `вывод ${e.pin + 1} детали ${e.comp}`);
+    const sameBoard = isFlatWire({ ...w, shape: "flat" });
+    const shapeRow = sameBoard
+      ? `<div class="field"><label>Какой провод</label>${this.shapeButtons(w.shape ?? "arc")}</div>`
+      : `<p class="sub">Концы не на одной плате — такой провод идёт только дугой.</p>`;
     const html = `<div class="eyebrow"><span class="ref">${id}</span> · провод</div>
-      <h2>Перемычка</h2>
+      <h2>${isFlatWire(w) ? "Прямая перемычка" : "Провод"}</h2>
       ${this.readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
       <div class="kv"><span>От</span><span>${name(w.a)}</span></div>
       <div class="kv"><span>До</span><span>${name(w.b)}</span></div>
       <div class="field"><label>Цвет</label>${this.swatches(w.color, false)}</div>
+      ${shapeRow}
       <div class="kv"><span>Сопротивление</span><span>${formatOhms(wireResistance(this.scene, w))}</span></div>
       <p class="sub">Медь 22 AWG, ≈ 53 мОм на метр — сопротивление зависит от длины провода. Светлые точки показывают направление тока (от плюса к минусу), скорость — его силу.</p>
       ${this.selected === id ? `<div class="row"><button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button></div>` : ""}`;
@@ -1623,6 +1633,13 @@ export class App {
           }>${c.hex === "auto" ? "A" : ""}</button>`,
       )
       .join("")}</div>`;
+  }
+
+  /** Переключатель «прямая перемычка / гибкий дугой». */
+  private shapeButtons(current: WireShape): string {
+    const b = (shape: WireShape, text: string) =>
+      `<button class="btn inline" data-shape="${shape}" aria-pressed="${current === shape}">${text}</button>`;
+    return `<div class="row">${b("flat", "Прямая перемычка")}${b("arc", "Гибкий, дугой")}</div>`;
   }
 
   private tracePanel(id: string): [string, string] {
@@ -1654,6 +1671,12 @@ export class App {
     const cur = this.defaults.wireColor;
     const name = cur === "auto" ? "авто" : (WIRE_PALETTE.find((x) => x.hex === cur)?.name ?? "");
     const html = `<div class="eyebrow">новый провод</div><h2>Провод</h2>
+      <div class="field"><label>Какой провод</label>${this.shapeButtons(this.defaults.wireShape)}</div>
+      <p class="sub">${
+        this.defaults.wireShape === "flat"
+          ? "Прямая перемычка лежит на плате, концы загнуты в отверстия — аккуратно и не мешает. Работает, если оба конца на одной плате; к детали на столе или на другую плату провод всё равно пойдёт дугой."
+          : "Гибкий провод идёт дугой — дотянется куда угодно: к детали на столе, на другую плату."
+      }</p>
       <div class="field"><label>Цвет: ${name}</label>${this.swatches(cur, true)}</div>
       <p class="sub">Принято: <b>красный — плюс</b>, <b>чёрный или синий — минус</b>. «Авто» красит так сам, если провод идёт к батарее или шине, остальные — по очереди. Цвет готового провода меняется, если нажать на него в режиме «Выбор».</p>`;
     return [`wt`, html];
@@ -1814,6 +1837,21 @@ export class App {
         } else {
           this.defaults.wireColor = color;
           this.inspectorHtml = "";
+        }
+        this.renderInspector();
+      });
+    });
+    root.querySelectorAll<HTMLButtonElement>("[data-shape]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const shape = btn.dataset.shape as WireShape;
+        const w: Wire | undefined = this.selected ? this.scene.wires.find((x) => x.id === this.selected) : undefined;
+        if (w) {
+          w.shape = shape;
+          this.changed();
+        } else {
+          this.defaults.wireShape = shape;
+          this.inspectorHtml = "";
+          this.updateGhost();
         }
         this.renderInspector();
       });
