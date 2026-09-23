@@ -8,6 +8,7 @@ import {
   MOSFETS,
   THT_RESISTOR,
   TRANSISTORS,
+  TRACE_WIDTH_MM,
   electrolyticSize,
   type Battery,
   type Capacitor,
@@ -1090,28 +1091,39 @@ export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, co
 
 // ─── Дорожки печатной платы ────────────────────────────────────────────────
 
-const copperMaterial = new THREE.MeshStandardMaterial({ color: 0xc8793a, metalness: 0.65, roughness: 0.35 });
+const copperMaterial = new THREE.MeshStandardMaterial({ color: 0xc8793a, metalness: 0.35, roughness: 0.4 });
+/** Радиус отверстия площадки (в шагах) — как на текстуре платы. */
+const PAD_HOLE_R = 0.16;
 
 /**
- * Медная дорожка между двумя площадками: плоская полоса со скруглёнными концами.
- * Настоящая — 0,6 мм; рисуем 0,76 мм (0,3 шага), чтобы было видно издалека.
+ * Медная дорожка между двумя площадками: полоса шириной с площадку (1,8 мм), концы скруглены
+ * по контуру площадок, отверстия площадок остаются открытыми.
  */
 export function buildTraceView(id: string, a: Hole, b: Hole) {
   const group = new THREE.Group();
-  const y = a.y + 0.012;
+  const y = a.y + 0.004;
   const pa = new THREE.Vector3(a.x, y, a.z);
   const pb = new THREE.Vector3(b.x, y, b.z);
   const len = pa.distanceTo(pb);
-  const width = 0.3;
-  const strip = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, width), copperMaterial);
-  strip.position.copy(pa).add(pb).multiplyScalar(0.5);
+  const r = TRACE_WIDTH_MM / 2.54 / 2;
+  // Контур «стадион» вдоль оси X от 0 до len, в плоскости XY
+  const shape = new THREE.Shape();
+  shape.moveTo(0, -r);
+  shape.lineTo(len, -r);
+  shape.absarc(len, 0, r, -Math.PI / 2, Math.PI / 2, false);
+  shape.lineTo(0, r);
+  shape.absarc(0, 0, r, Math.PI / 2, (Math.PI * 3) / 2, false);
+  for (const x of [0, len]) {
+    const hole = new THREE.Path();
+    hole.absarc(x, 0, PAD_HOLE_R, 0, Math.PI * 2, true);
+    shape.holes.push(hole);
+  }
+  const geom = new THREE.ExtrudeGeometry(shape, { depth: 0.02, bevelEnabled: false, curveSegments: 16 });
+  geom.rotateX(-Math.PI / 2); // Y контура → −Z, толщина вверх
+  const strip = new THREE.Mesh(geom, copperMaterial);
+  strip.position.copy(pa);
   strip.rotation.y = Math.atan2(-(pb.z - pa.z), pb.x - pa.x);
   group.add(strip);
-  for (const p of [pa, pb]) {
-    const end = new THREE.Mesh(new THREE.CylinderGeometry(width / 2, width / 2, 0.02, 16), copperMaterial);
-    end.position.copy(p);
-    group.add(end);
-  }
   group.traverse((o) => (o.userData.traceId = id));
   const lift = new THREE.Vector3(0, 0.2, 0);
   const curve = new THREE.LineCurve3(pa.clone().add(lift), pb.clone().add(lift));

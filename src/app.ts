@@ -1453,7 +1453,7 @@ export class App {
       <div class="kv"><span>До</span><span>${holeLabel(t.b)}</span></div>
       <div class="kv"><span>Длина</span><span>${String(lengthMm.toFixed(1)).replace(".", ",")} мм</span></div>
       <div class="kv"><span>Сопротивление</span><span>${formatOhms(traceResistance(t.a, t.b))}</span></div>
-      <p class="sub">Медь 35 мкм, ширина 0,6 мм: ≈ 0,82 мОм на миллиметр. Чтобы набрать хотя бы 1 Ом, понадобилось бы ≈ 1,2 м такой дорожки.</p>
+      <p class="sub">Медь 35 мкм, ширина с площадку — 1,8 мм: ≈ 0,27 мОм на миллиметр. Чтобы набрать хотя бы 1 Ом, понадобилось бы ≈ 3,7 м такой дорожки.</p>
       <div class="row"><button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button></div>`;
     return [`t:${id}`, html];
   }
