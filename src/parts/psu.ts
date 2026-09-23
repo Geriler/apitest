@@ -1,9 +1,10 @@
 import * as THREE from "three";
 import { type ComponentView, disposeGroup, freeTransform, mm, tagPickable, type Visual } from "../view/kit";
-import type { PowerSupply } from "../model/types";
+import { PSU_LIMITS, type PowerSupply } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { stampBurned, twoPin } from "./common";
 import type { PartDef } from "./types";
+import { pill, readout } from "../view/panel";
 
 /** Выходное сопротивление лабораторного блока в режиме CV, Ом. */
 const PSU_R_CV = 0.005;
@@ -40,6 +41,21 @@ export const psu: PartDef<PowerSupply> = {
     return false;
   },
   power: (c, sim) => Math.max(0, sim.branch(c.id).current * sim.branch(c.id).voltage),
+  panel: (c) => ({
+    title: "Лабораторный блок питания",
+    body: `<div class="field"><label for="f-psuV">Напряжение: <b>${formatSI(c.volts, "В")}</b></label>
+            <input type="range" id="f-psuV" data-field="psuV" min="0" max="${PSU_LIMITS.maxV}" step="0.1" value="${c.volts}" /></div>
+          <div class="field"><label for="f-psuA">Ограничение тока: <b>${formatSI(c.amps, "А")}</b></label>
+            <input type="range" id="f-psuA" data-field="psuA" min="0.01" max="${PSU_LIMITS.maxA}" step="0.01" value="${c.amps}" /></div>
+          <div class="row"><button class="btn inline" data-act="psuToggle" id="btn-psu">${c.on ? "Выключить выход" : "Включить выход"}</button></div>
+          <p class="sub">Держит заданное напряжение (CV), пока нагрузка берёт меньше тока, чем ограничение. Если больше — держит ток (CC), а напряжение само падает. Поэтому короткое замыкание ему не страшно, а светодиод можно питать без резистора, выставив 20 мА.</p>`,
+  }),
+  readout: (c, sim) => readout(-sim.voltage(c), Math.abs(sim.current(c)), sim.power(c)),
+  status(c, sim) {
+    if (!c.on) return pill("warn", "ВЫХОД ВЫКЛЮЧЕН");
+    return sim.psuMode.get(c.id) === "CC" ? pill("warn", "CC — ОГРАНИЧЕНИЕ ТОКА") : pill("ok", "CV — ДЕРЖИТ НАПРЯЖЕНИЕ");
+  },
+  noFlip: true,
   view: psuView,
 };
 

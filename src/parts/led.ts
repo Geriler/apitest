@@ -1,11 +1,13 @@
 import * as THREE from "three";
 import { blackPlastic, type ComponentView, disposeGroup, freeTransform, lead, mm, radialLayout, tagPickable } from "../view/kit";
-import { LEDS, ledSpec, type Led } from "../model/types";
+import { LEDS, ledSpec, type Led, type LedColor, type LedSize } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { formatLimit } from "../sim/devices";
-import { DIODE_SYMBOL } from "./diode";
+import { DIODE_SYMBOL, REVERSED_PILL } from "./diode";
 import { junctionSim } from "./junction";
 import type { PartDef } from "./types";
+import * as tolerance from "../sim/tolerance";
+import { actualRow, ledColorSelect, ledSizeSelect, pill } from "../view/panel";
 
 export const led: PartDef<Led> = {
   type: "led",
@@ -28,6 +30,25 @@ export const led: PartDef<Led> = {
     return { ratio: Math.max(0, sim.current(c)) / rated, what: "ток", limit: formatLimit(rated, "А") };
   },
   thermal: { threshold: 1.5, rate: 1.5, cooling: 1 },
+  panel(c) {
+    const spec = LEDS[c.color];
+    const size = ledSpec(c);
+    const vf = String(Math.round((spec.vf + size.vfAdd) * 10) / 10).replace(".", ",");
+    const amps = String(size.ratedA).replace(".", ",");
+    return {
+      title: `Светодиод ${spec.label}${c.size === "1W" ? ", 1 Вт" : ""}`,
+      body: `<p class="sub">Прямое падение ≈ ${vf} В, номинальный ток ${formatSI(size.ratedA, "А")}. <b>Без резистора сгорает.</b> ${c.size === "1W" ? "Минус помечен на корпусе." : "Длинная ножка — анод (+)."} Резистор: R = (U<sub>бат</sub> − ${vf}) / ${amps}.</p>`,
+      editor: ledColorSelect(c.color) + ledSizeSelect(c.size ?? "5mm"),
+    };
+  },
+  edit(c, field, value) {
+    if (field === "led") c.color = value as LedColor;
+    if (field === "ledSize") c.size = value as LedSize;
+  },
+  status: (c, sim) => (sim.current(c) > 0.0005 ? pill("ok", "ГОРИТ") : pill("warn", "НЕ ГОРИТ")),
+  reversedPill: REVERSED_PILL,
+  nearLimitOk: true,
+  actual: (c, tol) => actualRow("Прямое напряжение при 20 мА", formatSI(tolerance.ledVf(c, tol), "В")),
   view: ledView,
 };
 

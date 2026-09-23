@@ -1,9 +1,11 @@
 import * as THREE from "three";
 import { type ComponentView, disposeGroup, freeTransform, labelTexture, leadMaterial, mm, tagPickable } from "../view/kit";
-import { BATTERIES, type Battery } from "../model/types";
+import { BATTERIES, type Battery, type BatteryKind } from "../model/types";
 import * as tolerance from "../sim/tolerance";
 import { twoPin } from "./common";
 import type { PartDef } from "./types";
+import { formatOhms, formatSI } from "../sim/resistorCodes";
+import { actualRow, batterySelect, readout } from "../view/panel";
 
 /** Батарея считается замкнутой накоротко, если ток больше половины тока КЗ. */
 export const SHORT_CIRCUIT_FRACTION = 0.5;
@@ -30,6 +32,24 @@ export const battery: PartDef<Battery> = {
   shorted(c, sim) {
     const bat = tolerance.battery(c, sim.tolerance);
     return Math.abs(sim.branch(c.id).current) > SHORT_CIRCUIT_FRACTION * (bat.emf / bat.rInt);
+  },
+  panel(c) {
+    const bat = BATTERIES[c.kind];
+    return {
+      title: `Батарея ${bat.label}`,
+      body: `<p class="sub">ЭДС ${formatSI(bat.emf, "В")}, внутреннее сопротивление ${formatOhms(bat.rInt)}. Ток короткого замыкания ≈ ${formatSI(bat.emf / bat.rInt, "А")}. Красный провод — плюс.</p>`,
+      editor: batterySelect(c.kind),
+    };
+  },
+  edit(c, field, value) {
+    if (field === "battery") c.kind = value as BatteryKind;
+  },
+  // Показываем то, что батарея отдаёт: напряжение плюса относительно минуса и ток наружу
+  readout: (c, sim) => readout(-sim.voltage(c), Math.abs(sim.current(c)), sim.power(c)),
+  noFlip: true,
+  actual(c, tol) {
+    const b = tolerance.battery(c, tol);
+    return actualRow("ЭДС фактически", formatSI(b.emf, "В")) + actualRow("Внутр. сопротивление", formatOhms(b.rInt));
   },
   view: batteryView,
 };

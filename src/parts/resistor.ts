@@ -1,13 +1,21 @@
 import * as THREE from "three";
 import { axialLayout, boardFrame, type ComponentView, disposeGroup, freeTransform, leadMaterial, mm, tagPickable } from "../view/kit";
 import { smdLabelTexture } from "../view/textures";
-import { SMD_SIZES, thtResistorSpec, type Resistor } from "../model/types";
+import { SMD_SIZES, thtResistorSpec, type Resistor, type SmdSize } from "../model/types";
 import { colorBands, formatOhms, formatSI, smdCode } from "../sim/resistorCodes";
 import * as tolerance from "../sim/tolerance";
 import { formatLimit } from "../sim/devices";
 import { stampBurned, twoPin } from "./common";
 import { formatW } from "./format";
 import type { PartDef } from "./types";
+import { actualRow, ohmsSelect, pct, smdSelect, superscript, wattsSelect } from "../view/panel";
+
+/** Как читать код SMD-резистора. */
+function smdExplain(ohms: number): string {
+  const code = smdCode(ohms);
+  if (code.includes("R")) return `буква R стоит на месте запятой`;
+  return `${code.slice(0, 2)} × 10${superscript(Number(code[2]))} Ом`;
+}
 
 export const resistor: PartDef<Resistor> = {
   type: "resistor",
@@ -32,6 +40,34 @@ export const resistor: PartDef<Resistor> = {
     return { ratio: sim.branch(c.id).power / rated, what: "мощность", limit: formatLimit(rated, "Вт") };
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
+  panel(c) {
+    if (c.variant === "smd") {
+      const sz = SMD_SIZES[c.smdSize];
+      return {
+        title: `SMD-резистор ${formatOhms(c.ohms)}`,
+        body: `<div class="smd-chip">${smdCode(c.ohms)}</div>
+            <p class="sub">Корпус ${c.smdSize}: ${String(sz.lengthMm).replace(".", ",")} × ${String(sz.widthMm).replace(".", ",")} мм, до ${formatSI(sz.ratedW, "Вт")}. Код ${smdCode(c.ohms)} — ${smdExplain(c.ohms)}.</p>`,
+        editor: ohmsSelect(c.ohms) + smdSelect(c.smdSize),
+      };
+    }
+    const bands = colorBands(c.ohms);
+    const spec = thtResistorSpec(c);
+    return {
+      title: `Резистор ${formatOhms(c.ohms)}`,
+      body: `<div class="bands"><span class="body">${bands.map((x) => `<i style="background:${x.hex}" title="${x.name}"></i>`).join("")}</span></div>
+            <p class="sub">Выводной, ${String(spec.lengthMm).replace(".", ",")} × ${String(spec.diameterMm).replace(".", ",")} мм, до ${formatW(spec.ratedW)}. Полосы: ${bands.map((x) => x.name).join(", ")}.</p>`,
+      editor: ohmsSelect(c.ohms) + wattsSelect(spec.ratedW),
+    };
+  },
+  edit(c, field, value) {
+    if (field === "ohms") c.ohms = Number(value);
+    if (field === "smd") c.smdSize = value as SmdSize;
+    if (field === "watts") c.watts = Number(value);
+  },
+  actual(c, tol) {
+    const r = tolerance.resistance(c, tol);
+    return actualRow("Фактически", `${formatOhms(r)} (${pct(r, c.ohms)})`);
+  },
   view: resistorView,
 };
 

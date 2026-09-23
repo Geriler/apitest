@@ -1,12 +1,15 @@
 import * as THREE from "three";
 import { boardFrame, type ComponentView, disposeGroup, freeTransform, holePos, lead, mm, tagPickable } from "../view/kit";
-import { TRANSISTORS, type Pin, type Transistor, MOSFETS, Mosfet } from "../model/types";
+import { MOSFETS, TRANSISTORS, type Mosfet, type Pin, type Transistor, type TransistorKind } from "../model/types";
 import { VT, diodeBranch, limitJunction } from "../sim/devices";
 import { pinNode } from "../sim/nodes";
 import type { Simulation } from "../sim/simulation";
 import * as tolerance from "../sim/tolerance";
 import type { Tolerance } from "../sim/tolerance";
 import type { PartDef, Stamp } from "./types";
+import { holeLabel } from "../model/breadboard";
+import { formatSI } from "../sim/resistorCodes";
+import { actualRow, bjtSelect, pill } from "../view/panel";
 
 /** Режим работы транзистора. */
 export type TransistorMode = "отсечка" | "усиление" | "насыщение" | "инверсный";
@@ -154,6 +157,43 @@ export const transistor: PartDef<Transistor> = {
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
   reversed: (c, sim) => sim.transistor(c).mode === "инверсный",
+  panel(c, sim) {
+    const spec = TRANSISTORS[c.kind];
+    const t = sim.transistor(c);
+    const beta = t.ib > 1e-9 ? t.ic / t.ib : 0;
+    return {
+      title: `Транзистор ${spec.label} (${spec.polarity === "npn" ? "n-p-n" : "p-n-p"})`,
+      body: `<div class="kv"><span>U<sub>бэ</sub></span><span>${formatSI(t.vbe, "В")}</span></div>
+          <div class="kv"><span>I<sub>к</sub> / I<sub>б</sub></span><span>${beta ? Math.round(beta) : "—"}</span></div>
+          <div class="kv"><span>Мощность</span><span>${formatSI(sim.power(c), "Вт")}</span></div>
+          <p class="sub">Малый ток базы управляет большим током коллектора: в режиме усиления I<sub>к</sub> ≈ β·I<sub>б</sub>, β ≈ ${spec.betaF}. В насыщении ток коллектора ограничивает уже нагрузка, и отношение меньше β. ${
+            spec.polarity === "npn"
+              ? "n-p-n открывается, когда база выше эмиттера на ≈ 0,6 В."
+              : "p-n-p открывается, когда база ниже эмиттера на ≈ 0,6 В; эмиттер — к плюсу."
+          } Выводы слева направо (маркировкой к себе): К, Б, Э.</p>`,
+      editor: bjtSelect(c.kind),
+    };
+  },
+  edit(c, field, value) {
+    if (field === "bjt") c.kind = value as TransistorKind;
+  },
+  readout(c, sim) {
+    const t = sim.transistor(c);
+    return `<dl class="readout">
+      <div><dt>I<sub>Б</sub></dt><dd>${formatSI(t.ib, "А")}</dd></div>
+      <div><dt>I<sub>К</sub></dt><dd>${formatSI(t.ic, "А")}</dd></div>
+      <div><dt>U<sub>КЭ</sub></dt><dd>${formatSI(t.vce, "В")}</dd></div>
+    </dl>`;
+  },
+  status(c, sim) {
+    const mode = sim.transistor(c).mode;
+    if (mode === "инверсный") return pill("bad", "К И Э ПЕРЕПУТАНЫ — ИНВЕРСНЫЙ РЕЖИМ");
+    if (mode === "отсечка") return pill("warn", "ЗАКРЫТ (ОТСЕЧКА)");
+    if (mode === "насыщение") return pill("ok", "ОТКРЫТ (НАСЫЩЕНИЕ)");
+    return pill("ok", "УСИЛЕНИЕ");
+  },
+  where: (_c, holes) => `К ${holeLabel(holes[0])}, Б ${holeLabel(holes[1])}, Э ${holeLabel(holes[2])}`,
+  actual: (c, tol) => actualRow("β этого экземпляра", String(Math.round(tolerance.betaF(c, tol)))),
   view: transistorView,
 };
 

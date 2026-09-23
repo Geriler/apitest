@@ -1,4 +1,4 @@
-import { MOSFETS, mosfetPin, type Mosfet, type Pin } from "../model/types";
+import { MOSFETS, mosfetPin, type Mosfet, type MosfetKind, type Pin } from "../model/types";
 import { GMIN, VT, diodeBranch, junctionSettled, limitJunction } from "../sim/devices";
 import { pinNode } from "../sim/nodes";
 import type { Simulation } from "../sim/simulation";
@@ -6,6 +6,9 @@ import * as tolerance from "../sim/tolerance";
 import type { Tolerance } from "../sim/tolerance";
 import { transistorView } from "./transistor";
 import type { PartDef, Stamp } from "./types";
+import { holeLabel } from "../model/breadboard";
+import { formatOhms, formatSI } from "../sim/resistorCodes";
+import { actualRow, fetSelect, mosfetPinNames, pill } from "../view/panel";
 
 /** Режим MOSFET. «Насыщение» у полевого транзистора — это НЕ «полностью открыт», как у биполярного. */
 export type MosfetMode = "закрыт" | "открыт" | "насыщение" | "диод";
@@ -112,6 +115,9 @@ function stampMosfet(c: Mosfet, sim: Simulation, { out, extras }: Stamp): void {
   }
 }
 
+/** Короткие имена выводов: затвор, сток, исток. */
+const ROLE_RU = { G: "З", D: "С", S: "И" } as const;
+
 export const mosfet: PartDef<Mosfet> = {
   type: "mosfet",
   prefix: "VT",
@@ -174,5 +180,45 @@ export const mosfet: PartDef<Mosfet> = {
       : { ratio: byP, what: "мощность", limit: `${String(spec.maxP).replace(".", ",")} Вт` };
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
+  panel(c, sim) {
+    const spec = MOSFETS[c.kind];
+    const f = sim.mosfet(c);
+    const n = spec.channel === "n";
+    const rds = f.mode === "открыт" && Math.abs(f.id) > 1e-6 ? f.vds / f.id : undefined;
+    return {
+      title: `MOSFET ${spec.label} (${n ? "N" : "P"}-канал)`,
+      body: `<div class="kv"><span>Ток затвора</span><span>0 А</span></div>
+          <div class="kv"><span>Порог U<sub>пор</sub></span><span>${n ? "" : "−"}${String(spec.vth).replace(".", ",")} В</span></div>
+          ${rds !== undefined ? `<div class="kv"><span>Сопротивление канала</span><span>${formatOhms(rds)}</span></div>` : ""}
+          <div class="kv"><span>Мощность</span><span>${formatSI(sim.power(c), "Вт")}</span></div>
+          <p class="sub">Управляется <b>напряжением</b> затвор–исток, ток через затвор не идёт. ${
+            n ? "N-канал открывается, когда затвор выше истока больше чем на порог; исток — к минусу." : "P-канал открывается, когда затвор ниже истока больше чем на порог; исток — к плюсу."
+          } Открытый канал — это малое сопротивление (${spec.rdsNote}). «Насыщение» у полевого транзистора — наоборот, приоткрытый режим: ток задаёт затвор, а не нагрузка. Затвор без стягивающего резистора «помнит» заряд. Внутри есть паразитный диод исток → сток. Выводы слева направо: ${mosfetPinNames(c.kind)}.</p>`,
+      editor: fetSelect(c.kind),
+    };
+  },
+  edit(c, field, value) {
+    if (field === "fet") c.kind = value as MosfetKind;
+  },
+  readout(c, sim) {
+    const f = sim.mosfet(c);
+    return `<dl class="readout">
+      <div><dt>U<sub>ЗИ</sub></dt><dd>${formatSI(f.vgs, "В")}</dd></div>
+      <div><dt>I<sub>С</sub></dt><dd>${formatSI(sim.current(c), "А")}</dd></div>
+      <div><dt>U<sub>СИ</sub></dt><dd>${formatSI(f.vds, "В")}</dd></div>
+    </dl>`;
+  },
+  status(c, sim) {
+    const mode = sim.mosfet(c).mode;
+    if (mode === "диод") return pill("warn", "ТОК ЧЕРЕЗ ПАРАЗИТНЫЙ ДИОД");
+    if (mode === "закрыт") return pill("warn", "ЗАКРЫТ");
+    if (mode === "насыщение") return pill("ok", "НАСЫЩЕНИЕ — ТОК ЗАДАЁТ ЗАТВОР");
+    return pill("ok", "ОТКРЫТ");
+  },
+  where: (c, holes) => MOSFETS[c.kind].pins.map((r, i) => `${ROLE_RU[r]} ${holeLabel(holes[i])}`).join(", "),
+  actual(c, tol) {
+    const m = tolerance.mosfetParams(c, tol);
+    return actualRow("Порог этого экземпляра", `${MOSFETS[c.kind].channel === "p" ? "−" : ""}${formatSI(m.vth, "В")}`);
+  },
   view: transistorView,
 };

@@ -7,6 +7,7 @@
 import type { Component } from "../model/types";
 import type { Load, Simulation } from "../sim/simulation";
 import type { Branch, Extras } from "../sim/solver";
+import type { Tolerance } from "../sim/tolerance";
 import type { ComponentView } from "../view/kit";
 
 /** Куда деталь складывает свои ветви для решателя. */
@@ -77,4 +78,31 @@ export interface PartDef<C extends Component = Component> {
   shorted?(c: C, sim: Simulation): boolean;
   /** Включена наоборот и напряжение приложено против неё. */
   reversed?(c: C, sim: Simulation): boolean;
+
+  // ─── Панель свойств ─────────────────────────────────────────────────────
+
+  /** Заголовок, пояснение и поля настройки (поля показываются только у выбранной детали). */
+  panel(c: C, sim: Simulation): { title: string; body: string; editor?: string };
+  /** Изменить параметр из поля панели (select data-field="…"). */
+  edit?(c: C, field: string, value: string): void;
+  /** Показания вверху панели (по умолчанию U, I, P). */
+  readout?(c: C, sim: Simulation): string;
+  /** Плашка исправной и не перегруженной детали (по умолчанию «НОРМА»). */
+  status?(c: C, sim: Simulation): string;
+  /** Как сказать «сгорел» на плашке (по умолчанию «СГОРЕЛ»). */
+  burnedWord?: string;
+  /** Плашка, когда деталь включена наоборот (sim.isReversed). */
+  reversedPill?: string;
+  /** Плашка, когда нагрузка близка к пределу (по умолчанию «ГРЕЕТСЯ»). */
+  warmWord?(ratio: number): string;
+  /** Работа у предела — норма (лампа, светодиод): шкала нагрузки не желтеет. */
+  nearLimitOk?: boolean;
+  /** Названия выводов 0 и 1 полярной двухвыводной детали, по умолчанию «анод», «катод». */
+  pinNames?: [string, string];
+  /** Подпись «где стоят выводы» на плате, если нужна своя (у трёхвыводных). */
+  where?(c: C, holes: string[]): string;
+  /** Нельзя перевернуть: у батареи и блока питания выводы подписаны. */
+  noFlip?: boolean;
+  /** Строки «фактически» — параметры этого экземпляра при включённых допусках. */
+  actual?(c: C, tol: Tolerance): string;
 }

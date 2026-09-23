@@ -1,11 +1,13 @@
 import * as THREE from "three";
 import { blackPlastic, type ComponentView, disposeGroup, labelTexture, mm, radialLayout, tagPickable } from "../view/kit";
-import { ELECTROLYTIC_REVERSE_V, capacitorVolts, formatFarads, type Capacitor, CERAMICS, electrolyticSize } from "../model/types";
+import { CERAMICS, ELECTROLYTIC_REVERSE_V, capacitorVolts, electrolyticSize, formatFarads, type Capacitor } from "../model/types";
 import { formatLimit } from "../sim/devices";
 import * as tolerance from "../sim/tolerance";
 import { stampBurned, twoPin } from "./common";
 import { formatV } from "./format";
 import type { PartDef } from "./types";
+import { formatSI } from "../sim/resistorCodes";
+import { actualRow, capacitanceSelect, pct, pill, readout, superscript, voltsSelect } from "../view/panel";
 
 export const capacitor: PartDef<Capacitor> = {
   type: "capacitor",
@@ -41,6 +43,41 @@ export const capacitor: PartDef<Capacitor> = {
   },
   thermal: { threshold: 1, rate: 0.4, cooling: 0.3 },
   reversed: (c, sim) => c.variant === "electrolytic" && sim.voltage(c) < -0.2,
+  panel(c, sim) {
+    let title: string;
+    let body: string;
+    if (c.variant === "electrolytic") {
+      title = `Конденсатор ${formatFarads(c.uF)}, ${formatV(capacitorVolts(c))}`;
+      body = `<p class="sub">Электролитический, <b>полярный</b>: на плюсе должен быть бо́льший потенциал. Полоса с «−» на корпусе — со стороны минуса. Заряд хранится, даже если отключить батарею.</p>`;
+    } else {
+      const code = CERAMICS.find((x) => x.uF === c.uF)?.code ?? "";
+      title = `Конденсатор ${formatFarads(c.uF)}`;
+      body = `<p class="sub">Керамический, неполярный, до ${formatV(capacitorVolts(c))}. Код <b>${code}</b>: ${code.slice(0, 2)} × 10${superscript(Number(code[2]))} пФ.</p>`;
+    }
+    let editor = capacitanceSelect(c.variant, c.uF) + voltsSelect(c.variant, capacitorVolts(c));
+    if (Math.abs(sim.voltage(c)) > 0.05) {
+      editor += `<div class="row"><button class="btn inline" data-act="discharge" id="btn-discharge">Разрядить</button></div>`;
+    }
+    return { title, body, editor };
+  },
+  edit(c, field, value) {
+    if (field === "uF") c.uF = Number(value);
+    if (field === "capV") c.volts = Number(value);
+  },
+  readout: (c, sim) => readout(sim.voltage(c), sim.current(c), sim.power(c), ["W", formatSI(sim.energy(c), "Дж")]),
+  status(c, sim) {
+    const v = sim.voltage(c);
+    const i = sim.current(c);
+    if (Math.abs(i) < 1e-5) return Math.abs(v) > 0.05 ? pill("ok", "ЗАРЯЖЕН") : pill("ok", "РАЗРЯЖЕН");
+    return i * v > 0 || Math.abs(v) < 0.05 ? pill("ok", "ЗАРЯЖАЕТСЯ") : pill("warn", "РАЗРЯЖАЕТСЯ");
+  },
+  burnedWord: "ВЗДУЛСЯ",
+  reversedPill: pill("bad", "ОБРАТНАЯ ПОЛЯРНОСТЬ"),
+  pinNames: ["+", "−"],
+  actual(c, tol) {
+    const f = tolerance.capacitance(c, tol);
+    return actualRow("Ёмкость фактически", `${formatFarads(f * 1e6)} (${pct(f * 1e6, c.uF)})`);
+  },
   view: capacitorView,
 };
 

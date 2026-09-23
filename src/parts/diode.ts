@@ -1,13 +1,17 @@
 import * as THREE from "three";
 import { axialLayout, type ComponentView, disposeGroup, mm, tagPickable } from "../view/kit";
-import { diodeSpec, type Diode } from "../model/types";
+import { diodeSpec, type Diode, type DiodeKind } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
-import { formatLimit } from "../sim/devices";
+import { VT, diodeParams, formatLimit } from "../sim/devices";
 import { junctionSim } from "./junction";
 import type { PartDef } from "./types";
+import { actualRow, diodeSelect, pill } from "../view/panel";
 
 /** Анод (вывод 0) сверху: треугольник остриём к катоду. Общее для диода и светодиода. */
 export const DIODE_SYMBOL = `<path d="M0 -20V-8M0 8V20M-9 8H9"/><path d="M-9 -8H9L0 8Z"/>`;
+
+/** Плашка диода и светодиода, включённых наоборот. */
+export const REVERSED_PILL = pill("warn", "ОБРАТНОЕ ВКЛЮЧЕНИЕ — ТОК НЕ ИДЁТ");
 
 export const diode: PartDef<Diode> = {
   type: "diode",
@@ -26,6 +30,19 @@ export const diode: PartDef<Diode> = {
     return { ratio: Math.max(0, sim.current(c)) / maxA, what: "ток", limit: formatLimit(maxA, "А") };
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
+  panel: (c) => ({
+    title: `Диод ${diodeSpec(c).label}`,
+    body: `<p class="sub">Пропускает ток только от анода к катоду, падение ≈ 0,6–0,9 В. Кольцо на корпусе — катод. До ${formatSI(diodeSpec(c).maxA, "А")}.</p>`,
+    editor: diodeSelect(c.kind ?? "1N4007"),
+  }),
+  edit(c, field, value) {
+    if (field === "diode") c.kind = value as DiodeKind;
+  },
+  reversedPill: REVERSED_PILL,
+  actual(c, tol) {
+    const p = diodeParams(c, tol);
+    return actualRow("Прямое напряжение при 10 мА", formatSI(p.n * VT * Math.log(0.01 / p.is), "В"));
+  },
   view: diodeView,
 };
 

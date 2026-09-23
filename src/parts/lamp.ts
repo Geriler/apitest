@@ -1,10 +1,13 @@
 import * as THREE from "three";
 import { blackPlastic, boardFrame, brassMaterial, type ComponentView, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
-import { LAMPS, type Lamp } from "../model/types";
+import { LAMPS, type Lamp, type LampKind } from "../model/types";
 import { formatLimit } from "../sim/devices";
 import * as tolerance from "../sim/tolerance";
 import { stampBurned, twoPin } from "./common";
 import type { PartDef } from "./types";
+import { formatOhms } from "../sim/resistorCodes";
+import { NO_TOLERANCE } from "../sim/tolerance";
+import { actualRow, lampSelect } from "../view/panel";
 
 export const lamp: PartDef<Lamp> = {
   type: "lamp",
@@ -26,6 +29,18 @@ export const lamp: PartDef<Lamp> = {
     return { ratio: sim.branch(c.id).power / rated, what: "мощность", limit: formatLimit(rated, "Вт") };
   },
   thermal: { threshold: 1.3, rate: 1.2, cooling: 1 },
+  panel: (c) => ({
+    title: `Лампа ${LAMPS[c.kind].label}`,
+    body: `<p class="sub">Сопротивление нити ${formatOhms(tolerance.lampResistance(c, NO_TOLERANCE))} (в горячем состоянии, считается постоянным).</p>`,
+    editor: lampSelect(c.kind),
+  }),
+  edit(c, field, value) {
+    if (field === "lamp") c.kind = value as LampKind;
+  },
+  burnedWord: "ПЕРЕГОРЕЛА",
+  warmWord: (k) => (k <= 1.05 ? "ПОЛНЫЙ НАКАЛ" : "ГРЕЕТСЯ"),
+  nearLimitOk: true,
+  actual: (c, tol) => actualRow("Нить фактически", formatOhms(tolerance.lampResistance(c, tol))),
   view: lampView,
 };
 

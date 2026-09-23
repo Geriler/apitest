@@ -20,25 +20,7 @@ import {
   type Hole,
 } from "./model/breadboard";
 import {
-  BATTERIES,
-  CERAMICS,
-  CERAMIC_VOLTAGES,
   DIODES,
-  ELECTROLYTICS,
-  ELECTROLYTIC_VOLTAGES,
-  LED_SIZES,
-  LAMPS,
-  LEDS,
-  MOSFETS,
-  PSU_LIMITS,
-  SMD_SIZES,
-  THT_RESISTORS,
-  capacitorVolts,
-  diodeSpec,
-  ledSpec,
-  thtResistorSpec,
-  TRANSISTORS,
-  formatFarads,
   isFlatWire,
   boardConflicts,
   sameEndpoint,
@@ -50,25 +32,23 @@ import {
   type Endpoint,
   type LampKind,
   type LedColor,
-  type Mosfet,
   type MosfetKind,
   type Pin,
   type Scene,
   type SchematicLayout,
   type SmdSize,
-  type Transistor,
   type TransistorKind,
   type Wire,
   type WireShape,
 } from "./model/types";
-import { colorBands, e12Values, formatOhms, formatSI, smdCode } from "./sim/resistorCodes";
-import { Simulation, VT, diodeParams, heatThreshold, lampResistance, traceResistance, wireResistance } from "./sim/simulation";
-import * as tolerance from "./sim/tolerance";
+import { formatOhms, formatSI } from "./sim/resistorCodes";
+import { Simulation, heatThreshold, traceResistance, wireResistance } from "./sim/simulation";
 import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "./projects";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
 import { schematicSvg } from "./view/schematic";
 import { PARTS, part } from "./parts";
+import { batterySelect, bjtSelect, capacitanceSelect, diodeSelect, fetSelect, lampSelect, ledColorSelect, ledSizeSelect, mosfetPinNames, ohmsSelect, pill, readout, selectField, smdSelect, voltsSelect, wattsSelect } from "./view/panel";
 import type { World } from "./view/world";
 
 type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
@@ -457,7 +437,7 @@ export class App {
     const mmSize = `${Math.round(size.width * 2.54)} × ${Math.round(size.depth * 2.54)} мм`;
     const sizeRow =
       b.kind === "pcb"
-        ? this.selectField("boardSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), `${b.cols}x${b.rows}`)
+        ? selectField("boardSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), `${b.cols}x${b.rows}`)
         : `<div class="kv"><span>Размер</span><span>400 точек, ${mmSize}</span></div>`;
     return `<div class="board-section">
       <div class="eyebrow">плата</div>
@@ -479,7 +459,7 @@ export class App {
       <p>400 точек: 30 столбцов по 5 соединённых отверстий и по две шины питания сверху и снизу.</p>
       <p class="sub">Нажмите на свободное место на столе. Макетки между собой не соединены — как настоящие: соединяйте проводом.</p>`
         : `<div class="eyebrow">новая плата</div><h2>Печатная плата</h2>
-      ${this.selectField("pcbSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), this.defaults.pcbSize)}
+      ${selectField("pcbSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), this.defaults.pcbSize)}
       <p class="sub">Нажмите на свободное место на столе. Площадки ни с чем не соединены — соединяйте медными дорожками (T).</p>`;
     return [`bt:${kind}`, html];
   }
@@ -513,50 +493,10 @@ export class App {
     return { ...NO_TOLERANCE, seed: Math.floor(Math.random() * 1e9) };
   }
 
-  /**
-   * Строки «Фактически» для панели детали: реальные параметры этого экземпляра.
-   * Пусто, если режим допусков выключен.
-   */
+  /** Строки «Фактически» для панели детали; пусто, если режим допусков выключен. */
   private actualRows(c: Component): string {
     const t = this.sim.tolerance;
-    if (!t.enabled) return "";
-    const pct = (actual: number, nominal: number) => {
-      const d = (actual / nominal - 1) * 100;
-      return `${d >= 0 ? "+" : "−"}${Math.abs(d).toFixed(1).replace(".", ",")} %`;
-    };
-    const row = (name: string, value: string) => `<div class="kv actual"><span>${name}</span><span>${value}</span></div>`;
-    switch (c.type) {
-      case "resistor": {
-        const r = tolerance.resistance(c, t);
-        return row("Фактически", `${formatOhms(r)} (${pct(r, c.ohms)})`);
-      }
-      case "lamp": {
-        const r = lampResistance(c, t);
-        return row("Нить фактически", formatOhms(r));
-      }
-      case "battery": {
-        const b = tolerance.battery(c, t);
-        return row("ЭДС фактически", formatSI(b.emf, "В")) + row("Внутр. сопротивление", formatOhms(b.rInt));
-      }
-      case "capacitor": {
-        const f = tolerance.capacitance(c, t);
-        return row("Ёмкость фактически", `${formatFarads(f * 1e6)} (${pct(f * 1e6, c.uF)})`);
-      }
-      case "led":
-        return row("Прямое напряжение при 20 мА", formatSI(tolerance.ledVf(c, t), "В"));
-      case "diode": {
-        const p = diodeParams(c, t);
-        return row("Прямое напряжение при 10 мА", formatSI(p.n * VT * Math.log(0.01 / p.is), "В"));
-      }
-      case "transistor":
-        return row("β этого экземпляра", String(Math.round(tolerance.betaF(c, t))));
-      case "mosfet": {
-        const m = tolerance.mosfetParams(c, t);
-        return row("Порог этого экземпляра", `${MOSFETS[c.kind].channel === "p" ? "−" : ""}${formatSI(m.vth, "В")}`);
-      }
-      default:
-        return "";
-    }
+    return t.enabled ? (part(c).actual?.(c, t) ?? "") : "";
   }
 
   static load(): Scene | undefined {
@@ -1210,7 +1150,7 @@ export class App {
    */
   flip(id?: string): void {
     const c = id ? this.component(id) : undefined;
-    if (!c || c.type === "battery" || c.type === "psu") return;
+    if (!c || part(c).noFlip) return;
     if (c.placement.mode === "board") {
       // Для транзистора: К-Б-Э → Э-Б-К
       c.placement.holes = [...c.placement.holes].reverse();
@@ -1890,71 +1830,17 @@ export class App {
     if (key === "p") this.bindProjects(this.ui.inspector);
   }
 
-  private readout(u: number, i: number, p: number, third: [string, string] = ["P", formatSI(p, "Вт")]): string {
-    return `<dl class="readout">
-      <div><dt>U</dt><dd>${formatSI(u, "В")}</dd></div>
-      <div><dt>I</dt><dd>${formatSI(i, "А")}</dd></div>
-      <div><dt>${third[0]}</dt><dd>${third[1]}</dd></div>
-    </dl>`;
-  }
-
-  private mosfetReadout(c: Mosfet): string {
-    const f = this.sim.mosfet(c);
-    return `<dl class="readout">
-      <div><dt>U<sub>ЗИ</sub></dt><dd>${formatSI(f.vgs, "В")}</dd></div>
-      <div><dt>I<sub>С</sub></dt><dd>${formatSI(this.sim.current(c), "А")}</dd></div>
-      <div><dt>U<sub>СИ</sub></dt><dd>${formatSI(f.vds, "В")}</dd></div>
-    </dl>`;
-  }
-
-  private transistorReadout(c: Transistor): string {
-    const t = this.sim.transistor(c);
-    return `<dl class="readout">
-      <div><dt>I<sub>Б</sub></dt><dd>${formatSI(t.ib, "А")}</dd></div>
-      <div><dt>I<sub>К</sub></dt><dd>${formatSI(t.ic, "А")}</dd></div>
-      <div><dt>U<sub>КЭ</sub></dt><dd>${formatSI(t.vce, "В")}</dd></div>
-    </dl>`;
-  }
-
   private statusPill(c: Component): string {
+    const p = part(c);
     const s = this.sim.state(c.id);
-    if (s.burned) return `<span class="pill bad">${c.type === "lamp" ? "ПЕРЕГОРЕЛА" : c.type === "capacitor" ? "ВЗДУЛСЯ" : "СГОРЕЛ"}</span>`;
-    if (this.sim.isShorted(c)) return `<span class="pill bad">КОРОТКОЕ ЗАМЫКАНИЕ</span>`;
-    if (c.type === "capacitor" && this.sim.isReversed(c)) return `<span class="pill bad">ОБРАТНАЯ ПОЛЯРНОСТЬ</span>`;
-    if ((c.type === "diode" || c.type === "led") && this.sim.isReversed(c)) return `<span class="pill warn">ОБРАТНОЕ ВКЛЮЧЕНИЕ — ТОК НЕ ИДЁТ</span>`;
+    if (s.burned) return pill("bad", p.burnedWord ?? "СГОРЕЛ");
+    if (this.sim.isShorted(c)) return pill("bad", "КОРОТКОЕ ЗАМЫКАНИЕ");
+    if (p.reversedPill && this.sim.isReversed(c)) return p.reversedPill;
     const k = this.sim.overload(c);
     const t = heatThreshold(c);
-    if (t && k > t) return `<span class="pill bad">ПЕРЕГРУЗКА ×${k.toFixed(1).replace(".", ",")}</span>`;
-    if (t && k > t * 0.7) return `<span class="pill warn">${c.type === "lamp" && k <= 1.05 ? "ПОЛНЫЙ НАКАЛ" : "ГРЕЕТСЯ"}</span>`;
-    if (c.type === "switch") return c.closed ? `<span class="pill ok">ЗАМКНУТ</span>` : `<span class="pill warn">РАЗОМКНУТ</span>`;
-    if (c.type === "psu") {
-      if (!c.on) return `<span class="pill warn">ВЫХОД ВЫКЛЮЧЕН</span>`;
-      return this.sim.psuMode.get(c.id) === "CC"
-        ? `<span class="pill warn">CC — ОГРАНИЧЕНИЕ ТОКА</span>`
-        : `<span class="pill ok">CV — ДЕРЖИТ НАПРЯЖЕНИЕ</span>`;
-    }
-    if (c.type === "mosfet") {
-      const mode = this.sim.mosfet(c).mode;
-      if (mode === "диод") return `<span class="pill warn">ТОК ЧЕРЕЗ ПАРАЗИТНЫЙ ДИОД</span>`;
-      if (mode === "закрыт") return `<span class="pill warn">ЗАКРЫТ</span>`;
-      if (mode === "насыщение") return `<span class="pill ok">НАСЫЩЕНИЕ — ТОК ЗАДАЁТ ЗАТВОР</span>`;
-      return `<span class="pill ok">ОТКРЫТ</span>`;
-    }
-    if (c.type === "transistor") {
-      const mode = this.sim.transistor(c).mode;
-      if (mode === "инверсный") return `<span class="pill bad">К И Э ПЕРЕПУТАНЫ — ИНВЕРСНЫЙ РЕЖИМ</span>`;
-      if (mode === "отсечка") return `<span class="pill warn">ЗАКРЫТ (ОТСЕЧКА)</span>`;
-      if (mode === "насыщение") return `<span class="pill ok">ОТКРЫТ (НАСЫЩЕНИЕ)</span>`;
-      return `<span class="pill ok">УСИЛЕНИЕ</span>`;
-    }
-    if (c.type === "led") return this.sim.current(c) > 0.0005 ? `<span class="pill ok">ГОРИТ</span>` : `<span class="pill warn">НЕ ГОРИТ</span>`;
-    if (c.type === "capacitor") {
-      const v = this.sim.voltage(c);
-      const i = this.sim.current(c);
-      if (Math.abs(i) < 1e-5) return Math.abs(v) > 0.05 ? `<span class="pill ok">ЗАРЯЖЕН</span>` : `<span class="pill ok">РАЗРЯЖЕН</span>`;
-      return i * v > 0 || Math.abs(v) < 0.05 ? `<span class="pill ok">ЗАРЯЖАЕТСЯ</span>` : `<span class="pill warn">РАЗРЯЖАЕТСЯ</span>`;
-    }
-    return `<span class="pill ok">НОРМА</span>`;
+    if (t && k > t) return pill("bad", `ПЕРЕГРУЗКА ×${k.toFixed(1).replace(".", ",")}`);
+    if (t && k > t * 0.7) return pill("warn", p.warmWord?.(k) ?? "ГРЕЕТСЯ");
+    return p.status?.(c, this.sim) ?? pill("ok", "НОРМА");
   }
 
   private powerMeter(c: Component): string {
@@ -1962,143 +1848,26 @@ export class App {
     if (!load) return "";
     const k = load.ratio;
     const t = heatThreshold(c);
-    const cls = k > t ? "bad" : k > t * 0.7 && c.type !== "lamp" && c.type !== "led" ? "warn" : "";
+    const cls = k > t ? "bad" : k > t * 0.7 && !part(c).nearLimitOk ? "warn" : "";
     const what = load.what[0].toUpperCase() + load.what.slice(1);
     return `<div class="kv"><span>${what} / предел ${load.limit}</span><span>${Math.round(k * 100)} %</span></div>
       <div class="meter ${cls}"><i style="width:${Math.min(100, k * 100)}%"></i></div>`;
   }
 
   private componentPanel(c: Component, pinned: boolean): [string, string] {
+    const p = part(c);
     const s = this.sim.state(c.id);
-    const polar = part(c).polar(c) && c.type !== "battery" && c.type !== "psu";
-    const pinName = c.type === "capacitor" ? ["+", "−"] : ["анод", "катод"];
+    const polar = p.polar(c) && !p.noFlip;
+    const pinName = p.pinNames ?? ["анод", "катод"];
     const where =
-      c.type === "mosfet"
-        ? c.placement.mode === "board"
-          ? MOSFETS[c.kind].pins.map((r, i) => `${ROLE_RU[r]} ${holeLabel((c.placement as { holes: string[] }).holes[i])}`).join(", ")
-          : "на столе, на проводах"
-        : c.type === "transistor"
-        ? c.placement.mode === "board"
-          ? `К ${holeLabel(c.placement.holes[0])}, Б ${holeLabel(c.placement.holes[1])}, Э ${holeLabel(c.placement.holes[2])}`
-          : "на столе, на проводах"
-        : c.placement.mode === "board"
-        ? polar
-          ? `${pinName[0]} ${holeLabel(c.placement.holes[0])}, ${pinName[1]} ${holeLabel(c.placement.holes[1])}`
-          : c.placement.holes.map(holeLabel).join(" ↔ ")
-        : "на столе, на проводах";
-    let title = "";
-    let body = "";
-    let editor = "";
-    switch (c.type) {
-      case "resistor": {
-        if (c.variant === "smd") {
-          const sz = SMD_SIZES[c.smdSize];
-          title = `SMD-резистор ${formatOhms(c.ohms)}`;
-          body = `<div class="smd-chip">${smdCode(c.ohms)}</div>
-            <p class="sub">Корпус ${c.smdSize}: ${String(sz.lengthMm).replace(".", ",")} × ${String(sz.widthMm).replace(".", ",")} мм, до ${formatSI(sz.ratedW, "Вт")}. Код ${smdCode(c.ohms)} — ${smdExplain(c.ohms)}.</p>`;
-          editor = this.ohmsSelect(c.ohms) + this.smdSelect(c.smdSize);
-        } else {
-          title = `Резистор ${formatOhms(c.ohms)}`;
-          const bands = colorBands(c.ohms);
-          body = `<div class="bands"><span class="body">${bands.map((x) => `<i style="background:${x.hex}" title="${x.name}"></i>`).join("")}</span></div>
-            <p class="sub">Выводной, ${String(thtResistorSpec(c).lengthMm).replace(".", ",")} × ${String(thtResistorSpec(c).diameterMm).replace(".", ",")} мм, до ${formatW(thtResistorSpec(c).ratedW)}. Полосы: ${bands.map((x) => x.name).join(", ")}.</p>`;
-          editor = this.ohmsSelect(c.ohms) + this.wattsSelect(thtResistorSpec(c).ratedW);
-        }
-        break;
-      }
-      case "lamp":
-        title = `Лампа ${LAMPS[c.kind].label}`;
-        body = `<p class="sub">Сопротивление нити ${formatOhms(lampResistance(c))} (в горячем состоянии, считается постоянным).</p>`;
-        editor = this.selectField("lamp", "Лампа", Object.entries(LAMPS).map(([k, v]) => [k, v.label]), c.kind);
-        break;
-      case "switch":
-        title = "Тумблер";
-        body = `<p class="sub">${c.closed ? "Контакты замкнуты." : "Контакты разомкнуты — ток не идёт."}</p>`;
-        editor = `<div class="row"><button class="btn inline" data-act="toggle" id="btn-toggle">${c.closed ? "Разомкнуть" : "Замкнуть"}</button></div>`;
-        break;
-      case "battery": {
-        const bat = BATTERIES[c.kind];
-        title = `Батарея ${bat.label}`;
-        body = `<p class="sub">ЭДС ${formatSI(bat.emf, "В")}, внутреннее сопротивление ${formatOhms(bat.rInt)}. Ток короткого замыкания ≈ ${formatSI(bat.emf / bat.rInt, "А")}. Красный провод — плюс.</p>`;
-        editor = this.selectField("battery", "Батарея", Object.entries(BATTERIES).map(([k, v]) => [k, v.label]), c.kind);
-        break;
-      }
-      case "capacitor": {
-        const v = this.sim.voltage(c);
-        if (c.variant === "electrolytic") {
-          title = `Конденсатор ${formatFarads(c.uF)}, ${formatV(capacitorVolts(c))}`;
-          body = `<p class="sub">Электролитический, <b>полярный</b>: на плюсе должен быть бо́льший потенциал. Полоса с «−» на корпусе — со стороны минуса. Заряд хранится, даже если отключить батарею.</p>`;
-          editor = this.selectField("uF", "Ёмкость", ELECTROLYTICS.map((e) => [String(e.uF), formatFarads(e.uF)]), String(c.uF)) + this.voltsSelect(c.variant, capacitorVolts(c));
-        } else {
-          const code = CERAMICS.find((x) => x.uF === c.uF)?.code ?? "";
-          title = `Конденсатор ${formatFarads(c.uF)}`;
-          body = `<p class="sub">Керамический, неполярный, до ${formatV(capacitorVolts(c))}. Код <b>${code}</b>: ${code.slice(0, 2)} × 10${superscript(Number(code[2]))} пФ.</p>`;
-          editor = this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(c.uF)) + this.voltsSelect(c.variant, capacitorVolts(c));
-        }
-        if (Math.abs(v) > 0.05) {
-          editor += `<div class="row"><button class="btn inline" data-act="discharge" id="btn-discharge">Разрядить</button></div>`;
-        }
-        break;
-      }
-      case "diode":
-        title = `Диод ${diodeSpec(c).label}`;
-        body = `<p class="sub">Пропускает ток только от анода к катоду, падение ≈ 0,6–0,9 В. Кольцо на корпусе — катод. До ${formatSI(diodeSpec(c).maxA, "А")}.</p>`;
-        editor = this.diodeSelect(c.kind ?? "1N4007");
-        break;
-      case "psu": {
-        title = "Лабораторный блок питания";
-        body = `<div class="field"><label for="f-psuV">Напряжение: <b>${formatSI(c.volts, "В")}</b></label>
-            <input type="range" id="f-psuV" data-field="psuV" min="0" max="${PSU_LIMITS.maxV}" step="0.1" value="${c.volts}" /></div>
-          <div class="field"><label for="f-psuA">Ограничение тока: <b>${formatSI(c.amps, "А")}</b></label>
-            <input type="range" id="f-psuA" data-field="psuA" min="0.01" max="${PSU_LIMITS.maxA}" step="0.01" value="${c.amps}" /></div>
-          <div class="row"><button class="btn inline" data-act="psuToggle" id="btn-psu">${c.on ? "Выключить выход" : "Включить выход"}</button></div>
-          <p class="sub">Держит заданное напряжение (CV), пока нагрузка берёт меньше тока, чем ограничение. Если больше — держит ток (CC), а напряжение само падает. Поэтому короткое замыкание ему не страшно, а светодиод можно питать без резистора, выставив 20 мА.</p>`;
-        break;
-      }
-      case "mosfet": {
-        const spec = MOSFETS[c.kind];
-        const f = this.sim.mosfet(c);
-        const n = spec.channel === "n";
-        const rds = f.mode === "открыт" && Math.abs(f.id) > 1e-6 ? f.vds / f.id : undefined;
-        title = `MOSFET ${spec.label} (${n ? "N" : "P"}-канал)`;
-        body = `<div class="kv"><span>Ток затвора</span><span>0 А</span></div>
-          <div class="kv"><span>Порог U<sub>пор</sub></span><span>${n ? "" : "−"}${String(spec.vth).replace(".", ",")} В</span></div>
-          ${rds !== undefined ? `<div class="kv"><span>Сопротивление канала</span><span>${formatOhms(rds)}</span></div>` : ""}
-          <div class="kv"><span>Мощность</span><span>${formatSI(this.sim.power(c), "Вт")}</span></div>
-          <p class="sub">Управляется <b>напряжением</b> затвор–исток, ток через затвор не идёт. ${
-            n ? "N-канал открывается, когда затвор выше истока больше чем на порог; исток — к минусу." : "P-канал открывается, когда затвор ниже истока больше чем на порог; исток — к плюсу."
-          } Открытый канал — это малое сопротивление (${spec.rdsNote}). «Насыщение» у полевого транзистора — наоборот, приоткрытый режим: ток задаёт затвор, а не нагрузка. Затвор без стягивающего резистора «помнит» заряд. Внутри есть паразитный диод исток → сток. Выводы слева направо: ${mosfetPinNames(c.kind)}.</p>`;
-        editor = this.selectField("fet", "Тип", Object.entries(MOSFETS).map(([k, v]) => [k, `${v.label} (${v.channel.toUpperCase()}-канал, ${v.pkg})`]), c.kind);
-        break;
-      }
-      case "transistor": {
-        const spec = TRANSISTORS[c.kind];
-        const t = this.sim.transistor(c);
-        const beta = t.ib > 1e-9 ? t.ic / t.ib : 0;
-        title = `Транзистор ${spec.label} (${spec.polarity === "npn" ? "n-p-n" : "p-n-p"})`;
-        body = `<div class="kv"><span>U<sub>бэ</sub></span><span>${formatSI(t.vbe, "В")}</span></div>
-          <div class="kv"><span>I<sub>к</sub> / I<sub>б</sub></span><span>${beta ? Math.round(beta) : "—"}</span></div>
-          <div class="kv"><span>Мощность</span><span>${formatSI(this.sim.power(c), "Вт")}</span></div>
-          <p class="sub">Малый ток базы управляет большим током коллектора: в режиме усиления I<sub>к</sub> ≈ β·I<sub>б</sub>, β ≈ ${spec.betaF}. В насыщении ток коллектора ограничивает уже нагрузка, и отношение меньше β. ${
-            spec.polarity === "npn"
-              ? "n-p-n открывается, когда база выше эмиттера на ≈ 0,6 В."
-              : "p-n-p открывается, когда база ниже эмиттера на ≈ 0,6 В; эмиттер — к плюсу."
-          } Выводы слева направо (маркировкой к себе): К, Б, Э.</p>`;
-        editor = this.selectField("bjt", "Тип", Object.entries(TRANSISTORS).map(([k, v]) => [k, `${v.label} (${v.polarity === "npn" ? "n-p-n" : "p-n-p"})`]), c.kind);
-        break;
-      }
-      case "led": {
-        const spec = LEDS[c.color];
-        const size = ledSpec(c);
-        const vfNum = spec.vf + size.vfAdd;
-        const vf = String(Math.round(vfNum * 10) / 10).replace(".", ",");
-        const amps = String(size.ratedA).replace(".", ",");
-        title = `Светодиод ${spec.label}${c.size === "1W" ? ", 1 Вт" : ""}`;
-        body = `<p class="sub">Прямое падение ≈ ${vf} В, номинальный ток ${formatSI(size.ratedA, "А")}. <b>Без резистора сгорает.</b> ${c.size === "1W" ? "Минус помечен на корпусе." : "Длинная ножка — анод (+)."} Резистор: R = (U<sub>бат</sub> − ${vf}) / ${amps}.</p>`;
-        editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), c.color) + this.ledSizeSelect(c.size ?? "5mm");
-        break;
-      }
-    }
+      c.placement.mode !== "board"
+        ? "на столе, на проводах"
+        : p.where
+          ? p.where(c, c.placement.holes)
+          : polar
+            ? `${pinName[0]} ${holeLabel(c.placement.holes[0])}, ${pinName[1]} ${holeLabel(c.placement.holes[1])}`
+            : c.placement.holes.map(holeLabel).join(" ↔ ");
+    const { title, body, editor = "" } = p.panel(c, this.sim);
     const actions = pinned
       ? `<div class="row">
           ${s.burned ? `<button class="btn inline" data-act="repair" id="btn-repair-one">Заменить новой</button>` : ""}
@@ -2110,12 +1879,7 @@ export class App {
     const html = `<div class="eyebrow"><span class="ref">${c.id}</span></div>
       <h2>${title}</h2>
       ${this.statusPill(c)}
-      ${c.type === "transistor" ? this.transistorReadout(c) : c.type === "mosfet" ? this.mosfetReadout(c) : this.readout(
-        c.type === "battery" || c.type === "psu" ? -this.sim.voltage(c) : this.sim.voltage(c),
-        c.type === "battery" || c.type === "psu" ? Math.abs(this.sim.current(c)) : this.sim.current(c),
-        this.sim.power(c),
-        c.type === "capacitor" ? ["W", formatSI(this.sim.energy(c), "Дж")] : undefined,
-      )}
+      ${p.readout?.(c, this.sim) ?? readout(this.sim.voltage(c), this.sim.current(c), this.sim.power(c))}
       ${this.powerMeter(c)}
       <div class="kv"><span>Где</span><span>${where}</span></div>
       ${this.actualRows(c)}
@@ -2135,7 +1899,7 @@ export class App {
       : `<p class="sub">Концы не на одной плате — такой провод идёт только дугой.</p>`;
     const html = `<div class="eyebrow"><span class="ref">${id}</span> · провод</div>
       <h2>${isFlatWire(w) ? "Прямая перемычка" : "Провод"}</h2>
-      ${this.readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
+      ${readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
       <div class="kv"><span>От</span><span>${name(w.a)}</span></div>
       <div class="kv"><span>До</span><span>${name(w.b)}</span></div>
       <div class="field"><label>Цвет</label>${this.swatches(w.color, false)}</div>
@@ -2174,7 +1938,7 @@ export class App {
     const lengthMm = Math.hypot(a.x - c.x, a.z - c.z) * 2.54;
     const html = `<div class="eyebrow"><span class="ref">${id}</span> · дорожка</div>
       <h2>Медная дорожка</h2>
-      ${this.readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
+      ${readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
       <div class="kv"><span>От</span><span>${holeLabel(t.a)}</span></div>
       <div class="kv"><span>До</span><span>${holeLabel(t.b)}</span></div>
       <div class="kv"><span>Длина</span><span>${String(lengthMm.toFixed(1)).replace(".", ",")} мм</span></div>
@@ -2224,35 +1988,23 @@ export class App {
       tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: `Диод ${DIODES[this.defaults.diode].label}`, led: "Светодиод", bjt: "Транзистор", fet: "MOSFET", psu: "Блок питания", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
     };
     let editor = "";
-    if (tool === "tht" || tool === "smd") editor = this.ohmsSelect(this.defaults.ohms) + (tool === "smd" ? this.smdSelect(this.defaults.smdSize) : this.wattsSelect(this.defaults.watts));
-    if (tool === "diode") editor = this.diodeSelect(this.defaults.diode);
-    if (tool === "lamp") editor = this.selectField("lamp", "Лампа", Object.entries(LAMPS).map(([k, v]) => [k, v.label]), this.defaults.lamp);
-    if (tool === "battery") editor = this.selectField("battery", "Батарея", Object.entries(BATTERIES).map(([k, v]) => [k, v.label]), this.defaults.battery);
+    if (tool === "tht" || tool === "smd") editor = ohmsSelect(this.defaults.ohms) + (tool === "smd" ? smdSelect(this.defaults.smdSize) : wattsSelect(this.defaults.watts));
+    if (tool === "diode") editor = diodeSelect(this.defaults.diode);
+    if (tool === "lamp") editor = lampSelect(this.defaults.lamp);
+    if (tool === "battery") editor = batterySelect(this.defaults.battery);
     if (tool === "cap") {
       const el = this.defaults.capVariant === "electrolytic";
       editor =
-        this.selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"]], this.defaults.capVariant) +
-        (el
-          ? this.selectField("uF", "Ёмкость", ELECTROLYTICS.map((e) => [String(e.uF), formatFarads(e.uF)]), String(this.defaults.electrolyticUF))
-          : this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(this.defaults.ceramicUF))) +
-        this.voltsSelect(this.defaults.capVariant, el ? this.defaults.electrolyticV : this.defaults.ceramicV);
+        selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"]], this.defaults.capVariant) +
+        capacitanceSelect(this.defaults.capVariant, el ? this.defaults.electrolyticUF : this.defaults.ceramicUF) +
+        voltsSelect(this.defaults.capVariant, el ? this.defaults.electrolyticV : this.defaults.ceramicV);
     }
-    if (tool === "led") editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), this.defaults.led) + this.ledSizeSelect(this.defaults.ledSize);
+    if (tool === "led") editor = ledColorSelect(this.defaults.led) + ledSizeSelect(this.defaults.ledSize);
     if (tool === "fet") {
-      editor = this.selectField(
-        "fet",
-        "Тип",
-        Object.entries(MOSFETS).map(([k, v]) => [k, `${v.label} (${v.channel.toUpperCase()}-канал, ${v.pkg})`]),
-        this.defaults.mosfet,
-      );
+      editor = fetSelect(this.defaults.mosfet);
     }
     if (tool === "bjt") {
-      editor = this.selectField(
-        "bjt",
-        "Тип",
-        Object.entries(TRANSISTORS).map(([k, v]) => [k, `${v.label} (${v.polarity === "npn" ? "n-p-n" : "p-n-p"})`]),
-        this.defaults.transistor,
-      );
+      editor = bjtSelect(this.defaults.transistor);
     }
     const polarNote = `<p class="sub"><b>Полярная деталь.</b> Первое отверстие — ${tool === "cap" ? "плюс" : "анод (+)"}, второе — ${tool === "cap" ? "минус" : "катод (−)"}.</p>`;
     const note =
@@ -2314,42 +2066,6 @@ export class App {
         <b>Управление.</b> <b>Shift+нажатие</b> на деталь, провод или дорожку (на телефоне — долгое нажатие) — здесь появятся ток, напряжение и настройки. Обычное нажатие выделяет: Del — удалить, R — повернуть, F — перевернуть; тумблер от нажатия переключается. Детали можно перетаскивать мышью — и на столе, и по плате. Нажатие на отверстие показывает, с чем оно соединено. Вращать вид — зажать и тянуть, приближать — колесом.
       </div>`;
     return [`o`, html];
-  }
-
-  private selectField(name: string, labelText: string, options: [string, string][], value: string): string {
-    return `<div class="field"><label for="f-${name}">${labelText}</label>
-      <select id="f-${name}" data-field="${name}">${options.map(([v, t]) => `<option value="${v}"${v === value ? " selected" : ""}>${t}</option>`).join("")}</select></div>`;
-  }
-
-  private ohmsSelect(value: number): string {
-    return this.selectField("ohms", "Сопротивление (ряд E12)", e12Values().map((v) => [String(v), formatOhms(v)]), String(value));
-  }
-
-  private wattsSelect(value: number): string {
-    return this.selectField("watts", "Мощность", THT_RESISTORS.map((r) => [String(r.ratedW), `${formatW(r.ratedW)} — ${String(r.lengthMm).replace(".", ",")} × ${String(r.diameterMm).replace(".", ",")} мм`]), String(value));
-  }
-
-  private voltsSelect(variant: "electrolytic" | "ceramic", value: number): string {
-    const list = variant === "electrolytic" ? ELECTROLYTIC_VOLTAGES : CERAMIC_VOLTAGES;
-    return this.selectField("capV", "Напряжение (не больше)", list.map((v) => [String(v), formatV(v)]), String(value));
-  }
-
-  private diodeSelect(value: DiodeKind): string {
-    const note: Record<DiodeKind, string> = { "1N4148": "импульсный, стекло", "1N4007": "выпрямительный", "1N5408": "выпрямительный, мощный" };
-    return this.selectField("diode", "Модель", (Object.keys(DIODES) as DiodeKind[]).map((k) => [k, `${DIODES[k].label} — до ${formatSI(DIODES[k].maxA, "А")}, ${note[k]}`]), value);
-  }
-
-  private ledSizeSelect(value: LedSize): string {
-    return this.selectField("ledSize", "Мощность", (Object.keys(LED_SIZES) as LedSize[]).map((k) => [k, LED_SIZES[k].label]), value);
-  }
-
-  private smdSelect(value: SmdSize): string {
-    return this.selectField(
-      "smd",
-      "Типоразмер корпуса",
-      (Object.keys(SMD_SIZES) as SmdSize[]).map((k) => [k, `${k} · до ${formatSI(SMD_SIZES[k].ratedW, "Вт")}`]),
-      value,
-    );
   }
 
   private bindInspector(): void {
@@ -2490,18 +2206,7 @@ export class App {
       this.updateGhost();
       return;
     }
-    if (c.type === "resistor" && field === "ohms") c.ohms = Number(value);
-    if (c.type === "resistor" && field === "smd") c.smdSize = value as SmdSize;
-    if (c.type === "lamp" && field === "lamp") c.kind = value as LampKind;
-    if (c.type === "battery" && field === "battery") c.kind = value as BatteryKind;
-    if (c.type === "capacitor" && field === "uF") c.uF = Number(value);
-    if (c.type === "led" && field === "led") c.color = value as LedColor;
-    if (c.type === "resistor" && field === "watts") c.watts = Number(value);
-    if (c.type === "capacitor" && field === "capV") c.volts = Number(value);
-    if (c.type === "diode" && field === "diode") c.kind = value as DiodeKind;
-    if (c.type === "led" && field === "ledSize") c.size = value as LedSize;
-    if (c.type === "transistor" && field === "bjt") c.kind = value as TransistorKind;
-    if (c.type === "mosfet" && field === "fet") c.kind = value as MosfetKind;
+    part(c).edit?.(c, field, value);
     // Поменяли номинал — значит, поставили новую деталь
     this.sim.repair(c.id);
     this.burnedAt.delete(c.id);
@@ -2516,13 +2221,7 @@ export class App {
 }
 
 
-const ROLE_RU = { G: "З", D: "С", S: "И" } as const;
 
-/** «исток, затвор, сток» — роли ножек корпуса слева направо. */
-function mosfetPinNames(kind: MosfetKind): string {
-  const names = { G: "затвор", D: "сток", S: "исток" } as const;
-  return MOSFETS[kind].pins.map((r) => names[r]).join(", ");
-}
 
 
 /** «1 деталь», «3 детали», «7 деталей». */
@@ -2533,22 +2232,6 @@ function plural(n: number, one: string, few: string, many: string): string {
   return `${n} ${word}`;
 }
 
-/** «0,125 Вт», «2 Вт». */
-function formatW(w: number): string {
-  return `${String(w).replace(".", ",")} Вт`;
-}
 
-/** «6,3 В», «50 В». */
-function formatV(v: number): string {
-  return `${String(v).replace(".", ",")} В`;
-}
 
-function smdExplain(ohms: number): string {
-  const code = smdCode(ohms);
-  if (code.includes("R")) return `буква R стоит на месте запятой`;
-  return `${code.slice(0, 2)} × 10${superscript(Number(code[2]))} Ом`;
-}
 
-function superscript(n: number): string {
-  return String(n).replace(/\d/g, (d) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[Number(d)]);
-}

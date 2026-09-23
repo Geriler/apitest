@@ -3,6 +3,7 @@ import { blackPlastic, boardFrame, type ComponentView, disposeGroup, freeTransfo
 import { SWITCH_RESISTANCE, type Switch } from "../model/types";
 import { twoPin } from "./common";
 import type { PartDef } from "./types";
+import { pill } from "../view/panel";
 
 export const switchPart: PartDef<Switch> = {
   type: "switch",
@@ -22,6 +23,12 @@ export const switchPart: PartDef<Switch> = {
   stamp(c, _sim, { out }) {
     out.push(twoPin(c, c.closed ? SWITCH_RESISTANCE : Infinity));
   },
+  panel: (c) => ({
+    title: "Тумблер",
+    body: `<p class="sub">${c.closed ? "Контакты замкнуты." : "Контакты разомкнуты — ток не идёт."}</p>`,
+    editor: `<div class="row"><button class="btn inline" data-act="toggle" id="btn-toggle">${c.closed ? "Разомкнуть" : "Замкнуть"}</button></div>`,
+  }),
+  status: (c) => (c.closed ? pill("ok", "ЗАМКНУТ") : pill("warn", "РАЗОМКНУТ")),
   view: switchView,
 };
 
