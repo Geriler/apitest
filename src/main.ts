@@ -97,8 +97,8 @@ async function start(): Promise<void> {
       clearTimeout(armed);
       armed = undefined;
       clear.textContent = "Очистить";
-      // Платы остаются на столе — убираются детали, провода и дорожки
-      app.replaceScene({ components: [], wires: [], boards: app.scene.boards });
+      // Пустой стол: без деталей, проводов, дорожек и плат
+      app.replaceScene({ components: [], wires: [], boards: [] });
       return;
     }
     clear.textContent = "Точно очистить?";

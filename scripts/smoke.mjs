@@ -449,7 +449,16 @@ try {
       await page.click("#btn-clear");
       await page.waitForTimeout(300);
       const bbAfter = await page.evaluate(() => ({ n: window.maketka.scene.components.length, boards: window.maketka.scene.boards.map((b) => b.id) }));
-      check(bbAfter.n === 0 && bbAfter.boards.join() === "BB1,PCB1", `«Очистить» убрал детали, платы остались: ${bbAfter.boards.join(", ")}`);
+      check(bbAfter.n === 0 && bbAfter.boards.length === 0, `«Очистить» убрал всё, включая платы (осталось плат: ${bbAfter.boards.length})`);
+      // На пустой стол можно снова положить плату
+      await page.keyboard.press("b");
+      const empty = await scr(0, 0, 0);
+      await page.mouse.move(empty.x, empty.y);
+      await page.mouse.click(empty.x, empty.y);
+      await page.waitForTimeout(400);
+      const again = await boards();
+      check(again.length === 1 && again[0].id === "BB1", `на пустой стол положена ${again.map((b) => b.id).join()}`);
+      await page.keyboard.press("1");
       await page.screenshot({ path: "screenshots/desktop-mosfet-panel.png" });
     }
 
