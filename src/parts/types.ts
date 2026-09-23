@@ -33,6 +33,51 @@ export interface Symbol3 {
   ctrlX: number;
 }
 
+/** Данные новой детали без обозначения и места: { type, ...параметры }. */
+export type NewPart<C extends Component> = C extends Component ? Omit<C, "id" | "placement"> : never;
+
+/**
+ * Инструмент установки детали: кнопка в группе на панели слева, горячие клавиши и настройки
+ * новой детали (панель справа, пока инструмент выбран).
+ */
+export interface ToolDef<C extends Component = Component, S = any> {
+  /** Имя инструмента (data-tool): "tht", "cap"… */
+  id: string;
+  /** Группа кнопок на панели слева; без группы кнопки нет (инструмент скрыт). */
+  group?: "passive" | "semi" | "load" | "power";
+  /** Значок: содержимое <svg viewBox="0 0 30 18">. */
+  icon: string;
+  /** Подпись кнопки и всплывающая подсказка. */
+  label: string;
+  title: string;
+  /** Горячие клавиши (буквы — в латинской и в русской раскладке) и подпись клавиши на кнопке. */
+  keys: string[];
+  kbd?: string;
+  /** Начальные настройки новой детали; меняются полями панели (set). */
+  settings: S;
+  /** Заголовок панели новой детали. */
+  name(s: S): string;
+  /** Пояснение и поля настройки в панели новой детали. */
+  note(s: S): string;
+  editor(s: S): string;
+  set(s: S, field: string, value: string): void;
+  /** Данные новой детали. */
+  create(s: S): NewPart<C>;
+  /** Подсказка внизу экрана; pending — отверстие, где уже стоит первый вывод. */
+  hint(s: S, pending?: string): string;
+  /** Почему нельзя поставить в плату (если деталь не встаёт в плату). */
+  boardRefusal?: string;
+}
+
+/**
+ * Описать инструмент детали C: тип настроек выводится из поля settings.
+ * toolFor<Diode>()({ id: "diode", settings: { kind: "1N4007" }, … })
+ */
+export const toolFor =
+  <C extends Component>() =>
+  <S>(t: ToolDef<C, S>): ToolDef<C, S> =>
+    t;
+
 export interface PartDef<C extends Component = Component> {
   type: C["type"];
   /** Буква обозначения по ЕСКД: R, C, VD, HL, VT, SA, GB, G. */
@@ -40,7 +85,9 @@ export interface PartDef<C extends Component = Component> {
   /** Число выводов. */
   pins: number;
   /** Встаёт ли в плату (у SMD-резистора нет ножек, батарея и блок питания — на столе). */
-  onBoard(variant?: "tht" | "smd"): boolean;
+  onBoard(c: C): boolean;
+  /** Инструменты установки на панели слева (у резистора — выводной и SMD). */
+  tools: ToolDef<C>[];
   /** Важно ли, какой вывод куда (тогда деталь можно перевернуть клавишей F). */
   polar(c: C): boolean;
   /** Короткая подпись в списке деталей. */

@@ -7,8 +7,8 @@ import * as tolerance from "../sim/tolerance";
 import { formatLimit } from "../sim/devices";
 import { stampBurned, twoPin } from "./common";
 import { formatW } from "./format";
-import type { PartDef } from "./types";
-import { actualRow, ohmsSelect, pct, smdSelect, superscript, wattsSelect } from "../view/panel";
+import { toolFor, type PartDef } from "./types";
+import { actualRow, ohmsSelect, pct, smdSelect, superscript, twoPinHint, wattsSelect } from "../view/panel";
 
 /** Как читать код SMD-резистора. */
 function smdExplain(ohms: number): string {
@@ -21,7 +21,48 @@ export const resistor: PartDef<Resistor> = {
   type: "resistor",
   prefix: "R",
   pins: 2,
-  onBoard: (variant) => variant !== "smd",
+  onBoard: (c) => c.variant !== "smd",
+  tools: [
+    toolFor<Resistor>()({
+      id: "tht",
+      group: "passive",
+      icon: `<path d="M1 9h7M22 9h7" /><rect x="8" y="5" width="14" height="8" />`,
+      label: "Резистор",
+      title: "Выводной резистор 0,125–2 Вт",
+      keys: ["3"],
+      settings: { ohms: 220, smdSize: "0805" as SmdSize, watts: 0.25 },
+      name: () => "Резистор",
+      note: () =>
+        `<p class="sub">Выводной резистор, маркировка — цветные полосы. Мощность больше номинала — перегреется и сгорит; чем мощнее резистор, тем он крупнее.</p>`,
+      editor: (s) => ohmsSelect(s.ohms) + wattsSelect(s.watts),
+      set(s, field, value) {
+        if (field === "ohms") s.ohms = Number(value);
+        if (field === "watts") s.watts = Number(value);
+      },
+      create: (s) => ({ type: "resistor", variant: "tht", ohms: s.ohms, smdSize: s.smdSize, watts: s.watts }),
+      hint: (_s, pending) => twoPinHint(pending),
+    }),
+    // SMD пока скрыт из интерфейса (нет кнопки), но сохранённые схемы с ним открываются
+    toolFor<Resistor>()({
+      id: "smd",
+      icon: "",
+      label: "SMD-резистор",
+      title: "",
+      keys: [],
+      settings: { ohms: 220, smdSize: "0805" as SmdSize },
+      name: () => "SMD-резистор",
+      note: () =>
+        `<p class="sub">Электрически это тот же резистор, но корпус меньше — и рассеять он может меньше: 1206 до 0,25 Вт, 0402 всего до 0,063 Вт.</p>`,
+      editor: (s) => ohmsSelect(s.ohms) + smdSelect(s.smdSize),
+      set(s, field, value) {
+        if (field === "ohms") s.ohms = Number(value);
+        if (field === "smd") s.smdSize = value as SmdSize;
+      },
+      create: (s) => ({ type: "resistor", variant: "smd", ohms: s.ohms, smdSize: s.smdSize }),
+      hint: () => "SMD кладётся <b>на стол</b>, провода паяются к торцам. R — повернуть.",
+      boardRefusal: "У SMD-резистора нет ножек — в макетку он не вставляется. Положите его на стол рядом и припаяйте провода к торцам.",
+    }),
+  ],
   polar: () => false,
   label: (c) => `${formatOhms(c.ohms)}${c.variant === "smd" ? ` SMD ${c.smdSize}` : `, ${formatW(thtResistorSpec(c).ratedW)}`}`,
   value: (c) => `${formatOhms(c.ohms)}${c.variant === "smd" ? ` ${c.smdSize}` : `, ${formatW(thtResistorSpec(c).ratedW)}`}`,

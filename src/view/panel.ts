@@ -127,3 +127,25 @@ export function pill(cls: "ok" | "warn" | "bad", text: string): string {
 export function superscript(n: number): string {
   return String(n).replace(/\d/g, (d) => "⁰¹²³⁴⁵⁶⁷⁸⁹"[Number(d)]);
 }
+
+/** Какой вывод полярной детали ставится первым: у конденсатора — плюс, у диода — анод. */
+export type PolarWords = "plus" | "anode";
+
+/** Пояснение в панели новой полярной детали. */
+export function polarNote(w: PolarWords): string {
+  return `<p class="sub"><b>Полярная деталь.</b> Первое отверстие — ${w === "plus" ? "плюс" : "анод (+)"}, второе — ${w === "plus" ? "минус" : "катод (−)"}.</p>`;
+}
+
+/**
+ * Подсказка при установке двухвыводной детали. pending — отверстие первого вывода;
+ * polar — какие выводы у полярной детали (без него — выводы равноправны).
+ */
+export function twoPinHint(pending?: string, polar?: PolarWords): string {
+  const first = polar === "plus" ? "плюса (+)" : "анода (+)";
+  const second = polar === "plus" ? "минуса (−)" : "катода (−)";
+  return pending
+    ? `${polar ? (polar === "plus" ? "Плюс" : "Анод") : "Первый вывод"} в <b>${pending}</b>, теперь отверстие для ${polar ? second : "второго"}. Esc — отмена.`
+    : polar
+      ? `Сначала отверстие для <b>${first}</b>, потом для <b>${second}</b>. Не той стороной — выберите деталь и нажмите F.`
+      : "Нажмите на <b>два отверстия</b> — деталь встанет между ними. Или на <b>стол</b>, чтобы положить рядом.";
+}

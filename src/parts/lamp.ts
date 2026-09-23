@@ -4,16 +4,35 @@ import { LAMPS, type Lamp, type LampKind } from "../model/types";
 import { formatLimit } from "../sim/devices";
 import * as tolerance from "../sim/tolerance";
 import { stampBurned, twoPin } from "./common";
-import type { PartDef } from "./types";
+import { toolFor, type PartDef } from "./types";
 import { formatOhms } from "../sim/resistorCodes";
 import { NO_TOLERANCE } from "../sim/tolerance";
-import { actualRow, lampSelect } from "../view/panel";
+import { actualRow, lampSelect, twoPinHint } from "../view/panel";
 
 export const lamp: PartDef<Lamp> = {
   type: "lamp",
   prefix: "HL",
   pins: 2,
   onBoard: () => true,
+  tools: [
+    toolFor<Lamp>()({
+      id: "lamp",
+      group: "load",
+      icon: `<path d="M1 9h8M21 9h8" /><circle cx="15" cy="9" r="6" /><path d="M11 5l8 8M19 5l-8 8" />`,
+      label: "Лампа",
+      title: "Лампа накаливания",
+      keys: ["7"],
+      settings: { kind: "3.5V" as LampKind },
+      name: () => "Лампа",
+      note: () => "",
+      editor: (s) => lampSelect(s.kind),
+      set(s, field, value) {
+        if (field === "lamp") s.kind = value as LampKind;
+      },
+      create: (s) => ({ type: "lamp", kind: s.kind }),
+      hint: (_s, pending) => twoPinHint(pending),
+    }),
+  ],
   polar: () => false,
   label: (c) => `лампа ${LAMPS[c.kind].label}`,
   value: (c) => LAMPS[c.kind].label,

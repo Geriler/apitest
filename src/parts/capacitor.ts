@@ -5,15 +5,48 @@ import { formatLimit } from "../sim/devices";
 import * as tolerance from "../sim/tolerance";
 import { stampBurned, twoPin } from "./common";
 import { formatV } from "./format";
-import type { PartDef } from "./types";
+import { toolFor, type PartDef } from "./types";
 import { formatSI } from "../sim/resistorCodes";
-import { actualRow, capacitanceSelect, pct, pill, readout, superscript, voltsSelect } from "../view/panel";
+import { actualRow, capacitanceSelect, pct, pill, polarNote, readout, selectField, superscript, twoPinHint, voltsSelect } from "../view/panel";
 
 export const capacitor: PartDef<Capacitor> = {
   type: "capacitor",
   prefix: "C",
   pins: 2,
   onBoard: () => true,
+  tools: [
+    toolFor<Capacitor>()({
+      id: "cap",
+      group: "passive",
+      icon: `<path d="M1 9h11M18 9h11M12 3v12M18 3v12" />`,
+      label: "Конденсатор",
+      title: "Конденсатор: электролитический или керамический",
+      keys: ["4"],
+      settings: { variant: "electrolytic" as Capacitor["variant"], electrolyticUF: 1000, ceramicUF: 0.1, electrolyticV: 16, ceramicV: 50 },
+      name: () => "Конденсатор",
+      note: (s) =>
+        `<p class="sub">Копит заряд: заряжается через резистор, потом отдаёт энергию. Чем больше ёмкость и сопротивление, тем медленнее (τ = R·C).</p>${s.variant === "electrolytic" ? polarNote("plus") : ""}`,
+      editor(s) {
+        const el = s.variant === "electrolytic";
+        return (
+          selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"]], s.variant) +
+          capacitanceSelect(s.variant, el ? s.electrolyticUF : s.ceramicUF) +
+          voltsSelect(s.variant, el ? s.electrolyticV : s.ceramicV)
+        );
+      },
+      set(s, field, value) {
+        const el = s.variant === "electrolytic";
+        if (field === "capVariant") s.variant = value as Capacitor["variant"];
+        if (field === "uF") el ? (s.electrolyticUF = Number(value)) : (s.ceramicUF = Number(value));
+        if (field === "capV") el ? (s.electrolyticV = Number(value)) : (s.ceramicV = Number(value));
+      },
+      create(s) {
+        const el = s.variant === "electrolytic";
+        return { type: "capacitor", variant: s.variant, uF: el ? s.electrolyticUF : s.ceramicUF, volts: el ? s.electrolyticV : s.ceramicV };
+      },
+      hint: (s, pending) => twoPinHint(pending, s.variant === "electrolytic" ? "plus" : undefined),
+    }),
+  ],
   polar: (c) => c.variant === "electrolytic",
   label: (c) => `${formatFarads(c.uF)} ${formatV(capacitorVolts(c))}${c.variant === "electrolytic" ? "" : " керамический"}`,
   value: (c) => `${formatFarads(c.uF)}, ${formatV(capacitorVolts(c))}`,

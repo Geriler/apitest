@@ -1,11 +1,11 @@
 import * as THREE from "three";
 import { axialLayout, type ComponentView, disposeGroup, mm, tagPickable } from "../view/kit";
-import { diodeSpec, type Diode, type DiodeKind } from "../model/types";
+import { DIODES, diodeSpec, type Diode, type DiodeKind } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { VT, diodeParams, formatLimit } from "../sim/devices";
 import { junctionSim } from "./junction";
-import type { PartDef } from "./types";
-import { actualRow, diodeSelect, pill } from "../view/panel";
+import { toolFor, type PartDef } from "./types";
+import { actualRow, diodeSelect, pill, polarNote, twoPinHint } from "../view/panel";
 
 /** Анод (вывод 0) сверху: треугольник остриём к катоду. Общее для диода и светодиода. */
 export const DIODE_SYMBOL = `<path d="M0 -20V-8M0 8V20M-9 8H9"/><path d="M-9 -8H9L0 8Z"/>`;
@@ -18,6 +18,25 @@ export const diode: PartDef<Diode> = {
   prefix: "VD",
   pins: 2,
   onBoard: () => true,
+  tools: [
+    toolFor<Diode>()({
+      id: "diode",
+      group: "semi",
+      icon: `<path d="M1 9h10M19 9h10M11 4l8 5-8 5zM19 4v10" />`,
+      label: "Диод",
+      title: "Диод 1N4148 / 1N4007 / 1N5408",
+      keys: ["5"],
+      settings: { kind: "1N4007" as DiodeKind },
+      name: (s) => `Диод ${DIODES[s.kind].label}`,
+      note: () => `<p class="sub">Пропускает ток в одну сторону.</p>${polarNote("anode")}`,
+      editor: (s) => diodeSelect(s.kind),
+      set(s, field, value) {
+        if (field === "diode") s.kind = value as DiodeKind;
+      },
+      create: (s) => ({ type: "diode", kind: s.kind }),
+      hint: (_s, pending) => twoPinHint(pending, "anode"),
+    }),
+  ],
   polar: () => true,
   label: (c) => diodeSpec(c).label,
   value: (c) => diodeSpec(c).label,

@@ -5,15 +5,40 @@ import { formatSI } from "../sim/resistorCodes";
 import { formatLimit } from "../sim/devices";
 import { DIODE_SYMBOL, REVERSED_PILL } from "./diode";
 import { junctionSim } from "./junction";
-import type { PartDef } from "./types";
+import { toolFor, type PartDef } from "./types";
 import * as tolerance from "../sim/tolerance";
-import { actualRow, ledColorSelect, ledSizeSelect, pill } from "../view/panel";
+import { actualRow, ledColorSelect, ledSizeSelect, pill, polarNote, twoPinHint } from "../view/panel";
 
 export const led: PartDef<Led> = {
   type: "led",
   prefix: "HL",
   pins: 2,
   onBoard: () => true,
+  tools: [
+    toolFor<Led>()({
+      id: "led",
+      group: "semi",
+      icon: `<path d="M1 11h8M17 11h12M9 6l8 5-8 5zM17 6v10M18 4l4-3M20 6l4-3" />`,
+      label: "Светодиод",
+      title: "Светодиод 5 мм или мощный 1 Вт",
+      keys: ["6"],
+      settings: { color: "red" as LedColor, size: "5mm" as LedSize },
+      name: () => "Светодиод",
+      note: (s) =>
+        `<p class="sub">${
+          s.size === "1W"
+            ? "Мощному нужно 350 мА: от 9 В для красного — резистор ≈ 20 Ом на 2 Вт, а лучше блок питания с ограничением тока."
+            : "Ставьте последовательно с резистором: от 9 В для красного ≈ 330–470 Ом."
+        }</p>${polarNote("anode")}`,
+      editor: (s) => ledColorSelect(s.color) + ledSizeSelect(s.size),
+      set(s, field, value) {
+        if (field === "led") s.color = value as LedColor;
+        if (field === "ledSize") s.size = value as LedSize;
+      },
+      create: (s) => ({ type: "led", color: s.color, size: s.size }),
+      hint: (_s, pending) => twoPinHint(pending, "anode"),
+    }),
+  ],
   polar: () => true,
   label: (c) => `светодиод ${LEDS[c.color].label}${c.size === "1W" ? " 1 Вт" : ""}`,
   value: (c) => `${LEDS[c.color].label}${c.size === "1W" ? ", 1 Вт" : ""}`,

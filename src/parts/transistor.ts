@@ -6,7 +6,7 @@ import { pinNode } from "../sim/nodes";
 import type { Simulation } from "../sim/simulation";
 import * as tolerance from "../sim/tolerance";
 import type { Tolerance } from "../sim/tolerance";
-import type { PartDef, Stamp } from "./types";
+import { toolFor, type PartDef, type Stamp } from "./types";
 import { holeLabel } from "../model/breadboard";
 import { formatSI } from "../sim/resistorCodes";
 import { actualRow, bjtSelect, pill } from "../view/panel";
@@ -110,6 +110,26 @@ export const transistor: PartDef<Transistor> = {
   prefix: "VT",
   pins: 3,
   onBoard: () => true,
+  tools: [
+    toolFor<Transistor>()({
+      id: "bjt",
+      group: "semi",
+      icon: `<circle cx="16" cy="9" r="7.5" /><path d="M4 9h8M12 4.5v9M12 7l6-4.5M12 11l6 4.5M16.5 14.5l1.8 1 -0.4-2" />`,
+      label: "Транзистор",
+      title: "Транзистор BC547 / BC557: встаёт в три соседних столбца",
+      keys: ["0"],
+      settings: { kind: "BC547" as TransistorKind },
+      name: () => "Транзистор",
+      note: () =>
+        `<p class="sub">Три вывода: <b>коллектор, база, эмиттер</b> — встаёт в три соседних столбца слева направо. Маленький ток базы (через резистор 10–100 кОм) управляет большим током коллектора. Базу без резистора к батарее не подключайте.</p>`,
+      editor: (s) => bjtSelect(s.kind),
+      set(s, field, value) {
+        if (field === "bjt") s.kind = value as TransistorKind;
+      },
+      create: (s) => ({ type: "transistor", kind: s.kind }),
+      hint: () => "Нажмите на отверстие — транзистор займёт его и два соседних справа: <b>коллектор, база, эмиттер</b>. F — перевернуть.",
+    }),
+  ],
   polar: () => true,
   label: (c) => `транзистор ${TRANSISTORS[c.kind].label}, I<sub>к</sub>`,
   value: (c) => TRANSISTORS[c.kind].label,

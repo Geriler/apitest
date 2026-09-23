@@ -2,14 +2,31 @@ import * as THREE from "three";
 import { blackPlastic, boardFrame, type ComponentView, disposeGroup, freeTransform, lead, leadMaterial, mm, tagPickable } from "../view/kit";
 import { SWITCH_RESISTANCE, type Switch } from "../model/types";
 import { twoPin } from "./common";
-import type { PartDef } from "./types";
-import { pill } from "../view/panel";
+import { toolFor, type PartDef } from "./types";
+import { pill, twoPinHint } from "../view/panel";
 
 export const switchPart: PartDef<Switch> = {
   type: "switch",
   prefix: "SA",
   pins: 2,
   onBoard: () => true,
+  tools: [
+    toolFor<Switch>()({
+      id: "switch",
+      group: "load",
+      icon: `<path d="M1 12h8l12-7M21 12h8" />`,
+      label: "Тумблер",
+      title: "Тумблер",
+      keys: ["8"],
+      settings: {},
+      name: () => "Тумблер",
+      note: () => "",
+      editor: () => "",
+      set() {},
+      create: () => ({ type: "switch", closed: true }),
+      hint: (_s, pending) => twoPinHint(pending),
+    }),
+  ],
   polar: () => false,
   label: (c) => (c.closed ? "тумблер, вкл." : "тумблер, выкл."),
   value: (c) => (c.closed ? "замкнут" : "разомкнут"),

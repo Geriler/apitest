@@ -20,24 +20,15 @@ import {
   type Hole,
 } from "./model/breadboard";
 import {
-  DIODES,
   isFlatWire,
   boardConflicts,
   sameEndpoint,
   sceneBoards,
-  type BatteryKind,
-  type DiodeKind,
-  type LedSize,
   type Component,
   type Endpoint,
-  type LampKind,
-  type LedColor,
-  type MosfetKind,
   type Pin,
   type Scene,
   type SchematicLayout,
-  type SmdSize,
-  type TransistorKind,
   type Wire,
   type WireShape,
 } from "./model/types";
@@ -47,23 +38,23 @@ import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
 import { schematicSvg } from "./view/schematic";
-import { PARTS, part } from "./parts";
-import { batterySelect, bjtSelect, capacitanceSelect, diodeSelect, fetSelect, lampSelect, ledColorSelect, ledSizeSelect, mosfetPinNames, ohmsSelect, pill, readout, selectField, smdSelect, voltsSelect, wattsSelect } from "./view/panel";
+import { PARTS, part, type ToolDef } from "./parts";
+import { pill, readout, selectField } from "./view/panel";
 import type { World } from "./view/world";
 
-type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
-type PlaceTool = "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu";
+/** Инструмент: встроенный (выбор, провод, дорожка, платы, удаление) или установка детали (id из PartDef.tools). */
+type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "delete" | PlaceTool;
+type PlaceTool = string;
 
-// SMD пока скрыт из интерфейса (вернётся вместе с печатной платой), но сохранённые схемы с ним открываются.
-const PLACE_TOOLS: PlaceTool[] = ["tht", "cap", "diode", "led", "bjt", "fet", "lamp", "switch", "battery", "psu"];
+/** Инструменты установки деталей из реестра: id → тип детали и описание инструмента. */
+const PLACE_TOOLS = new Map<PlaceTool, { type: Component["type"]; def: ToolDef }>(
+  Object.values(PARTS).flatMap((p) => p.tools.map((t) => [t.id, { type: p.type, def: t as ToolDef }] as const)),
+);
 const TOOL_KEYS: Record<string, Tool> = {
-  "1": "select", "2": "wire", "3": "tht", "4": "cap", "5": "diode", "6": "led", "7": "lamp", "8": "switch", "9": "battery", "0": "bjt", m: "fet", M: "fet", "ь": "fet", "Ь": "fet",
-  t: "trace", T: "trace", "е": "trace", "Е": "trace", p: "psu", P: "psu", "з": "psu", "З": "psu",
+  "1": "select", "2": "wire",
+  t: "trace", T: "trace", "е": "trace", "Е": "trace",
   b: "bb", B: "bb", "и": "bb", "И": "bb", v: "pcb", V: "pcb", "м": "pcb", "М": "pcb",
-};
-/** Инструмент → тип детали. */
-const TOOL_TYPE: Record<PlaceTool, Component["type"]> = {
-  tht: "resistor", smd: "resistor", cap: "capacitor", diode: "diode", led: "led", bjt: "transistor", fet: "mosfet", lamp: "lamp", switch: "switch", battery: "battery", psu: "psu",
+  ...Object.fromEntries([...PLACE_TOOLS.values()].flatMap(({ def }) => def.keys.map((k) => [k, def.id]))),
 };
 const WIRE_COLORS = ["#e3b21c", "#2f9e5a", "#2f6fd1", "#e2762a", "#8e4cc9", "#e9e9e4"];
 /** Палитра проводов для ручного выбора. */
@@ -145,27 +136,10 @@ export class App {
   private lastInspector = 0;
   private sparkTimer = 0;
   private wireColor = 0;
+  /** Настройки новых деталей по инструментам (что выбрано в панели, пока инструмент активен). */
+  private toolSettings = new Map([...PLACE_TOOLS].map(([id, { def }]) => [id, structuredClone(def.settings)]));
 
   defaults = {
-    ohms: 220,
-    smdSize: "0805" as SmdSize,
-    lamp: "3.5V" as LampKind,
-    battery: "9V" as BatteryKind,
-    capVariant: "electrolytic" as "electrolytic" | "ceramic",
-    electrolyticUF: 1000,
-    ceramicUF: 0.1,
-    /** Мощность выводного резистора, Вт. */
-    watts: 0.25,
-    /** Номинальное напряжение конденсаторов, В. */
-    electrolyticV: 16,
-    ceramicV: 50,
-    diode: "1N4007" as DiodeKind,
-    ledSize: "5mm" as LedSize,
-    led: "red" as LedColor,
-    transistor: "BC547" as TransistorKind,
-    mosfet: "2N7000" as MosfetKind,
-    psuVolts: 5,
-    psuAmps: 0.5,
     /** Размер новой печатной платы: столбцы × ряды. */
     pcbSize: "24x14",
     /** "auto" — красный к плюсу, чёрный к минусу, остальные по кругу; иначе цвет из палитры. */
@@ -180,6 +154,7 @@ export class App {
     initial: Scene,
   ) {
     this.scene = initial;
+    this.renderToolButtons();
     this.adoptBoards();
     this.world.rebuildBoards(true);
     this.sim = new Simulation(this.scene, App.loadTolerance());
@@ -1093,33 +1068,21 @@ export class App {
   }
 
   private newComponent(tool: PlaceTool, placement: Component["placement"]): Component {
-    switch (tool) {
-      case "tht":
-        return { id: this.nextId("resistor"), type: "resistor", variant: "tht", ohms: this.defaults.ohms, smdSize: this.defaults.smdSize, watts: this.defaults.watts, placement };
-      case "smd":
-        return { id: this.nextId("resistor"), type: "resistor", variant: "smd", ohms: this.defaults.ohms, smdSize: this.defaults.smdSize, placement };
-      case "lamp":
-        return { id: this.nextId("lamp"), type: "lamp", kind: this.defaults.lamp, placement };
-      case "switch":
-        return { id: this.nextId("switch"), type: "switch", closed: true, placement };
-      case "battery":
-        return { id: this.nextId("battery"), type: "battery", kind: this.defaults.battery, placement };
-      case "cap": {
-        const variant = this.defaults.capVariant;
-        const uF = variant === "electrolytic" ? this.defaults.electrolyticUF : this.defaults.ceramicUF;
-        const volts = variant === "electrolytic" ? this.defaults.electrolyticV : this.defaults.ceramicV;
-        return { id: this.nextId("capacitor"), type: "capacitor", variant, uF, volts, placement };
-      }
-      case "diode":
-        return { id: this.nextId("diode"), type: "diode", kind: this.defaults.diode, placement };
-      case "led":
-        return { id: this.nextId("led"), type: "led", color: this.defaults.led, size: this.defaults.ledSize, placement };
-      case "bjt":
-        return { id: this.nextId("transistor"), type: "transistor", kind: this.defaults.transistor, placement };
-      case "fet":
-        return { id: this.nextId("mosfet"), type: "mosfet", kind: this.defaults.mosfet, placement };
-      case "psu":
-        return { id: this.nextId("psu"), type: "psu", volts: this.defaults.psuVolts, amps: this.defaults.psuAmps, on: true, placement };
+    const { type, def } = PLACE_TOOLS.get(tool)!;
+    return { id: this.nextId(type), ...def.create(this.toolSettings.get(tool)), placement } as Component;
+  }
+
+  /** Кнопки инструментов деталей — в группы на панели слева, в порядке реестра. */
+  private renderToolButtons(): void {
+    for (const { def } of PLACE_TOOLS.values()) {
+      if (!def.group) continue;
+      const body = this.ui.tools.querySelector(`details[data-group="${def.group}"] .group-body`);
+      body?.insertAdjacentHTML(
+        "beforeend",
+        `<button class="tool" data-tool="${def.id}" aria-pressed="false" title="${def.title}">
+          <svg viewBox="0 0 30 18">${def.icon}</svg>${def.label}<kbd>${def.kbd ?? def.keys[0]}</kbd>
+        </button>`,
+      );
     }
   }
 
@@ -1159,8 +1122,8 @@ export class App {
     this.changed();
   }
 
-  private isPlaceTool(t: Tool): t is PlaceTool {
-    return (PLACE_TOOLS as Tool[]).includes(t);
+  private isPlaceTool(t: Tool): boolean {
+    return PLACE_TOOLS.has(t);
   }
 
   // ─── Ввод ──────────────────────────────────────────────────────────────
@@ -1589,8 +1552,8 @@ export class App {
   private pickWireColor(a: Endpoint, b: Endpoint): string {
     if (this.defaults.wireColor !== "auto") return this.defaults.wireColor;
     for (const e of [a, b]) {
-      const t = "comp" in e ? this.component(e.comp)?.type : undefined;
-      if ("comp" in e && (t === "battery" || t === "psu")) return e.pin === 1 ? "#c8261f" : "#1b1d20";
+      const c = "comp" in e ? this.component(e.comp) : undefined;
+      if ("comp" in e && c && part(c).source) return e.pin === 1 ? "#c8261f" : "#1b1d20";
       if ("hole" in e) {
         const pol = HOLE_BY_ID.get(e.hole)!.polarity;
         if (pol) return pol === "+" ? "#c8261f" : "#1b1d20";
@@ -1601,9 +1564,10 @@ export class App {
 
   private clickPlace(tool: PlaceTool): void {
     const h = this.hover;
-    const boardOk = PARTS[TOOL_TYPE[tool]].onBoard(tool === "smd" ? "smd" : "tht");
+    const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
+    const boardOk = part(sample).onBoard(sample);
 
-    if ((tool === "bjt" || tool === "fet") && h.hole) {
+    if (part(sample).pins === 3 && h.hole) {
       const holes = this.transistorHoles(h.hole);
       if (!holes) return this.setHint("Транзистор ставится в основное поле: в шине все три вывода оказались бы замкнуты.");
       const occ = this.occupied();
@@ -1636,13 +1600,7 @@ export class App {
       return;
     }
     if (h.overBoard && !boardOk) {
-      return this.setHint(
-        tool === "smd"
-          ? "У SMD-резистора нет ножек — в макетку он не вставляется. Положите его на стол рядом и припаяйте провода к торцам."
-          : tool === "psu"
-            ? "Блок питания ставится на стол. Подключите клеммы к плате проводами."
-            : "Батарея ставится на стол. Подключите её к шинам платы проводами.",
-      );
+      return this.setHint(PLACE_TOOLS.get(tool)!.def.boardRefusal ?? "");
     }
     if (this.pendingHole) return; // ждём второе отверстие
     if (h.table) {
@@ -1716,7 +1674,7 @@ export class App {
     }
     if (!this.isPlaceTool(this.tool)) return this.clearGhost();
     const tool = this.tool;
-    if ((tool === "bjt" || tool === "fet") && h.hole) {
+    if (PARTS[PLACE_TOOLS.get(tool)!.type].pins === 3 && h.hole) {
       const holes = this.transistorHoles(h.hole);
       return holes ? this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes })).group) : this.clearGhost();
     }
@@ -1758,27 +1716,12 @@ export class App {
     const t = this.tool;
     let s = "";
     if (t === "wire") s = this.pendingEnd ? "Второй конец: <b>отверстие</b> или <b>вывод</b> детали. Esc — отмена." : "Первый конец провода: <b>отверстие</b> или <b>вывод</b> детали на столе.";
-    else if (t === "smd") s = "SMD кладётся <b>на стол</b>, провода паяются к торцам. R — повернуть.";
-    else if (t === "battery") s = "Нажмите на стол рядом с платой. R — повернуть.";
     else if (t === "bb") s = "Нажмите на свободное место на столе — туда ляжет макетка на 400 точек.";
     else if (t === "pcb") s = "Нажмите на свободное место на столе — туда ляжет печатная плата. Размер — в панели справа.";
-    else if (t === "psu") s = "Нажмите на стол рядом с платой. Напряжение и ограничение тока — в панели справа.";
     else if (t === "trace") s = this.pendingPad
       ? `Дорожка от <b>${holeLabel(this.pendingPad.id)}</b>: следующая площадка. Щелчок по той же или Esc — закончить.`
       : "Нажмите на <b>площадку</b> печатной платы, затем на следующую — между ними ляжет медная дорожка.";
-    else if (t === "bjt") s = "Нажмите на отверстие — транзистор займёт его и два соседних справа: <b>коллектор, база, эмиттер</b>. F — перевернуть.";
-    else if (t === "fet") s = `Нажмите на отверстие — MOSFET займёт его и два соседних справа: <b>${mosfetPinNames(this.defaults.mosfet)}</b>. F — перевернуть.`;
-    else if (t !== "select" && t !== "delete") {
-      // Для полярных деталей первым ставится анод / плюс
-      const polar = t === "diode" || t === "led" || (t === "cap" && this.defaults.capVariant === "electrolytic");
-      const first = t === "cap" ? "плюса (+)" : "анода (+)";
-      const second = t === "cap" ? "минуса (−)" : "катода (−)";
-      s = this.pendingHole
-        ? `${polar ? (t === "cap" ? "Плюс" : "Анод") : "Первый вывод"} в <b>${holeLabel(this.pendingHole.id)}</b>, теперь отверстие для ${polar ? second : "второго"}. Esc — отмена.`
-        : polar
-          ? `Сначала отверстие для <b>${first}</b>, потом для <b>${second}</b>. Не той стороной — выберите деталь и нажмите F.`
-          : "Нажмите на <b>два отверстия</b> — деталь встанет между ними. Или на <b>стол</b>, чтобы положить рядом.";
-    }
+    else if (this.isPlaceTool(t)) s = PLACE_TOOLS.get(t)!.def.hint(this.toolSettings.get(t), this.pendingHole ? holeLabel(this.pendingHole.id) : undefined);
     this.showHint(s);
   }
 
@@ -1978,50 +1921,9 @@ export class App {
   }
 
   private newPartPanel(tool: PlaceTool): [string, string] {
-    const names: Record<PlaceTool, string> = {
-      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: `Диод ${DIODES[this.defaults.diode].label}`, led: "Светодиод", bjt: "Транзистор", fet: "MOSFET", psu: "Блок питания", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
-    };
-    let editor = "";
-    if (tool === "tht" || tool === "smd") editor = ohmsSelect(this.defaults.ohms) + (tool === "smd" ? smdSelect(this.defaults.smdSize) : wattsSelect(this.defaults.watts));
-    if (tool === "diode") editor = diodeSelect(this.defaults.diode);
-    if (tool === "lamp") editor = lampSelect(this.defaults.lamp);
-    if (tool === "battery") editor = batterySelect(this.defaults.battery);
-    if (tool === "cap") {
-      const el = this.defaults.capVariant === "electrolytic";
-      editor =
-        selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"]], this.defaults.capVariant) +
-        capacitanceSelect(this.defaults.capVariant, el ? this.defaults.electrolyticUF : this.defaults.ceramicUF) +
-        voltsSelect(this.defaults.capVariant, el ? this.defaults.electrolyticV : this.defaults.ceramicV);
-    }
-    if (tool === "led") editor = ledColorSelect(this.defaults.led) + ledSizeSelect(this.defaults.ledSize);
-    if (tool === "fet") {
-      editor = fetSelect(this.defaults.mosfet);
-    }
-    if (tool === "bjt") {
-      editor = bjtSelect(this.defaults.transistor);
-    }
-    const polarNote = `<p class="sub"><b>Полярная деталь.</b> Первое отверстие — ${tool === "cap" ? "плюс" : "анод (+)"}, второе — ${tool === "cap" ? "минус" : "катод (−)"}.</p>`;
-    const note =
-      tool === "cap"
-        ? `<p class="sub">Копит заряд: заряжается через резистор, потом отдаёт энергию. Чем больше ёмкость и сопротивление, тем медленнее (τ = R·C).</p>${this.defaults.capVariant === "electrolytic" ? polarNote : ""}`
-        : tool === "diode"
-          ? `<p class="sub">Пропускает ток в одну сторону.</p>${polarNote}`
-          : tool === "led"
-            ? `<p class="sub">${
-                this.defaults.ledSize === "1W"
-                  ? "Мощному нужно 350 мА: от 9 В для красного — резистор ≈ 20 Ом на 2 Вт, а лучше блок питания с ограничением тока."
-                  : "Ставьте последовательно с резистором: от 9 В для красного ≈ 330–470 Ом."
-              }</p>${polarNote}`
-            : tool === "fet"
-              ? `<p class="sub">Полевой транзистор: управляется <b>напряжением</b> на затворе, ток через затвор не течёт. Ставьте резистор 10–100 кОм от затвора к истоку, иначе затвор «зависнет». Порядок ножек у корпусов разный: сейчас <b>${mosfetPinNames(this.defaults.mosfet)}</b>.</p>`
-            : tool === "bjt"
-              ? `<p class="sub">Три вывода: <b>коллектор, база, эмиттер</b> — встаёт в три соседних столбца слева направо. Маленький ток базы (через резистор 10–100 кОм) управляет большим током коллектора. Базу без резистора к батарее не подключайте.</p>`
-            : tool === "smd"
-        ? `<p class="sub">Электрически это тот же резистор, но корпус меньше — и рассеять он может меньше: 1206 до 0,25 Вт, 0402 всего до 0,063 Вт.</p>`
-        : tool === "tht"
-          ? `<p class="sub">Выводной резистор, маркировка — цветные полосы. Мощность больше номинала — перегреется и сгорит; чем мощнее резистор, тем он крупнее.</p>`
-          : "";
-    const html = `<div class="eyebrow">новая деталь</div><h2>${names[tool]}</h2>${note}${editor}`;
+    const { def } = PLACE_TOOLS.get(tool)!;
+    const st = this.toolSettings.get(tool);
+    const html = `<div class="eyebrow">новая деталь</div><h2>${def.name(st)}</h2>${def.note(st)}${def.editor(st)}`;
     return [`n:${tool}`, html];
   }
 
@@ -2167,25 +2069,8 @@ export class App {
     }
     const c = this.selected ? this.component(this.selected) : undefined;
     if (!c) {
-      if (field === "ohms") this.defaults.ohms = Number(value);
-      if (field === "smd") this.defaults.smdSize = value as SmdSize;
-      if (field === "lamp") this.defaults.lamp = value as LampKind;
-      if (field === "battery") this.defaults.battery = value as BatteryKind;
-      if (field === "capVariant") this.defaults.capVariant = value as "electrolytic" | "ceramic";
-      if (field === "uF") {
-        if (this.defaults.capVariant === "electrolytic") this.defaults.electrolyticUF = Number(value);
-        else this.defaults.ceramicUF = Number(value);
-      }
-      if (field === "led") this.defaults.led = value as LedColor;
-      if (field === "watts") this.defaults.watts = Number(value);
-      if (field === "capV") {
-        if (this.defaults.capVariant === "electrolytic") this.defaults.electrolyticV = Number(value);
-        else this.defaults.ceramicV = Number(value);
-      }
-      if (field === "diode") this.defaults.diode = value as DiodeKind;
-      if (field === "ledSize") this.defaults.ledSize = value as LedSize;
-      if (field === "bjt") this.defaults.transistor = value as TransistorKind;
-      if (field === "fet") this.defaults.mosfet = value as MosfetKind;
+      const pt = PLACE_TOOLS.get(this.tool);
+      pt?.def.set(this.toolSettings.get(this.tool), field, value);
       this.inspectorHtml = "";
       this.updateHint();
       this.updateGhost();

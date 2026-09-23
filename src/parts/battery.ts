@@ -3,7 +3,7 @@ import { type ComponentView, disposeGroup, freeTransform, labelTexture, leadMate
 import { BATTERIES, type Battery, type BatteryKind } from "../model/types";
 import * as tolerance from "../sim/tolerance";
 import { twoPin } from "./common";
-import type { PartDef } from "./types";
+import { toolFor, type PartDef } from "./types";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
 import { actualRow, batterySelect, readout } from "../view/panel";
 
@@ -15,6 +15,26 @@ export const battery: PartDef<Battery> = {
   prefix: "GB",
   pins: 2,
   onBoard: () => false,
+  tools: [
+    toolFor<Battery>()({
+      id: "battery",
+      group: "power",
+      icon: `<path d="M1 9h11M18 9h11M12 3v12M18 6v6" />`,
+      label: "Батарея",
+      title: "Батарея (ставится на стол)",
+      keys: ["9"],
+      settings: { kind: "9V" as BatteryKind },
+      name: () => "Батарея",
+      note: () => "",
+      editor: (s) => batterySelect(s.kind),
+      set(s, field, value) {
+        if (field === "battery") s.kind = value as BatteryKind;
+      },
+      create: (s) => ({ type: "battery", kind: s.kind }),
+      hint: () => "Нажмите на стол рядом с платой. R — повернуть.",
+      boardRefusal: "Батарея ставится на стол. Подключите её к шинам платы проводами.",
+    }),
+  ],
   polar: () => true,
   label: (c) => BATTERIES[c.kind].label,
   value: (c) => BATTERIES[c.kind].label,

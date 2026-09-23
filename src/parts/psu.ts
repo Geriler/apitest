@@ -3,7 +3,7 @@ import { type ComponentView, disposeGroup, freeTransform, mm, tagPickable, type 
 import { PSU_LIMITS, type PowerSupply } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { stampBurned, twoPin } from "./common";
-import type { PartDef } from "./types";
+import { toolFor, type PartDef } from "./types";
 import { pill, readout } from "../view/panel";
 
 /** Выходное сопротивление лабораторного блока в режиме CV, Ом. */
@@ -16,6 +16,25 @@ export const psu: PartDef<PowerSupply> = {
   prefix: "G",
   pins: 2,
   onBoard: () => false,
+  tools: [
+    toolFor<PowerSupply>()({
+      id: "psu",
+      group: "power",
+      icon: `<rect x="5" y="2" width="20" height="14" rx="1.5" /><path d="M8 5h9v4H8zM20 12.5h1M23 12.5h0" /><circle cx="10" cy="12.5" r="1.5" />`,
+      label: "Блок питания",
+      title: "Лабораторный блок питания 0–30 В, 0–3 А",
+      keys: ["p", "P", "з", "З"],
+      kbd: "P",
+      settings: { volts: 5, amps: 0.5 },
+      name: () => "Блок питания",
+      note: () => "",
+      editor: () => "",
+      set() {},
+      create: (s) => ({ type: "psu", volts: s.volts, amps: s.amps, on: true }),
+      hint: () => "Нажмите на стол рядом с платой. Напряжение и ограничение тока — в панели справа.",
+      boardRefusal: "Блок питания ставится на стол. Подключите клеммы к плате проводами.",
+    }),
+  ],
   polar: () => true,
   label: (c) => (c.on ? `блок питания ${formatSI(c.volts, "В")} / ${formatSI(c.amps, "А")}` : "блок питания, выход выкл."),
   value: (c) => (c.on ? `${formatSI(c.volts, "В")} / ${formatSI(c.amps, "А")}` : "выход выкл."),

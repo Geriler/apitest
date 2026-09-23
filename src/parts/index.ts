@@ -36,4 +36,4 @@ export function part<C extends Component>(c: C): PartDef<C> {
   return PARTS[c.type as C["type"]] as unknown as PartDef<C>;
 }
 
-export type { PartDef } from "./types";
+export type { PartDef, ToolDef } from "./types";
