@@ -1,5 +1,5 @@
 /**
- * Платы: макетные (1–3 штуки рядом) и печатная. Единица длины сцены = шаг отверстий 2,54 мм.
+ * Платы: макетные и печатные, сколько угодно, где угодно на столе. Единица длины сцены = шаг 2,54 мм.
  *
  * Макетка на 400 точек: 30 столбцов, ряды a–e и f–j. Пять отверстий столбца в одной половине
  * (например a7–e7) соединены внутри платы полосой. Сверху и снизу — по две шины питания (+ и −),
@@ -24,8 +24,8 @@ export interface Hole {
   /** main и rail — макетка; pad — площадка печатной платы. */
   kind: "main" | "rail" | "pad";
   board: "breadboard" | "pcb";
-  /** Номер макетки, начиная с 0 (у площадок печатной платы не задан). */
-  bb?: number;
+  /** Плата, на которой отверстие: «BB1», «PCB1»… */
+  boardId: string;
   /** Для шин: знак, чтобы подсветить + и − цветом. */
   polarity?: "+" | "-";
 }
@@ -39,14 +39,24 @@ export const BOARD = {
   height: 3.3,
 };
 
-/** Раскладка плат (сохраняется вместе со схемой). */
+/** Плата на столе (сохраняется вместе со схемой). x, z — центр платы. */
+export interface BoardSpec {
+  /** «BB1», «BB2»… — макетки, «PCB1», «PCB2»… — печатные платы. */
+  id: string;
+  kind: "breadboard" | "pcb";
+  x: number;
+  z: number;
+  /** Только у печатной платы: число столбцов и рядов площадок. */
+  cols?: number;
+  rows?: number;
+}
+
+/** Старый формат (до того, как платы стали отдельными предметами): число макеток и размер печатной. */
 export interface Layout {
   breadboards: number;
   pcbCols: number;
   pcbRows: number;
 }
-
-export const DEFAULT_LAYOUT: Layout = { breadboards: 1, pcbCols: 24, pcbRows: 14 };
 
 /** Варианты размеров печатной платы (столбцы × ряды). */
 export const PCB_SIZES: readonly [number, number][] = [
@@ -54,40 +64,73 @@ export const PCB_SIZES: readonly [number, number][] = [
   [36, 20],
   [48, 26],
 ];
-export const MAX_BREADBOARDS = 3;
 
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-/** Левый и верхний край печатной платы — не меняются при изменении размера. */
-const PCB_LEFT = -13.5;
-const PCB_TOP = 12.5;
+/** Толщина печатной платы: текстолит FR-4 1,6 мм. */
+export const PCB_HEIGHT = 1.6 / 2.54;
+/** Платы кладутся в пределах стола (он 400 × 400, но дальше камера не отъезжает). */
+export const TABLE_LIMIT = 120;
+
+/** Стартовый набор: макетка и печатная плата 24 × 14 перед ней. */
+export const DEFAULT_BOARDS: BoardSpec[] = [
+  { id: "BB1", kind: "breadboard", x: 0, z: 0 },
+  { id: "PCB1", kind: "pcb", x: 0, z: 21, cols: 24, rows: 14 },
+];
+
+/** Размер платы в шагах (у печатной — площадки плюс поля по 1,5 шага). */
+export function boardSize(b: BoardSpec): { width: number; depth: number; height: number } {
+  return b.kind === "breadboard"
+    ? { ...BOARD }
+    : { width: (b.cols ?? 24) + 3, depth: (b.rows ?? 14) + 3, height: PCB_HEIGHT };
+}
+
+/** Прямоугольник платы на столе. */
+export function boardRect(b: BoardSpec): { x0: number; x1: number; z0: number; z1: number } {
+  const { width, depth } = boardSize(b);
+  return { x0: b.x - width / 2, x1: b.x + width / 2, z0: b.z - depth / 2, z1: b.z + depth / 2 };
+}
+
+/** Налезают ли платы друг на друга (касаться краями можно). */
+export function boardsOverlap(a: BoardSpec, b: BoardSpec): boolean {
+  const p = boardRect(a);
+  const q = boardRect(b);
+  const eps = 1e-6;
+  return p.x0 < q.x1 - eps && q.x0 < p.x1 - eps && p.z0 < q.z1 - eps && q.z0 < p.z1 - eps;
+}
+
+/** Следующий свободный номер: «BB2», «PCB1»… */
+export function nextBoardId(kind: BoardSpec["kind"], boards: readonly BoardSpec[]): string {
+  const p = kind === "breadboard" ? "BB" : "PCB";
+  for (let n = 1; ; n++) if (!boards.some((b) => b.id === `${p}${n}`)) return `${p}${n}`;
+}
+
+/** Номер платы из id: «BB2» → 2. */
+function boardNumber(b: BoardSpec): number {
+  return Number(b.id.replace(/^\D+/, ""));
+}
+
+/** Человекочитаемое имя: «макетка 2», «печатная плата 1». */
+export function boardName(b: BoardSpec): string {
+  return `${b.kind === "breadboard" ? "макетка" : "печатная плата"} ${boardNumber(b)}`;
+}
 
 /**
- * Печатная плата: текстолит FR-4 1,6 мм, площадки с шагом 2,54 мм.
- * Поля пересчитываются в applyLayout.
+ * Приставки id отверстий и узлов. У первой макетки и первой печатной — как в старых схемах
+ * («a7», «pA1»), у остальных с номером («2:a7», «p2:A1»).
  */
-export const PCB = {
-  cols: 24,
-  rows: [...LETTERS.slice(0, 14)] as string[],
-  /** Центр платы и её размер (с полями вокруг площадок). */
-  x: 0,
-  z: 21,
-  width: 27,
-  depth: 17,
-  height: 1.6 / 2.54,
-};
-
-export let LAYOUT: Layout = { ...DEFAULT_LAYOUT };
-
-export function padX(col: number): number {
-  return PCB_LEFT + 1.5 + (col - 1);
-}
-export function padZ(rowIndex: number): number {
-  return PCB_TOP + 1.5 + rowIndex;
+function prefixes(b: BoardSpec): { id: string; node: string } {
+  const n = boardNumber(b);
+  if (b.kind === "breadboard") return n === 1 ? { id: "", node: "" } : { id: `${n}:`, node: `bb${n}:` };
+  return n === 1 ? { id: "p", node: "" } : { id: `p${n}:`, node: "" };
 }
 
-/** Смещение макетки номер bb (0, 1, 2) по X: вплотную вправо. */
-export function breadboardX(bb: number): number {
-  return bb * BOARD.width;
+/** Координата X площадки в столбце col (1…) на печатной плате b. */
+export function padX(b: BoardSpec, col: number): number {
+  return boardRect(b).x0 + 1.5 + (col - 1);
+}
+/** Координата Z площадки в ряду rowIndex (0…) на печатной плате b. */
+export function padZ(b: BoardSpec, rowIndex: number): number {
+  return boardRect(b).z0 + 1.5 + rowIndex;
 }
 
 function rowZ(rowIndex: number): number {
@@ -102,28 +145,23 @@ const RAILS: { id: string; z: number; polarity: "+" | "-" }[] = [
   { id: "bot+", z: 9, polarity: "+" },
 ];
 
-/** Приставка обозначений и узлов макетки: у первой пусто (совместимость со старыми схемами). */
-function bbPrefix(bb: number): { id: string; node: string } {
-  return bb === 0 ? { id: "", node: "" } : { id: `${bb + 1}:`, node: `bb${bb + 1}:` };
-}
-
-function buildHoles(layout: Layout): Hole[] {
+/** Отверстия одной платы. */
+export function boardHoles(b: BoardSpec): Hole[] {
   const holes: Hole[] = [];
-  for (let bb = 0; bb < layout.breadboards; bb++) {
-    const px = bbPrefix(bb);
-    const dx = breadboardX(bb);
+  const px = prefixes(b);
+  if (b.kind === "breadboard") {
     for (let r = 0; r < ROWS.length; r++) {
       const half = r < 5 ? "top" : "bot";
       for (let c = 1; c <= COLUMNS; c++) {
         holes.push({
           id: `${px.id}${ROWS[r]}${c}`,
-          x: dx + c - 15.5,
+          x: b.x + c - 15.5,
           y: BOARD.height,
-          z: rowZ(r),
+          z: b.z + rowZ(r),
           node: `${px.node}strip:${half}:${c}`,
           kind: "main",
           board: "breadboard",
-          bb,
+          boardId: b.id,
         });
       }
     }
@@ -132,24 +170,26 @@ function buildHoles(layout: Layout): Hole[] {
         for (let k = 0; k < 5; k++) {
           holes.push({
             id: `${px.id}${rail.id}${g * 5 + k + 1}`,
-            x: dx - 14 + g * 6 + k,
+            x: b.x - 14 + g * 6 + k,
             y: BOARD.height,
-            z: rail.z,
+            z: b.z + rail.z,
             node: `${px.node}rail:${rail.id}`,
             kind: "rail",
             board: "breadboard",
-            bb,
+            boardId: b.id,
             polarity: rail.polarity,
           });
         }
       }
     }
+    return holes;
   }
-  // Площадки печатной платы: id «pA1»…, у каждой свой узел
-  PCB.rows.forEach((row, r) => {
-    for (let c = 1; c <= PCB.cols; c++) {
-      const id = `p${row}${c}`;
-      holes.push({ id, x: padX(c), y: PCB.height, z: padZ(r), node: `pad:${id}`, kind: "pad", board: "pcb" });
+  // Площадки печатной платы: у каждой свой узел
+  const rows = LETTERS.slice(0, b.rows ?? 14);
+  [...rows].forEach((row, r) => {
+    for (let c = 1; c <= (b.cols ?? 24); c++) {
+      const id = `${px.id}${row}${c}`;
+      holes.push({ id, x: padX(b, c), y: PCB_HEIGHT, z: padZ(b, r), node: `pad:${id}`, kind: "pad", board: "pcb", boardId: b.id });
     }
   });
   return holes;
@@ -157,50 +197,74 @@ function buildHoles(layout: Layout): Hole[] {
 
 export const HOLES: Hole[] = [];
 export const HOLE_BY_ID = new Map<string, Hole>();
+/** Платы на столе сейчас (копии; менять через applyBoards). */
+export const BOARDS: BoardSpec[] = [];
 
-/** Перестроить платы. Отверстия, которые остаются, сохраняют id и координаты. */
-export function applyLayout(layout: Layout): void {
-  LAYOUT = { ...layout };
-  PCB.cols = layout.pcbCols;
-  PCB.rows = [...LETTERS.slice(0, layout.pcbRows)];
-  PCB.width = layout.pcbCols + 3;
-  PCB.depth = layout.pcbRows + 3;
-  PCB.x = PCB_LEFT + PCB.width / 2;
-  PCB.z = PCB_TOP + PCB.depth / 2;
+/** Перестроить отверстия под набор плат. HOLES, HOLE_BY_ID и BOARDS меняются на месте. */
+export function applyBoards(boards: readonly BoardSpec[]): void {
+  BOARDS.length = 0;
+  BOARDS.push(...boards.map((b) => ({ ...b })));
   HOLES.length = 0;
-  HOLES.push(...buildHoles(layout));
+  for (const b of BOARDS) HOLES.push(...boardHoles(b));
   HOLE_BY_ID.clear();
   for (const h of HOLES) HOLE_BY_ID.set(h.id, h);
 }
 
-applyLayout(DEFAULT_LAYOUT);
+applyBoards(DEFAULT_BOARDS);
 
-/** Правая граница всех плат (для камеры). */
-export function layoutRight(): number {
-  return Math.max(breadboardX(LAYOUT.breadboards - 1) + BOARD.width / 2, PCB_LEFT + PCB.width);
+export function boardById(id: string): BoardSpec | undefined {
+  return BOARDS.find((b) => b.id === id);
 }
-/** Нижняя граница всех плат (для камеры). */
-export function layoutBottom(): number {
-  return PCB_TOP + PCB.depth;
+
+/** Id всех отверстий набора плат (не трогая текущие). */
+export function holeIdsFor(boards: readonly BoardSpec[]): Set<string> {
+  const ids = new Set<string>();
+  for (const b of boards) for (const h of boardHoles(b)) ids.add(h.id);
+  return ids;
+}
+
+/**
+ * Старое сохранение с раскладкой → платы на тех же местах: макетки вплотную вправо,
+ * печатная плата с левым верхним углом в (−13,5; 12,5).
+ */
+export function boardsFromLayout(layout: Layout): BoardSpec[] {
+  const out: BoardSpec[] = [];
+  for (let i = 0; i < layout.breadboards; i++) out.push({ id: `BB${i + 1}`, kind: "breadboard", x: i * BOARD.width, z: 0 });
+  const width = layout.pcbCols + 3;
+  const depth = layout.pcbRows + 3;
+  out.push({ id: "PCB1", kind: "pcb", x: -13.5 + width / 2, z: 12.5 + depth / 2, cols: layout.pcbCols, rows: layout.pcbRows });
+  return out;
+}
+
+/** Границы всех плат (для камеры); без плат — область вокруг центра стола. */
+export function boardsBounds(): { x0: number; x1: number; z0: number; z1: number } {
+  if (!BOARDS.length) return { x0: -16, x1: 16, z0: -10.5, z1: 10.5 };
+  const rs = BOARDS.map(boardRect);
+  return {
+    x0: Math.min(...rs.map((r) => r.x0)),
+    x1: Math.max(...rs.map((r) => r.x1)),
+    z0: Math.min(...rs.map((r) => r.z0)),
+    z1: Math.max(...rs.map((r) => r.z1)),
+  };
 }
 
 export function holesOnNode(node: string): Hole[] {
   return HOLES.filter((h) => h.node === node);
 }
 
-/** Отверстие на той же плате и в том же ряду, сдвинутое на dx шагов (для транзисторов). */
-export function holeAt(board: Hole["board"], x: number, z: number): Hole | undefined {
-  return HOLES.find((h) => h.board === board && Math.abs(h.x - x) < 1e-6 && Math.abs(h.z - z) < 1e-6);
+/** Отверстие платы boardId в точке (x, z), если оно там есть (для транзисторов). */
+export function holeAt(boardId: string, x: number, z: number): Hole | undefined {
+  return HOLES.find((h) => h.boardId === boardId && Math.abs(h.x - x) < 1e-6 && Math.abs(h.z - z) < 1e-6);
 }
 
 /** Человекочитаемое описание узла: «столбец 7 (a–e)», «шина + сверху», «макетка 2, …». */
 export function describeNode(node: string): string {
   const m = node.match(/^bb(\d+):(.*)$/);
   if (m) return `макетка ${m[1]}, ${describeNode(m[2])}`;
+  if (node.startsWith("pad:")) return `${holeLabel(node.slice(4))} (соединения — дорожками)`;
   const [kind, a, b] = node.split(":");
   if (kind === "strip") return `столбец ${b} (${a === "top" ? "a–e" : "f–j"})`;
   if (kind === "rail") return `шина ${a.endsWith("+") ? "+" : "−"} ${a.startsWith("top") ? "сверху" : "снизу"}`;
-  if (kind === "pad") return `площадка ${a.slice(1)} (соединения — дорожками)`;
   return node;
 }
 
@@ -208,7 +272,10 @@ export function describeNode(node: string): string {
 export function holeLabel(id: string): string {
   const h = HOLE_BY_ID.get(id);
   if (!h) return id;
-  if (h.kind === "pad") return `площадка ${id.slice(1)}`;
+  if (h.kind === "pad") {
+    const m = id.match(/^p(?:(\d+):)?(.*)$/)!;
+    return `${m[1] ? `плата ${m[1]}, ` : ""}площадка ${m[2]}`;
+  }
   const m = id.match(/^(?:(\d+):)?(.*)$/)!;
   const prefix = m[1] ? `макетка ${m[1]}, ` : "";
   const local = m[2];
@@ -229,7 +296,7 @@ export function padsAlong(aId: string, bId: string): string[] {
   const len2 = dx * dx + dz * dz;
   const t = (h: Hole) => ((h.x - a.x) * dx + (h.z - a.z) * dz) / len2;
   const on = HOLES.filter((h) => {
-    if (h.board !== "pcb") return false;
+    if (h.boardId !== a.boardId) return false;
     const u = t(h);
     if (u < -1e-9 || u > 1 + 1e-9) return false;
     // Расстояние от центра площадки до линии дорожки меньше радиуса площадки (0,36 шага)
@@ -237,12 +304,4 @@ export function padsAlong(aId: string, bId: string): string[] {
     return cross < 0.36;
   });
   return on.sort((p, q) => t(p) - t(q)).map((h) => h.id);
-}
-
-/** Есть ли отверстие с таким id в раскладке (не перестраивая платы). */
-export function holeExistsIn(id: string, layout: Layout): boolean {
-  const pad = id.match(/^p([A-Z])(\d+)$/);
-  if (pad) return LETTERS.indexOf(pad[1]) < layout.pcbRows && Number(pad[2]) <= layout.pcbCols;
-  const bb = id.match(/^(\d+):/);
-  return (bb ? Number(bb[1]) : 1) <= layout.breadboards;
 }

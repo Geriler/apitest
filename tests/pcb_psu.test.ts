@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HOLES, HOLE_BY_ID, PCB, holeAt, padsAlong } from "../src/model/breadboard";
+import { BOARDS, HOLES, HOLE_BY_ID, boardRect, holeAt, padsAlong } from "../src/model/breadboard";
 import type { Component, Endpoint, PowerSupply, Scene } from "../src/model/types";
 import { Simulation, traceResistance, wireResistance } from "../src/sim/simulation";
 
@@ -16,8 +16,8 @@ describe("печатная плата", () => {
     expect(HOLE_BY_ID.get("pA2")!.x - HOLE_BY_ID.get("pA1")!.x).toBeCloseTo(1, 12);
     expect(HOLE_BY_ID.get("pB1")!.z - HOLE_BY_ID.get("pA1")!.z).toBeCloseTo(1, 12);
     // Плата не пересекается с макеткой (макетка до z = 10,5)
-    expect(PCB.z - PCB.depth / 2).toBeGreaterThan(10.5);
-    expect(holeAt("pcb", HOLE_BY_ID.get("pC3")!.x + 1, HOLE_BY_ID.get("pC3")!.z)?.id).toBe("pC4");
+    expect(boardRect(BOARDS.find((b) => b.id === "PCB1")!).z0).toBeGreaterThan(10.5);
+    expect(holeAt("PCB1", HOLE_BY_ID.get("pC3")!.x + 1, HOLE_BY_ID.get("pC3")!.z)?.id).toBe("pC4");
   });
 
   it("дорожка через площадки делится в каждой: A1 → A5 проходит A2, A3, A4; диагональ — по диагональным", () => {

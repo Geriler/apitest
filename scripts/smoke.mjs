@@ -364,31 +364,92 @@ try {
       check(dotsOn > 0 && dotsOff === 0 && stillCC === "CC", `кнопка «Ток»: точек ${dotsOn} → ${dotsOff}, расчёт идёт (${stillCC})`);
       await page.click("#btn-current");
 
-      // Платы: две макетки и плата 36 × 20
-      await page.click("#btn-boards");
-      await page.selectOption("#f-bbCount", "2");
-      await page.selectOption("#f-pcbSize", "36x20");
-      await page.waitForTimeout(800);
-      const layout = await page.evaluate(() => ({
-        bb: window.maketka.scene.layout,
-        leds: ["HL1", "HL2"].map((id) => window.maketka.sim.current(window.maketka.component(id))),
-      }));
-      await page.screenshot({ path: "screenshots/desktop-boards.png" });
-      check(
-        layout.bb?.breadboards === 2 && layout.bb?.pcbCols === 36 && layout.leds.every((i) => i > 0.009),
-        `платы расширены: ${JSON.stringify(layout.bb)}, схема на месте (${layout.leds.map((i) => (i * 1000).toFixed(1)).join(" и ")} мА)`,
-      );
-      // Поставить резистор на вторую макетку и попробовать уменьшить — должно отказать
+      // Платы как предметы: положить, выбрать, перетащить, убрать
+      const scr = (x, y, z) =>
+        page.evaluate(([x, y, z]) => {
+          const w = window.maketka.world;
+          const V = w.camera.position.constructor;
+          const p = w.toScreen(new V(x, y, z));
+          return { x: p.x, y: p.y };
+        }, [x, y, z]);
+      const boards = () => page.evaluate(() => window.maketka.scene.boards.map((b) => ({ ...b })));
+      const bb2 = () => boards().then((bs) => bs.find((b) => b.id === "BB2"));
+      // Отъехать камерой, чтобы было видно свободный стол перед платами
+      await page.evaluate(() => {
+        const w = window.maketka.world;
+        w.camera.position.sub(w.controls.target).multiplyScalar(1.7).add(w.controls.target);
+        w.controls.update();
+      });
+      await page.waitForTimeout(300);
+      await page.keyboard.press("b");
+      let pt = await scr(0, 0, 48);
+      await page.mouse.move(pt.x, pt.y);
+      await page.mouse.click(pt.x, pt.y);
+      await page.waitForTimeout(400);
+      const bbPlaced = await bb2();
+      check(bbPlaced && Math.abs(bbPlaced.x) <= 1 && Math.abs(bbPlaced.z - 48) <= 1, `макетка положена мышью: ${JSON.stringify(bbPlaced)}`);
+      // На занятое место (поверх печатной платы) не кладётся
+      pt = await scr(0, 0.7, 21);
+      await page.mouse.click(pt.x, pt.y);
+      await page.waitForTimeout(300);
+      check((await boards()).length === 3, `поверх другой платы не кладётся (плат ${(await boards()).length})`);
+      // Резистор на новую макетку, потом перенос платы вместе с ним
       await page.evaluate(() => {
         const a = window.maketka;
         a.scene.components.push({ id: "R9", type: "resistor", variant: "tht", ohms: 1000, smdSize: "0805", placement: { mode: "board", holes: ["2:a1", "2:a5"] } });
         a.changed();
       });
-      await page.selectOption("#f-bbCount", "1");
+      await page.keyboard.press("1");
+      pt = await scr(bbPlaced.x + 5, 3.3, bbPlaced.z + 3.5);
+      await page.mouse.click(pt.x, pt.y);
+      await page.waitForTimeout(300);
+      const selectedBoard = await page.evaluate(() => window.maketka.selectedBoard);
+      const bbPanel = await page.textContent("#inspector");
+      check(selectedBoard === "BB2" && /Макетка 2/.test(bbPanel ?? ""), `щелчок по макетке выбирает её (${selectedBoard}), панель: «Макетка 2»`);
+      const camBefore = await page.evaluate(() => window.maketka.world.camera.position.toArray());
+      const ptTo = await scr(bbPlaced.x + 25, 3.3, bbPlaced.z + 3.5);
+      await page.mouse.move(pt.x, pt.y);
+      await page.mouse.down();
+      await page.mouse.move((pt.x + ptTo.x) / 2, (pt.y + ptTo.y) / 2, { steps: 5 });
+      await page.mouse.move(ptTo.x, ptTo.y, { steps: 5 });
+      await page.mouse.up();
       await page.waitForTimeout(400);
-      const refused = await page.evaluate(() => window.maketka.scene.layout.breadboards);
-      const toastText = await page.textContent("#toasts");
-      check(refused === 2 && /R9/.test(toastText ?? ""), `уменьшение с деталью на второй макетке отклонено (${refused}), названа R9`);
+      const bbMoved = await bb2();
+      const camAfter = await page.evaluate(() => window.maketka.world.camera.position.toArray());
+      const r9 = await page.evaluate(() => window.maketka.endpointPos({ hole: "2:a1" }).toArray());
+      check(
+        Math.abs(bbMoved.x - bbPlaced.x - 20) <= 1.5 && Math.abs(bbMoved.z - bbPlaced.z) <= 1.5 && Math.abs(r9[0] - (bbMoved.x - 14.5)) < 1e-9,
+        `макетка перетащена на ${bbMoved.x - bbPlaced.x}, ${bbMoved.z - bbPlaced.z}; R9 уехал вместе с ней`,
+      );
+      check(camBefore.every((v, i) => Math.abs(v - camAfter[i]) < 1e-6), "при переносе платы камера не вращается");
+      await page.screenshot({ path: "screenshots/desktop-boards.png" });
+      // Удалить непустую — отказ с именем детали; пустую — убирается
+      await page.keyboard.press("Delete"); // ничего не выбрано из деталей → убрать выбранную плату
+      await page.waitForTimeout(300);
+      const bbToast = await page.textContent("#toasts");
+      check((await bb2()) && /R9/.test(bbToast ?? ""), "непустая плата не убирается, названа R9");
+      await page.evaluate(() => window.maketka.remove("R9"));
+      await page.click('[data-tool="delete"]');
+      pt = await scr(bbMoved.x + 5, 3.3, bbMoved.z + 3.5);
+      await page.mouse.click(pt.x, pt.y);
+      await page.waitForTimeout(300);
+      check(!(await bb2()), "пустая макетка убрана инструментом «Удалить»");
+      // Печатная плата больше: через панель платы
+      await page.keyboard.press("1");
+      pt = await scr(-6, 0.7, 20.5);
+      await page.mouse.click(pt.x, pt.y);
+      await page.waitForTimeout(300);
+      await page.selectOption("#f-boardSize", "36x20");
+      await page.waitForTimeout(400);
+      const pcbSpec = (await boards()).find((b) => b.id === "PCB1");
+      const bbLeds = await page.evaluate(() => ["HL1", "HL2"].map((id) => window.maketka.sim.current(window.maketka.component(id))));
+      check(pcbSpec.cols === 36 && pcbSpec.rows === 20 && bbLeds.every((i) => i > 0.009), `печатная плата 36 × 20, схема на месте (${bbLeds.map((i) => (i * 1000).toFixed(1)).join(" и ")} мА)`);
+      // «Очистить» оставляет платы
+      await page.click("#btn-clear");
+      await page.click("#btn-clear");
+      await page.waitForTimeout(300);
+      const bbAfter = await page.evaluate(() => ({ n: window.maketka.scene.components.length, boards: window.maketka.scene.boards.map((b) => b.id) }));
+      check(bbAfter.n === 0 && bbAfter.boards.join() === "BB1,PCB1", `«Очистить» убрал детали, платы остались: ${bbAfter.boards.join(", ")}`);
       await page.screenshot({ path: "screenshots/desktop-mosfet-panel.png" });
     }
 

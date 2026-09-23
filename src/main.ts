@@ -55,7 +55,6 @@ async function start(): Promise<void> {
     demoSelect.blur();
   });
   $("btn-repair").addEventListener("click", () => app.repairAll());
-  $("btn-boards").addEventListener("click", () => app.openBoardsPanel());
   const currentBtn = $("btn-current");
   const showCurrentState = () => {
     currentBtn.setAttribute("aria-pressed", String(app.showCurrent));
@@ -98,7 +97,8 @@ async function start(): Promise<void> {
       clearTimeout(armed);
       armed = undefined;
       clear.textContent = "Очистить";
-      app.replaceScene({ components: [], wires: [] });
+      // Платы остаются на столе — убираются детали, провода и дорожки
+      app.replaceScene({ components: [], wires: [], boards: app.scene.boards });
       return;
     }
     clear.textContent = "Точно очистить?";

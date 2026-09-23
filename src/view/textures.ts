@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { BOARD, COLUMNS, HOLES, PCB, ROWS, padX, padZ } from "../model/breadboard";
+import { BOARD, COLUMNS, ROWS, boardHoles, boardSize, padX, padZ, type BoardSpec } from "../model/breadboard";
 
 /** Пикселей на единицу длины (шаг 2,54 мм) в текстуре платы. */
 const PX = 48;
@@ -60,8 +60,8 @@ export function breadboardTexture(): THREE.CanvasTexture {
 
   // Отверстия: квадратные гнёзда с тенью
   const s = 0.42 * PX;
-  for (const hole of HOLES) {
-    if (hole.board !== "breadboard" || hole.bb !== 0) continue; // текстура общая для всех макеток
+  // Текстура общая для всех макеток: отверстия платы с центром в начале координат
+  for (const hole of boardHoles({ id: "BB1", kind: "breadboard", x: 0, z: 0 })) {
     const cx = X(hole.x);
     const cz = Z(hole.z);
     g.fillStyle = "#c9c4b5";
@@ -138,16 +138,22 @@ export function puffTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(canvas);
 }
 
-/** Печатная плата: зелёная маска, лужёные площадки с отверстиями, шелкография (номера и буквы). */
-export function pcbTexture(): THREE.CanvasTexture {
-  const w = PCB.width * PX;
-  const h = PCB.depth * PX;
+/**
+ * Печатная плата cols × rows: зелёная маска, лужёные площадки с отверстиями, шелкография
+ * (номера и буквы). Общая для всех плат этого размера.
+ */
+export function pcbTexture(cols: number, rows: number): THREE.CanvasTexture {
+  const spec: BoardSpec = { id: "PCB1", kind: "pcb", x: 0, z: 0, cols, rows };
+  const size = boardSize(spec);
+  const holes = boardHoles(spec);
+  const w = size.width * PX;
+  const h = size.depth * PX;
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const g = canvas.getContext("2d")!;
-  const X = (x: number) => (x - PCB.x + PCB.width / 2) * PX;
-  const Z = (z: number) => (z - PCB.z + PCB.depth / 2) * PX;
+  const X = (x: number) => (x + size.width / 2) * PX;
+  const Z = (z: number) => (z + size.depth / 2) * PX;
   g.fillStyle = "#1f5c3a";
   g.fillRect(0, 0, w, h);
   // Рамка шелкографии
@@ -158,15 +164,14 @@ export function pcbTexture(): THREE.CanvasTexture {
   g.font = `500 ${PX * 0.36}px "IBM Plex Mono", ui-monospace, monospace`;
   g.textAlign = "center";
   g.textBaseline = "middle";
-  for (let c = 1; c <= PCB.cols; c++) {
-    if (c === 1 || c % 5 === 0) g.fillText(String(c), X(padX(c)), Z(padZ(0)) - PX * 0.85);
+  for (let c = 1; c <= cols; c++) {
+    if (c === 1 || c % 5 === 0) g.fillText(String(c), X(padX(spec, c)), Z(padZ(spec, 0)) - PX * 0.85);
   }
-  PCB.rows.forEach((r, i) => g.fillText(r, X(padX(1)) - PX * 0.85, Z(padZ(i))));
+  for (let i = 0; i < rows; i++) g.fillText("ABCDEFGHIJKLMNOPQRSTUVWXYZ"[i], X(padX(spec, 1)) - PX * 0.85, Z(padZ(spec, i)));
   g.textAlign = "right";
   g.fillText("МАКЕТКА · PCB 1,6 мм", w - PX * 0.5, h - PX * 0.45);
   // Площадки: лужёное кольцо и отверстие
-  for (const hole of HOLES) {
-    if (hole.board !== "pcb") continue;
+  for (const hole of holes) {
     const cx = X(hole.x);
     const cz = Z(hole.z);
     g.fillStyle = "#c9ccc4";

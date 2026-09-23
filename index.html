@@ -299,6 +299,13 @@
       <svg viewBox="0 0 30 18"><circle cx="4" cy="13" r="2.4" /><path d="M6.4 13h6l5-8h6" stroke-width="2.4" /><circle cx="25.5" cy="5" r="2.4" /></svg>Дорожка<kbd>T</kbd>
     </button>
     <div class="tool-sep"></div>
+    <button class="tool" data-tool="bb" aria-pressed="false" title="Положить на стол макетку на 400 точек">
+      <svg viewBox="0 0 30 18"><rect x="2" y="2" width="26" height="14" rx="1" /><path d="M5 5h20M5 13h20" stroke-dasharray="1.5 2" /><path d="M2 9h26" stroke-width="0.8" /></svg>Макетка<kbd>B</kbd>
+    </button>
+    <button class="tool" data-tool="pcb" aria-pressed="false" title="Положить на стол печатную плату">
+      <svg viewBox="0 0 30 18"><rect x="2" y="2" width="26" height="14" rx="1" /><circle cx="8" cy="9" r="1.6" /><circle cx="15" cy="9" r="1.6" /><circle cx="22" cy="9" r="1.6" /></svg>Печатная плата<kbd>V</kbd>
+    </button>
+    <div class="tool-sep"></div>
     <button class="tool" data-tool="tht" aria-pressed="false" title="Резистор 0,25 Вт">
       <svg viewBox="0 0 30 18"><path d="M1 9h7M22 9h7" /><rect x="8" y="5" width="14" height="8" /></svg>Резистор<kbd>3</kbd>
     </button>
@@ -346,7 +353,6 @@
     </select>
     <button class="btn" id="btn-tol" aria-pressed="false" title="Разброс параметров, как у настоящих деталей">Допуски: выкл.</button>
     <button class="btn" id="btn-reroll" hidden title="Те же номиналы, другие экземпляры деталей">Другие экземпляры</button>
-    <button class="btn" id="btn-boards" title="Сколько макеток и какой размер печатной платы">Платы</button>
     <button class="btn" id="btn-current" aria-pressed="true" title="Бегущие точки тока на проводах и дорожках">Ток: вкл.</button>
     <button class="btn" id="btn-repair">Заменить сгоревшие</button>
     <button class="btn" id="btn-clear">Очистить</button>

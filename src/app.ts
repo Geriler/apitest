@@ -1,18 +1,23 @@
 import * as THREE from "three";
 import {
-  DEFAULT_LAYOUT,
+  BOARDS,
   HOLE_BY_ID,
-  LAYOUT,
-  MAX_BREADBOARDS,
   PCB_SIZES,
-  applyLayout,
+  TABLE_LIMIT,
+  applyBoards,
+  boardById,
+  boardName,
+  boardRect,
+  boardSize,
+  boardsOverlap,
   describeNode,
   holeAt,
   holeLabel,
   holesOnNode,
+  nextBoardId,
   padsAlong,
+  type BoardSpec,
   type Hole,
-  type Layout,
 } from "./model/breadboard";
 import {
   BATTERIES,
@@ -31,9 +36,10 @@ import {
   canGoOnBoard,
   formatFarads,
   isPolar,
-  layoutConflicts,
+  boardConflicts,
   pinCount,
   sameEndpoint,
+  sceneBoards,
   type BatteryKind,
   type Component,
   type Endpoint,
@@ -54,7 +60,7 @@ import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, wireCurve, mm, type ComponentView, type WireView } from "./view/builders";
 import type { World } from "./view/world";
 
-type Tool = "select" | "wire" | "trace" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
+type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
 type PlaceTool = "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu";
 
 // SMD пока скрыт из интерфейса (вернётся вместе с печатной платой), но сохранённые схемы с ним открываются.
@@ -62,6 +68,7 @@ const PLACE_TOOLS: PlaceTool[] = ["tht", "cap", "diode", "led", "bjt", "fet", "l
 const TOOL_KEYS: Record<string, Tool> = {
   "1": "select", "2": "wire", "3": "tht", "4": "cap", "5": "diode", "6": "led", "7": "lamp", "8": "switch", "9": "battery", "0": "bjt", m: "fet", M: "fet", "ь": "fet", "Ь": "fet",
   t: "trace", T: "trace", "е": "trace", "Е": "trace", p: "psu", P: "psu", "з": "psu", "З": "psu",
+  b: "bb", B: "bb", "и": "bb", "И": "bb", v: "pcb", V: "pcb", "м": "pcb", "М": "pcb",
 };
 /** Инструмент → тип детали. */
 const TOOL_TYPE: Record<PlaceTool, Component["type"]> = {
@@ -91,8 +98,6 @@ const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
 const TOLERANCE_KEY = "maketka.tolerance.v1";
 const CURRENT_KEY = "maketka.showCurrent.v1";
-/** Псевдо-выбор: панель настройки плат. */
-const BOARDS_PANEL = "__boards";
 
 interface Hover {
   hole?: Hole;
@@ -100,6 +105,8 @@ interface Hover {
   componentId?: string;
   wireId?: string;
   traceId?: string;
+  /** Плата под курсором (если под ним нет детали, провода или дорожки). */
+  boardId?: string;
   table?: THREE.Vector3;
   overBoard: boolean;
 }
@@ -112,6 +119,8 @@ export class App {
   selected?: string;
   /** Выбранное щелчком отверстие (в режиме «Выбор»). */
   selectedHole?: Hole;
+  /** Выбранная щелчком плата: её можно тащить мышью. */
+  selectedBoard?: string;
   hover: Hover = { overBoard: false };
 
   private views = new Map<string, ComponentView>();
@@ -125,6 +134,9 @@ export class App {
   private ghost?: THREE.Object3D;
   private ghostRot = 0;
   private drag?: { id: string; offset: THREE.Vector3 };
+  /** Перенос платы: смещение от курсора до центра платы. */
+  private boardDrag?: { id: string; offset: THREE.Vector3; moved: boolean };
+  private boardFrame = 0;
   private down?: { x: number; y: number; t: number };
   private burnedAt = new Map<string, number>();
   private clock = new THREE.Clock();
@@ -150,6 +162,8 @@ export class App {
     mosfet: "2N7000" as MosfetKind,
     psuVolts: 5,
     psuAmps: 0.5,
+    /** Размер новой печатной платы: столбцы × ряды. */
+    pcbSize: "24x14",
     /** "auto" — красный к плюсу, чёрный к минусу, остальные по кругу; иначе цвет из палитры. */
     wireColor: "auto",
   };
@@ -160,9 +174,8 @@ export class App {
     initial: Scene,
   ) {
     this.scene = initial;
-    applyLayout(initial.layout ?? DEFAULT_LAYOUT);
-    this.world.rebuildBoards();
-    this.updateBrand();
+    this.adoptBoards();
+    this.world.rebuildBoards(true);
     this.sim = new Simulation(this.scene, App.loadTolerance());
     try {
       this.showCurrent = localStorage.getItem(CURRENT_KEY) !== "off";
@@ -245,48 +258,130 @@ export class App {
   /** Надпись в шапке панели инструментов: сколько точек на всех макетках. */
   private updateBrand(): void {
     const el = this.ui.tools.querySelector(".brand span");
-    if (el) el.textContent = `${LAYOUT.breadboards * 400} точек`;
+    if (el) el.textContent = `${BOARDS.filter((b) => b.kind === "breadboard").length * 400} точек`;
   }
 
-  /** Открыть панель настройки плат справа. */
-  openBoardsPanel(): void {
-    this.setTool("select");
-    this.selected = BOARDS_PANEL;
-    this.inspectorHtml = "";
-    this.renderInspector();
+  /** Платы сцены (старая раскладка превращается в платы) → отверстия. */
+  private adoptBoards(): void {
+    this.scene.boards = sceneBoards(this.scene);
+    delete this.scene.layout;
+    applyBoards(this.scene.boards);
+    this.updateBrand();
   }
 
   /**
-   * Сменить раскладку плат. Если на отрезаемой части что-то стоит — ничего не меняем
-   * и говорим, что мешает.
+   * Почему плату нельзя положить сюда (пусто — можно): край стола, другая плата
+   * или деталь, стоящая на столе.
    */
-  setLayout(layout: Layout): boolean {
-    const conflicts = layoutConflicts(this.scene, layout);
-    if (conflicts.length) {
-      this.toast(
-        "Не помещается",
-        `На убираемой части стоят: ${conflicts.slice(0, 8).join(", ")}${conflicts.length > 8 ? " и др." : ""}. Уберите их или перенесите — потом уменьшайте.`,
-      );
-      this.inspectorHtml = "";
-      return false;
-    }
-    this.scene.layout = { ...layout };
-    applyLayout(layout);
+  private boardProblem(b: BoardSpec): string | undefined {
+    const r = boardRect(b);
+    if (Math.max(Math.abs(r.x0), Math.abs(r.x1), Math.abs(r.z0), Math.abs(r.z1)) > TABLE_LIMIT) return "Там край стола.";
+    const other = (this.scene.boards ?? []).find((o) => o.id !== b.id && boardsOverlap(o, b));
+    if (other) return `Место занято: там ${boardName(other)}.`;
+    const part = this.scene.components.find(
+      (c) => c.placement.mode === "free" && c.placement.x > r.x0 - 1 && c.placement.x < r.x1 + 1 && c.placement.z > r.z0 - 1 && c.placement.z < r.z1 + 1,
+    );
+    if (part) return `Место занято: там лежит ${part.id}.`;
+    return undefined;
+  }
+
+  /** Новая плата выбранного вида с центром в точке стола (по сетке отверстий). */
+  private newBoard(kind: BoardSpec["kind"], at: THREE.Vector3): BoardSpec {
+    const b: BoardSpec = { id: nextBoardId(kind, this.scene.boards ?? []), kind, x: Math.round(at.x), z: Math.round(at.z) };
+    if (kind === "pcb") [b.cols, b.rows] = this.defaults.pcbSize.split("x").map(Number);
+    return b;
+  }
+
+  /** После изменения набора плат: отверстия, сцена, сохранение. */
+  private boardsChanged(): void {
+    applyBoards(this.scene.boards ?? []);
     this.world.rebuildBoards();
     this.updateBrand();
-    this.selectedHole = undefined;
+    if (this.selectedHole) this.selectedHole = HOLE_BY_ID.get(this.selectedHole.id);
+    if (this.selectedBoard && !boardById(this.selectedBoard)) this.selectedBoard = undefined;
     this.changed();
+  }
+
+  /** Сказать, что мешает, и ничего не менять. */
+  private refuse(title: string, conflicts: string[], advice: string): void {
+    this.toast(title, `На ней стоят: ${conflicts.slice(0, 8).join(", ")}${conflicts.length > 8 ? " и др." : ""}. ${advice}`);
+    this.inspectorHtml = "";
+  }
+
+  /** Убрать плату со стола — только пустую. */
+  removeBoard(id: string): boolean {
+    const b = boardById(id);
+    if (!b) return false;
+    const rest = (this.scene.boards ?? []).filter((x) => x.id !== id);
+    const conflicts = boardConflicts(this.scene, rest);
+    if (conflicts.length) {
+      this.refuse(`${boardName(b)[0].toUpperCase()}${boardName(b).slice(1)} не пустая`, conflicts, "Уберите их — потом плату.");
+      return false;
+    }
+    this.scene.boards = rest;
+    if (this.selectedBoard === id) this.selectedBoard = undefined;
+    if (this.selectedHole?.boardId === id) this.selectedHole = undefined;
+    this.boardsChanged();
     return true;
   }
 
-  private boardsPanel(): [string, string] {
-    const l = LAYOUT;
-    const html = `<div class="eyebrow">стол</div><h2>Платы</h2>
-      ${this.selectField("bbCount", "Макетные платы (ставятся вплотную вправо)", Array.from({ length: MAX_BREADBOARDS }, (_, i) => [String(i + 1), `${i + 1} × 400 точек`]), String(l.breadboards))}
-      ${this.selectField("pcbSize", "Печатная плата", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), `${l.pcbCols}x${l.pcbRows}`)}
-      <p class="sub">Макетки между собой не соединены — как настоящие: шины соединяют проводами. Печатная плата растёт вправо и вниз, всё, что уже стоит, остаётся на месте. Уменьшить можно, только если на отрезаемой части ничего нет.</p>
-      <p class="sub">Размер плат сохраняется вместе со схемой.</p>`;
-    return ["boards", html];
+  /**
+   * Сменить размер печатной платы. Левый верхний угол на месте, поэтому стоящее на плате
+   * не сдвигается. Уменьшить можно, только если на отрезаемой части ничего нет.
+   */
+  resizeBoard(id: string, cols: number, rows: number): boolean {
+    const b = boardById(id);
+    if (!b || b.kind !== "pcb") return false;
+    const r = boardRect(b);
+    const next: BoardSpec = { ...b, cols, rows, x: r.x0 + (cols + 3) / 2, z: r.z0 + (rows + 3) / 2 };
+    const boards = (this.scene.boards ?? []).map((x) => (x.id === id ? next : x));
+    const conflicts = boardConflicts(this.scene, boards);
+    if (conflicts.length) {
+      this.refuse("Не помещается", conflicts, "Уберите их или перенесите — потом уменьшайте.");
+      return false;
+    }
+    const problem = this.boardProblem(next);
+    if (problem) {
+      this.toast("Не помещается", `${problem} Сдвиньте плату или то, что рядом.`);
+      this.inspectorHtml = "";
+      return false;
+    }
+    this.scene.boards = boards;
+    this.boardsChanged();
+    return true;
+  }
+
+  /** Раздел панели о плате: название, размер, что можно сделать. */
+  private boardSection(b: BoardSpec): string {
+    const size = boardSize(b);
+    const mmSize = `${Math.round(size.width * 2.54)} × ${Math.round(size.depth * 2.54)} мм`;
+    const sizeRow =
+      b.kind === "pcb"
+        ? this.selectField("boardSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), `${b.cols}x${b.rows}`)
+        : `<div class="kv"><span>Размер</span><span>400 точек, ${mmSize}</span></div>`;
+    return `<div class="board-section">
+      <div class="eyebrow">плата</div>
+      <h3>${boardName(b)[0].toUpperCase()}${boardName(b).slice(1)}</h3>
+      ${sizeRow}
+      <p class="sub">Чтобы передвинуть, тащите плату мышью — детали, провода и дорожки поедут вместе с ней.</p>
+      <div class="row"><button class="btn inline danger" data-board-act="remove">Убрать плату</button></div>
+    </div>`;
+  }
+
+  private boardPanel(b: BoardSpec): [string, string] {
+    return [`b:${b.id}`, this.boardSection(b)];
+  }
+
+  private boardToolPanel(kind: BoardSpec["kind"]): [string, string] {
+    const html =
+      kind === "breadboard"
+        ? `<div class="eyebrow">новая плата</div><h2>Макетка</h2>
+      <p>400 точек: 30 столбцов по 5 соединённых отверстий и по две шины питания сверху и снизу.</p>
+      <p class="sub">Нажмите на свободное место на столе. Макетки между собой не соединены — как настоящие: соединяйте проводом.</p>`
+        : `<div class="eyebrow">новая плата</div><h2>Печатная плата</h2>
+      ${this.selectField("pcbSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), this.defaults.pcbSize)}
+      <p class="sub">Нажмите на свободное место на столе. Площадки ни с чем не соединены — соединяйте медными дорожками (T).</p>`;
+    return [`bt:${kind}`, html];
   }
 
   // ─── Допуски ───────────────────────────────────────────────────────────
@@ -377,12 +472,12 @@ export class App {
 
   replaceScene(s: Scene): void {
     this.scene = s;
-    applyLayout(s.layout ?? DEFAULT_LAYOUT);
-    this.world.rebuildBoards();
-    this.updateBrand();
+    this.adoptBoards();
+    this.world.rebuildBoards(true);
     this.sim = new Simulation(s, this.sim.tolerance);
     this.selected = undefined;
     this.selectedHole = undefined;
+    this.selectedBoard = undefined;
     this.burnedAt.clear();
     this.cancelPending();
     this.changed();
@@ -422,6 +517,10 @@ export class App {
       this.wireViews.set(w.id, wv);
       this.world.wireLayer.add(wv.mesh);
     }
+    // Для попадания курсора до следующего кадра
+    this.world.componentLayer.updateMatrixWorld(true);
+    this.world.wireLayer.updateMatrixWorld(true);
+    this.world.traceLayer.updateMatrixWorld(true);
     this.refreshMarks();
   }
 
@@ -578,6 +677,7 @@ export class App {
     if (tool !== "select") {
       this.selected = undefined;
       this.selectedHole = undefined;
+      this.selectedBoard = undefined;
     }
     this.updateHint();
     this.inspectorHtml = "";
@@ -665,7 +765,7 @@ export class App {
     if (h.kind === "rail") return undefined;
     // Три подряд вправо; если справа край платы — сдвигаемся влево
     for (const shift of [0, -1, -2]) {
-      const holes = [0, 1, 2].map((k) => holeAt(h.board, h.x + shift + k, h.z));
+      const holes = [0, 1, 2].map((k) => holeAt(h.boardId, h.x + shift + k, h.z));
       if (holes.every((x) => x && x.kind !== "rail")) return holes.map((x) => x!.id);
     }
     return undefined;
@@ -717,11 +817,13 @@ export class App {
         else {
           this.selected = undefined;
           this.selectedHole = undefined;
+          this.selectedBoard = undefined;
           this.inspectorHtml = "";
           this.refreshMarks();
         }
       } else if (e.key === "Delete" || e.key === "Backspace") {
         if (this.selected) this.remove(this.selected);
+        else if (this.selectedBoard) this.removeBoard(this.selectedBoard);
         else this.setTool("delete");
       } else if (e.key === "r" || e.key === "R" || e.key === "к" || e.key === "К") {
         this.rotate();
@@ -777,6 +879,7 @@ export class App {
       return h;
     }
     if (!h.componentId && !h.wireId && !h.traceId) {
+      h.boardId = this.world.pickBoard(ndc)?.boardId;
       h.hole = this.world.pickHole(ndc);
       if (!h.overBoard) h.table = this.world.pickTable(ndc);
     } else if (this.tool !== "select" && this.tool !== "delete") {
@@ -788,6 +891,30 @@ export class App {
   }
 
   private onMove(e: PointerEvent): void {
+    if (this.boardDrag) {
+      const d = this.boardDrag;
+      const p = this.world.pickTablePlane(this.world.ndcFromEvent(e));
+      const b = (this.scene.boards ?? []).find((x) => x.id === d.id);
+      if (!p || !b) return;
+      const x = Math.round(p.x + d.offset.x);
+      const z = Math.round(p.z + d.offset.z);
+      if (x === b.x && z === b.z) return;
+      // На занятое место плата не едет: остаётся на последнем свободном
+      if (this.boardProblem({ ...b, x, z })) return;
+      b.x = x;
+      b.z = z;
+      d.moved = true;
+      applyBoards(this.scene.boards ?? []);
+      // Перестраиваем сцену не чаще раза за кадр
+      if (!this.boardFrame) {
+        this.boardFrame = requestAnimationFrame(() => {
+          this.boardFrame = 0;
+          this.world.rebuildBoards();
+          this.rebuild();
+        });
+      }
+      return;
+    }
     if (this.drag) {
       const p = this.world.pickTable(this.world.ndcFromEvent(e));
       const c = this.component(this.drag.id);
@@ -805,8 +932,12 @@ export class App {
       (this.tool === "delete" && (this.hover.componentId || this.hover.wireId || this.hover.traceId)) ||
       (this.tool === "trace" && this.hover.hole?.board === "pcb") ||
       (this.tool === "wire" && (this.hover.hole || this.hover.pin)) ||
-      (this.isPlaceTool(this.tool) && (this.hover.hole || this.hover.table));
-    el.style.cursor = interactive ? "pointer" : "";
+      (this.isPlaceTool(this.tool) && (this.hover.hole || this.hover.table)) ||
+      ((this.tool === "bb" || this.tool === "pcb") && this.hover.table) ||
+      (this.tool === "delete" && this.hover.boardId);
+    // Выбранную плату можно тащить
+    const grab = this.tool === "select" && !interactive && this.hover.boardId !== undefined && this.hover.boardId === this.selectedBoard;
+    el.style.cursor = grab ? "grab" : interactive ? "pointer" : "";
     this.refreshMarks();
     this.updateGhost();
   }
@@ -822,12 +953,33 @@ export class App {
         this.drag = { id: c.id, offset: new THREE.Vector3(c.placement.x - p.x, 0, c.placement.z - p.z) };
         this.world.controls.enabled = false;
       }
+      return;
+    }
+    // Выбранную плату можно тащить; невыбранная не мешает вращать камеру
+    const b = h.boardId ? boardById(h.boardId) : undefined;
+    if (b && b.id === this.selectedBoard) {
+      const p = this.world.pickTablePlane(this.world.ndcFromEvent(e));
+      if (p) {
+        this.boardDrag = { id: b.id, offset: new THREE.Vector3(b.x - p.x, 0, b.z - p.z), moved: false };
+        this.world.controls.enabled = false;
+      }
     }
   }
 
   private onUp(e: PointerEvent): void {
     const moved = this.down ? Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) : 99;
     const wasDrag = this.drag;
+    if (this.boardDrag) {
+      const d = this.boardDrag;
+      this.boardDrag = undefined;
+      this.world.controls.enabled = true;
+      if (d.moved) {
+        cancelAnimationFrame(this.boardFrame);
+        this.boardFrame = 0;
+        this.boardsChanged();
+        return;
+      }
+    }
     if (this.drag) {
       this.drag = undefined;
       this.world.controls.enabled = true;
@@ -858,7 +1010,9 @@ export class App {
         } else {
           this.selected = undefined;
         }
-        this.selectedHole = !id && !h.wireId && !h.traceId ? h.hole : undefined;
+        const onBoard = !id && !h.wireId && !h.traceId;
+        this.selectedHole = onBoard ? h.hole : undefined;
+        this.selectedBoard = onBoard ? (h.hole?.boardId ?? h.boardId) : undefined;
         this.refreshMarks();
         this.inspectorHtml = "";
         this.renderInspector();
@@ -868,11 +1022,15 @@ export class App {
         if (h.componentId) this.remove(h.componentId);
         else if (h.wireId) this.remove(h.wireId);
         else if (h.traceId) this.remove(h.traceId);
+        else if (h.boardId) this.removeBoard(h.boardId);
         return;
       case "wire":
         return this.clickWire();
       case "trace":
         return this.clickTrace();
+      case "bb":
+      case "pcb":
+        return this.clickBoard(this.tool === "bb" ? "breadboard" : "pcb");
       default:
         return this.clickPlace(this.tool);
     }
@@ -917,6 +1075,7 @@ export class App {
       return;
     }
     if (h.id === this.pendingPad.id) return this.cancelPending();
+    if (h.boardId !== this.pendingPad.boardId) return this.setHint("Дорожка не переходит с платы на плату. Между платами — провод.");
     const traces = (this.scene.traces ??= []);
     // Дорожка, проходящая по площадкам, соединяется с каждой из них — делим на отрезки
     const pads = padsAlong(this.pendingPad.id, h.id);
@@ -930,6 +1089,19 @@ export class App {
     this.clearGhost();
     this.changed();
     this.updateHint();
+  }
+
+  /** Положить новую плату на свободное место стола. */
+  private clickBoard(kind: BoardSpec["kind"]): void {
+    const at = this.hover.table;
+    if (!at) return this.setHint(this.hover.overBoard ? "Здесь уже плата. Нажмите на свободное место на столе." : "");
+    const b = this.newBoard(kind, at);
+    const problem = this.boardProblem(b);
+    if (problem) return this.setHint(`${problem} Выберите место посвободнее.`);
+    (this.scene.boards ??= []).push(b);
+    this.clearGhost();
+    this.boardsChanged();
+    this.toast(`${boardName(b)[0].toUpperCase()}${boardName(b).slice(1)} на столе`, "Чтобы передвинуть, выберите её («Выбор», 1) и тащите мышью. Убрать — инструментом «Удалить» или в панели платы.");
   }
 
   private nextTraceId(): string {
@@ -998,7 +1170,7 @@ export class App {
         return;
       }
       if (this.pendingHole.id === h.hole.id) return this.cancelPending();
-      if (this.pendingHole.board !== h.hole.board) return this.setHint("Выводы детали должны быть на одной плате. Между платами — провод.");
+      if (this.pendingHole.boardId !== h.hole.boardId) return this.setHint("Выводы детали должны быть на одной плате. Между платами — провод.");
       const span = Math.hypot(this.pendingHole.x - h.hole.x, this.pendingHole.z - h.hole.z);
       if (span > MAX_LEAD_SPAN) return this.setHint(`Слишком далеко: выводы дотянутся максимум на ${MAX_LEAD_SPAN} отверстий. Для дальних точек используйте провод.`);
       const c = this.newComponent(tool, { mode: "board", holes: [this.pendingHole.id, h.hole.id] });
@@ -1063,6 +1235,7 @@ export class App {
     const sel = this.selected ? this.component(this.selected) : undefined;
     if (sel?.placement.mode === "board") for (const id of sel.placement.holes) marks.set(id, "#b0612a");
     this.world.markHoles(marks);
+    this.world.highlightBoard(this.tool === "select" ? this.selectedBoard : undefined);
   }
 
   private updateGhost(): void {
@@ -1074,8 +1247,16 @@ export class App {
       const geom = new THREE.TubeGeometry(wireCurve(a, target), 40, mm(0.75), 8, false);
       return this.showGhost(new THREE.Mesh(geom));
     }
-    if (this.tool === "trace" && this.pendingPad && h.hole?.board === "pcb" && h.hole.id !== this.pendingPad.id) {
+    if (this.tool === "trace" && this.pendingPad && h.hole?.boardId === this.pendingPad.boardId && h.hole.id !== this.pendingPad.id) {
       return this.showGhost(buildTraceView("ghost", this.pendingPad, h.hole).mesh);
+    }
+    if ((this.tool === "bb" || this.tool === "pcb") && h.table) {
+      const b = this.newBoard(this.tool === "bb" ? "breadboard" : "pcb", h.table);
+      if (this.boardProblem(b)) return this.clearGhost();
+      const size = boardSize(b);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(size.width, size.height, size.depth));
+      box.position.set(b.x, size.height / 2, b.z);
+      return this.showGhost(box);
     }
     if (!this.isPlaceTool(this.tool)) return this.clearGhost();
     const tool = this.tool;
@@ -1123,6 +1304,8 @@ export class App {
     if (t === "wire") s = this.pendingEnd ? "Второй конец: <b>отверстие</b> или <b>вывод</b> детали. Esc — отмена." : "Первый конец провода: <b>отверстие</b> или <b>вывод</b> детали на столе.";
     else if (t === "smd") s = "SMD кладётся <b>на стол</b>, провода паяются к торцам. R — повернуть.";
     else if (t === "battery") s = "Нажмите на стол рядом с платой. R — повернуть.";
+    else if (t === "bb") s = "Нажмите на свободное место на столе — туда ляжет макетка на 400 точек.";
+    else if (t === "pcb") s = "Нажмите на свободное место на столе — туда ляжет печатная плата. Размер — в панели справа.";
     else if (t === "psu") s = "Нажмите на стол рядом с платой. Напряжение и ограничение тока — в панели справа.";
     else if (t === "trace") s = this.pendingPad
       ? `Дорожка от <b>${holeLabel(this.pendingPad.id)}</b>: следующая площадка. Щелчок по той же или Esc — закончить.`
@@ -1149,9 +1332,7 @@ export class App {
     const target = this.selected;
     let html: string;
     let key: string;
-    if (target === BOARDS_PANEL) {
-      [key, html] = this.boardsPanel();
-    } else if (target && this.component(target)) {
+    if (target && this.component(target)) {
       [key, html] = this.componentPanel(this.component(target)!, true);
     } else if (target && (this.scene.traces ?? []).some((t) => t.id === target)) {
       [key, html] = this.tracePanel(target);
@@ -1159,6 +1340,10 @@ export class App {
       [key, html] = this.wirePanel(target);
     } else if (this.selectedHole && this.tool === "select") {
       [key, html] = this.holePanel(this.selectedHole);
+    } else if (this.selectedBoard && boardById(this.selectedBoard) && this.tool === "select") {
+      [key, html] = this.boardPanel(boardById(this.selectedBoard)!);
+    } else if (this.tool === "bb" || this.tool === "pcb") {
+      [key, html] = this.boardToolPanel(this.tool === "bb" ? "breadboard" : "pcb");
     } else if (this.isPlaceTool(this.tool)) {
       [key, html] = this.newPartPanel(this.tool);
     } else if (this.tool === "wire") {
@@ -1482,7 +1667,8 @@ export class App {
       <div class="kv"><span>Соединено с</span><span>${describeNode(h.node)}</span></div>
       <div class="kv"><span>Потенциал</span><span>${v === undefined ? "не подключено" : formatSI(v, "В")}</span></div>
       <div class="kv"><span>Занято</span><span>${occ ?? "свободно"}</span></div>
-      <p class="sub">Подсвечены все отверстия, соединённые с этим внутри платы. Esc — закрыть.</p>`;
+      <p class="sub">Подсвечены все отверстия, соединённые с этим внутри платы. Esc — закрыть.</p>
+      ${boardById(h.boardId) ? this.boardSection(boardById(h.boardId)!) : ""}`;
     return [`h:${h.id}`, html];
   }
 
@@ -1630,6 +1816,13 @@ export class App {
         this.renderInspector();
       });
     });
+    root.querySelectorAll<HTMLButtonElement>("[data-board-act]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = this.selectedHole?.boardId ?? this.selectedBoard;
+        if (id && btn.dataset.boardAct === "remove") this.removeBoard(id);
+        this.renderInspector();
+      });
+    });
     root.querySelectorAll<HTMLButtonElement>("[data-act]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = this.selected;
@@ -1668,10 +1861,16 @@ export class App {
   }
 
   private applyField(field: string, value: string): void {
-    if (field === "bbCount" || field === "pcbSize") {
-      const [cols, rows] = field === "pcbSize" ? value.split("x").map(Number) : [LAYOUT.pcbCols, LAYOUT.pcbRows];
-      const breadboards = field === "bbCount" ? Number(value) : LAYOUT.breadboards;
-      this.setLayout({ breadboards, pcbCols: cols, pcbRows: rows });
+    if (field === "pcbSize") {
+      this.defaults.pcbSize = value;
+      this.inspectorHtml = "";
+      this.updateGhost();
+      return;
+    }
+    if (field === "boardSize") {
+      const id = this.selectedHole?.boardId ?? this.selectedBoard;
+      const [cols, rows] = value.split("x").map(Number);
+      if (id) this.resizeBoard(id, cols, rows);
       this.inspectorHtml = "";
       this.renderInspector();
       return;

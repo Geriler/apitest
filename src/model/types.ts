@@ -1,6 +1,6 @@
 /** Модель песочницы: что стоит на столе и как соединено. Без Three.js. */
 
-import { holeExistsIn, type Layout } from "./breadboard";
+import { DEFAULT_BOARDS, boardsFromLayout, holeIdsFor, type BoardSpec, type Layout } from "./breadboard";
 
 export type SmdSize = "1206" | "0805" | "0603" | "0402";
 
@@ -232,7 +232,9 @@ export const TRACE_OHM_PER_MM = 1.72e-8 / (TRACE_WIDTH_MM * 1e-3 * 35e-6) / 1000
 export interface Scene {
   components: Component[];
   wires: Wire[];
-  /** Раскладка плат (в старых сохранениях нет — значит, одна макетка и плата 24 × 14). */
+  /** Платы на столе. Нет — стартовый набор (макетка и печатная плата 24 × 14). */
+  boards?: BoardSpec[];
+  /** Старый формат раскладки плат: при загрузке превращается в boards. */
   layout?: Layout;
   /** Дорожки печатной платы (в старых сохранениях может не быть). */
   traces?: Trace[];
@@ -299,20 +301,26 @@ export function canGoOnBoard(type: ComponentType, variant?: "tht" | "smd"): bool
   return true;
 }
 
+/** Платы сцены: из boards, из старой раскладки или стартовый набор. */
+export function sceneBoards(scene: Scene): BoardSpec[] {
+  return scene.boards ?? (scene.layout ? boardsFromLayout(scene.layout) : DEFAULT_BOARDS.map((b) => ({ ...b })));
+}
+
 /**
- * Что помешает перейти на раскладку: детали, провода и дорожки, стоящие в отверстиях,
- * которых в новой раскладке не будет. Пустой список — можно менять.
+ * Что помешает перейти на такой набор плат: детали, провода и дорожки в отверстиях,
+ * которых в нём не будет. Пустой список — можно менять.
  */
-export function layoutConflicts(scene: Scene, layout: Layout): string[] {
+export function boardConflicts(scene: Scene, boards: readonly BoardSpec[]): string[] {
+  const ids = holeIdsFor(boards);
   const out = new Set<string>();
   for (const c of scene.components) {
-    if (c.placement.mode === "board" && c.placement.holes.some((h) => !holeExistsIn(h, layout))) out.add(c.id);
+    if (c.placement.mode === "board" && c.placement.holes.some((h) => !ids.has(h))) out.add(c.id);
   }
   for (const w of scene.wires) {
-    if ([w.a, w.b].some((e) => "hole" in e && !holeExistsIn(e.hole, layout))) out.add(w.id);
+    if ([w.a, w.b].some((e) => "hole" in e && !ids.has(e.hole))) out.add(w.id);
   }
   for (const t of scene.traces ?? []) {
-    if (!holeExistsIn(t.a, layout) || !holeExistsIn(t.b, layout)) out.add(t.id);
+    if (!ids.has(t.a) || !ids.has(t.b)) out.add(t.id);
   }
   return [...out];
 }

@@ -4,7 +4,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { BOARD, HOLES, LAYOUT, PCB, breadboardX, layoutBottom, layoutRight, type Hole } from "../model/breadboard";
+import { BOARDS, HOLES, boardSize, boardsBounds, type BoardSpec, type Hole } from "../model/breadboard";
 import { breadboardTexture, matTexture, pcbTexture, puffTexture } from "./textures";
 
 const MAX_DOTS = 3000;
@@ -34,11 +34,13 @@ export class World {
 
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
-  /** Верхние корпуса макеток (для попадания курсора) и печатная плата. */
-  private breadboards: THREE.Mesh[] = [];
-  private pcb!: THREE.Mesh;
+  /** Корпуса плат (для попадания курсора), в userData.boardId — id платы. */
+  private boardMeshes: THREE.Mesh[] = [];
   private boardGroup = new THREE.Group();
-  private breadboardTexture?: THREE.CanvasTexture;
+  /** Текстуры плат: общие для плат одного вида и размера, не пересоздаются. */
+  private textures = new Map<string, THREE.CanvasTexture>();
+  /** Выделенная плата: её обводит рамка. */
+  private highlightId?: string;
   private table: THREE.Mesh;
   private holeMarks!: THREE.InstancedMesh;
   private dots: THREE.InstancedMesh;
@@ -106,8 +108,8 @@ export class World {
     this.table.receiveShadow = true;
     this.scene.add(this.table);
 
-    // Платы и подсветка отверстий строятся по раскладке (см. rebuildBoards)
-    this.rebuildBoards();
+    // Платы и подсветка отверстий строятся по набору плат (см. rebuildBoards)
+    this.rebuildBoards(true);
 
     // Бегущие точки тока
     this.dots = new THREE.InstancedMesh(
@@ -177,11 +179,12 @@ export class World {
     const shift = (this.insets.right - this.insets.left) / 2;
     if (shift) this.camera.setViewOffset(w, h, shift, 0, w, h);
     else this.camera.clearViewOffset();
-    // Всё, что стоит на столе: слева батарея и блок питания, справа — платы до правого края
-    const left = narrow ? -16 : -44;
-    const right = layoutRight() + 2;
-    const back = -12;
-    const front = layoutBottom() + 2;
+    // Все платы, а слева от них место под батарею и блок питания (на телефоне — только платы)
+    const b = boardsBounds();
+    const left = b.x0 - (narrow ? 0 : 28);
+    const right = b.x1 + 2;
+    const back = b.z0 - 1.5;
+    const front = b.z1 + 2;
     const halfWidth = Math.max((right - left) / 2, ((front - back) / 2) * (narrow ? 0.9 : 1.2));
     const tanH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * aspect * usable;
     const dist = THREE.MathUtils.clamp(halfWidth / tanH, 60, 230);
@@ -199,55 +202,76 @@ export class World {
 
   // ─── Платы ─────────────────────────────────────────────────────────────
 
+  private texture(b: BoardSpec): THREE.CanvasTexture {
+    const key = b.kind === "breadboard" ? "bb" : `pcb${b.cols}x${b.rows}`;
+    let t = this.textures.get(key);
+    if (!t) {
+      t = b.kind === "breadboard" ? breadboardTexture() : pcbTexture(b.cols ?? 24, b.rows ?? 14);
+      this.textures.set(key, t);
+    }
+    return t;
+  }
+
   /**
-   * Построить платы по текущей раскладке (LAYOUT): макетки вплотную вправо, печатная плата
-   * нужного размера, подсветку отверстий — на всё новое число отверстий.
+   * Построить платы по текущему набору (BOARDS) и подсветку на всё число отверстий.
+   * reframe — заново вписать всё в кадр (при загрузке схемы); при переносе и установке
+   * платы камера остаётся, где её поставили.
    */
-  rebuildBoards(): void {
+  rebuildBoards(reframe = false): void {
     this.scene.remove(this.boardGroup);
     this.boardGroup.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
+      if (!m.isMesh && !(o as THREE.LineSegments).isLineSegments) return;
       m.geometry.dispose();
-      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
-        const map = (mat as THREE.MeshStandardMaterial).map;
-        if (map && map !== this.breadboardTexture) map.dispose();
-        mat.dispose();
-      }
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
     });
     this.boardGroup = new THREE.Group();
-    this.breadboardTexture ??= breadboardTexture();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xece9e0, roughness: 0.7 });
-    const topMat = new THREE.MeshStandardMaterial({ map: this.breadboardTexture, roughness: 0.75 });
-    this.breadboards = [];
-    for (let bb = 0; bb < LAYOUT.breadboards; bb++) {
-      const body = new THREE.Mesh(new THREE.BoxGeometry(BOARD.width, BOARD.height, BOARD.depth), [bodyMat, bodyMat, topMat, bodyMat, bodyMat, bodyMat]);
-      body.position.set(breadboardX(bb), BOARD.height / 2, 0);
+    this.boardMeshes = [];
+    for (const b of BOARDS) {
+      const size = boardSize(b);
+      const top = new THREE.MeshStandardMaterial(
+        b.kind === "breadboard" ? { map: this.texture(b), roughness: 0.75 } : { map: this.texture(b), roughness: 0.45, metalness: 0.05 },
+      );
+      const side = new THREE.MeshStandardMaterial(b.kind === "breadboard" ? { color: 0xece9e0, roughness: 0.7 } : { color: 0x2c6e47, roughness: 0.55 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(size.width, size.height, size.depth), [side, side, top, side, side, side]);
+      body.position.set(b.x, size.height / 2, b.z);
       body.castShadow = true;
       body.receiveShadow = true;
-      this.breadboards.push(body);
+      body.userData.boardId = b.id;
+      this.boardMeshes.push(body);
       this.boardGroup.add(body);
+      if (b.id === this.highlightId) {
+        const frame = new THREE.LineSegments(
+          new THREE.EdgesGeometry(new THREE.BoxGeometry(size.width + 0.3, size.height + 0.3, size.depth + 0.3)),
+          new THREE.LineBasicMaterial({ color: 0xe0955c }),
+        );
+        frame.position.copy(body.position);
+        this.boardGroup.add(frame);
+      }
     }
-    const fr4 = new THREE.MeshStandardMaterial({ color: 0x2c6e47, roughness: 0.55 });
-    const pcbTop = new THREE.MeshStandardMaterial({ map: pcbTexture(), roughness: 0.45, metalness: 0.05 });
-    this.pcb = new THREE.Mesh(new THREE.BoxGeometry(PCB.width, PCB.height, PCB.depth), [fr4, fr4, pcbTop, fr4, fr4, fr4]);
-    this.pcb.position.set(PCB.x, PCB.height / 2, PCB.z);
-    this.pcb.castShadow = true;
-    this.pcb.receiveShadow = true;
-    this.boardGroup.add(this.pcb);
     // Подсветка отверстий: квадраты над гнёздами, по умолчанию скрыты
     this.holeMarks = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(0.62, 0.62).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false }),
-      HOLES.length,
+      Math.max(1, HOLES.length),
     );
     this.holeMarks.renderOrder = 2;
     this.clearHoleMarks();
     this.boardGroup.add(this.holeMarks);
     this.scene.add(this.boardGroup);
-    // Платы поменялись (или загружена другая схема) — показываем всё заново
-    this.userMovedCamera = false;
-    if (this.ready) this.resize();
+    // Курсор может попасть в новые платы раньше, чем их нарисует следующий кадр
+    this.boardGroup.updateMatrixWorld(true);
+    if (reframe) {
+      this.userMovedCamera = false;
+      if (this.ready) this.resize();
+    }
+  }
+
+  /** Обвести плату рамкой (или снять рамку). */
+  highlightBoard(id: string | undefined): void {
+    if (id === this.highlightId) return;
+    this.highlightId = id;
+    this.rebuildBoards();
   }
 
   // ─── Отверстия ─────────────────────────────────────────────────────────
@@ -296,13 +320,26 @@ export class World {
   }
 
   /** Верхняя грань какой-либо платы под курсором. */
-  private boardHit(ndc: THREE.Vector2): { point: THREE.Vector3; board: Hole["board"] } | undefined {
+  private boardHit(ndc: THREE.Vector2): { point: THREE.Vector3; boardId: string } | undefined {
     this.setRay(ndc);
-    const hit = this.raycaster.intersectObjects([...this.breadboards, this.pcb], false)[0];
+    const hit = this.raycaster.intersectObjects(this.boardMeshes, false)[0];
     if (!hit) return undefined;
-    const board = hit.object === this.pcb ? "pcb" : "breadboard";
-    const top = board === "pcb" ? PCB.height : BOARD.height;
-    return hit.point.y > top - 0.01 ? { point: hit.point, board } : undefined;
+    const boardId: string = hit.object.userData.boardId;
+    const top = (hit.object as THREE.Mesh).position.y * 2;
+    return hit.point.y > top - 0.01 ? { point: hit.point, boardId } : undefined;
+  }
+
+  /** Плата под курсором (любая грань) и точка попадания на столе. */
+  pickBoard(ndc: THREE.Vector2): { boardId: string; point: THREE.Vector3 } | undefined {
+    this.setRay(ndc);
+    const hit = this.raycaster.intersectObjects(this.boardMeshes, false)[0];
+    return hit ? { boardId: hit.object.userData.boardId, point: hit.point.clone() } : undefined;
+  }
+
+  /** Точка на плоскости стола под курсором, даже если сверху плата (для переноса плат). */
+  pickTablePlane(ndc: THREE.Vector2): THREE.Vector3 | undefined {
+    this.setRay(ndc);
+    return this.raycaster.intersectObject(this.table, false)[0]?.point.clone();
   }
 
   /** Ближайшее отверстие под курсором (если курсор над платой). */
@@ -312,7 +349,7 @@ export class World {
     let best: Hole | undefined;
     let bestD = 0.6;
     for (const h of HOLES) {
-      if (h.board !== hit.board) continue;
+      if (h.boardId !== hit.boardId) continue;
       const d = Math.hypot(h.x - hit.point.x, h.z - hit.point.z);
       if (d < bestD) {
         bestD = d;
@@ -330,7 +367,7 @@ export class World {
   /** Точка на столе под курсором (мимо платы). */
   pickTable(ndc: THREE.Vector2): THREE.Vector3 | undefined {
     this.setRay(ndc);
-    const hits = this.raycaster.intersectObjects([...this.breadboards, this.pcb, this.table], false);
+    const hits = this.raycaster.intersectObjects([...this.boardMeshes, this.table], false);
     return hits[0]?.object === this.table ? hits[0].point.clone() : undefined;
   }
 
