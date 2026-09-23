@@ -145,6 +145,8 @@
   .btn.inline { box-shadow: none; padding: 5px 10px; }
   .btn.danger { color: var(--danger); }
   .btn[aria-pressed="true"] { background: var(--copper-soft); border-color: var(--copper); }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn:disabled:hover { border-color: var(--line); }
   .kv.actual span:last-child { color: var(--copper); }
   select.btn { width: auto; max-width: 170px; font: 500 13px var(--sans); background: var(--paper); }
   .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -355,6 +357,8 @@
     <button class="btn" id="btn-reroll" hidden title="Те же номиналы, другие экземпляры деталей">Другие экземпляры</button>
     <button class="btn" id="btn-current" aria-pressed="true" title="Бегущие точки тока на проводах и дорожках">Ток: вкл.</button>
     <button class="btn" id="btn-repair">Заменить сгоревшие</button>
+    <button class="btn" id="btn-undo" title="Отменить (Ctrl+Z)" aria-label="Отменить" disabled>↶</button>
+    <button class="btn" id="btn-redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть" disabled>↷</button>
     <button class="btn" id="btn-clear">Очистить</button>
   </div>
 

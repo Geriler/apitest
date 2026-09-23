@@ -108,6 +108,8 @@ const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
 const TOLERANCE_KEY = "maketka.tolerance.v1";
 const CURRENT_KEY = "maketka.showCurrent.v1";
+/** Сколько шагов можно отменить. */
+const HISTORY_LIMIT = 100;
 
 interface Hover {
   hole?: Hole;
@@ -202,6 +204,7 @@ export class App {
       /* по умолчанию показываем */
     }
     this.rebuild();
+    this.snapshot = JSON.stringify(this.scene);
     this.bindInput();
     this.setTool("select");
     // Если кадры редкие, физика догоняет сама
@@ -248,7 +251,74 @@ export class App {
     this.sim.solve();
     this.rebuild();
     this.save();
+    this.record();
     this.inspectorHtml = "";
+  }
+
+  // ─── Отмена и возврат ──────────────────────────────────────────────────
+
+  /** Снимки сцены до изменений (для Ctrl+Z) и отменённые (для Ctrl+Y). */
+  private history: string[] = [];
+  private future: string[] = [];
+  /** Сцена после последнего изменения, как она лежит в истории. */
+  private snapshot = "";
+  /** Вызывается, когда меняется, есть ли что отменять или возвращать (для кнопок). */
+  onHistory?: () => void;
+
+  get canUndo(): boolean {
+    return this.history.length > 0;
+  }
+  get canRedo(): boolean {
+    return this.future.length > 0;
+  }
+
+  /** Запомнить сцену, если она изменилась с прошлого раза. */
+  record(): void {
+    const now = JSON.stringify(this.scene);
+    if (now === this.snapshot) return;
+    if (this.snapshot) this.history.push(this.snapshot);
+    if (this.history.length > HISTORY_LIMIT) this.history.shift();
+    this.future = [];
+    this.snapshot = now;
+    this.onHistory?.();
+  }
+
+  undo(): void {
+    const prev = this.history.pop();
+    if (prev === undefined) return;
+    this.future.push(this.snapshot);
+    this.restore(prev);
+  }
+
+  redo(): void {
+    const next = this.future.pop();
+    if (next === undefined) return;
+    this.history.push(this.snapshot);
+    this.restore(next);
+  }
+
+  /**
+   * Вернуть сцену из снимка. Состояние деталей (нагрев, заряд конденсаторов) хранится
+   * по обозначениям и остаётся; камера остаётся на месте.
+   */
+  private restore(json: string): void {
+    this.snapshot = json;
+    this.scene = JSON.parse(json) as Scene;
+    this.adoptBoards();
+    this.world.rebuildBoards();
+    this.sim.scene = this.scene;
+    this.cancelPending();
+    if (this.selected && !this.component(this.selected) && !this.scene.wires.some((w) => w.id === this.selected) && !(this.scene.traces ?? []).some((t) => t.id === this.selected)) {
+      this.selected = undefined;
+    }
+    if (this.selectedHole) this.selectedHole = HOLE_BY_ID.get(this.selectedHole.id);
+    if (this.selectedBoard && !boardById(this.selectedBoard)) this.selectedBoard = undefined;
+    this.sim.solve();
+    this.rebuild();
+    this.save();
+    this.inspectorHtml = "";
+    this.renderInspector();
+    this.onHistory?.();
   }
 
   private save(): void {
@@ -830,7 +900,15 @@ export class App {
     });
     el.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("keydown", (e) => {
-      if ((e.target as HTMLElement).tagName === "SELECT") return;
+      if ((e.target as HTMLElement).tagName === "SELECT" || (e.target as HTMLElement).tagName === "INPUT") return;
+      // Ctrl+Z — отменить, Ctrl+Y или Ctrl+Shift+Z — вернуть (по коду клавиши: работает и в русской раскладке)
+      if ((e.ctrlKey || e.metaKey) && (e.code === "KeyZ" || e.code === "KeyY")) {
+        e.preventDefault();
+        if (e.code === "KeyY" || e.shiftKey) this.redo();
+        else this.undo();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey) return;
       if (e.key === "Escape") {
         if (this.pendingHole || this.pendingEnd || this.pendingPad) this.cancelPending();
         else if (this.tool !== "select") this.setTool("select");
@@ -1020,7 +1098,8 @@ export class App {
         const id = pressedId ?? h.componentId;
         if (id) {
           const c = this.component(id)!;
-          if (c.type === "switch" && this.selected === id) {
+          // Тумблер щёлкается сразу, с первого нажатия (перетаскивание по столу — не щелчок)
+          if (c.type === "switch") {
             c.closed = !c.closed;
             this.changed();
           }
@@ -1806,7 +1885,7 @@ export class App {
         }
       </div>
       <div class="help">
-        <b>Управление.</b> Нажмите на деталь, провод или отверстие — здесь появятся ток и напряжение. Детали на столе можно перетаскивать. Повторное нажатие на тумблер переключает его. Вращать вид — зажать и тянуть, приближать — колесом.
+        <b>Управление.</b> Нажмите на деталь, провод или отверстие — здесь появятся ток и напряжение. Детали на столе можно перетаскивать. Нажатие на тумблер переключает его. Вращать вид — зажать и тянуть, приближать — колесом.
       </div>`;
     return [`o`, html];
   }
@@ -1867,6 +1946,7 @@ export class App {
       });
       inp.addEventListener("change", () => {
         inp.blur();
+        this.record();
         this.inspectorHtml = "";
       });
     });

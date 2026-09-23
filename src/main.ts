@@ -19,13 +19,13 @@ async function start(): Promise<void> {
   const saved = App.load();
   const app = new App(world, { inspector: $("inspector"), hint: $("hint"), toasts: $("toasts"), tools: $("tools") }, saved ?? demoScene());
   if (!saved) {
-    app.toast("Это пример", "Замкните тумблер SA2 (нажмите на него дважды): резистор R2 22 Ом не выдержит мощности и сгорит. Потом выберите R2 и поставьте номинал побольше.");
+    app.toast("Это пример", "Замкните тумблер SA2 (нажмите на него): резистор R2 22 Ом не выдержит мощности и сгорит. Потом выберите R2 и поставьте номинал побольше.");
   }
 
   const demos = {
     lamps: {
       scene: demoScene,
-      tip: "Замкните тумблер SA2 (нажмите на него дважды): резистор R2 22 Ом не выдержит мощности и сгорит.",
+      tip: "Замкните тумблер SA2 (нажмите на него): резистор R2 22 Ом не выдержит мощности и сгорит.",
     },
     leds: {
       scene: ledDemoScene,
@@ -55,6 +55,15 @@ async function start(): Promise<void> {
     demoSelect.blur();
   });
   $("btn-repair").addEventListener("click", () => app.repairAll());
+  // Отмена и возврат: кнопки активны, только когда есть что отменять или возвращать
+  const undoBtn = $("btn-undo") as HTMLButtonElement;
+  const redoBtn = $("btn-redo") as HTMLButtonElement;
+  app.onHistory = () => {
+    undoBtn.disabled = !app.canUndo;
+    redoBtn.disabled = !app.canRedo;
+  };
+  undoBtn.addEventListener("click", () => app.undo());
+  redoBtn.addEventListener("click", () => app.redo());
   const currentBtn = $("btn-current");
   const showCurrentState = () => {
     currentBtn.setAttribute("aria-pressed", String(app.showCurrent));

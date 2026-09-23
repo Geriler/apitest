@@ -104,7 +104,7 @@ try {
       check(/Резистор 3,3 Ом/.test(await page.textContent("#inspector")), "щелчок по R1 открывает его панель");
       await page.keyboard.press("Escape");
 
-      // Замкнуть SA2 двумя нажатиями мышью: выбрать и переключить
+      // Замкнуть SA2 одним нажатием мышью, второе — разомкнуть, третье — снова замкнуть
       const sa2 = await page.evaluate(() => {
         const a = window.maketka;
         const p = a.views.get("SA2").hotspot.clone();
@@ -112,12 +112,14 @@ try {
         const s = a.world.toScreen(p);
         return { x: s.x, y: s.y };
       });
-      await page.mouse.click(sa2.x, sa2.y);
-      await page.waitForTimeout(150);
-      await page.mouse.click(sa2.x, sa2.y);
-      await page.waitForTimeout(300);
-      const closed = await page.evaluate(() => window.maketka.component("SA2").closed);
-      check(closed, "мышью: SA2 замкнут двумя нажатиями");
+      const clicks = [];
+      for (let i = 0; i < 3; i++) {
+        await page.mouse.click(sa2.x, sa2.y);
+        await page.waitForTimeout(200);
+        clicks.push(await page.evaluate(() => window.maketka.component("SA2").closed));
+      }
+      const closed = clicks[2];
+      check(clicks.join() === "true,false,true", `мышью: SA2 щёлкается с каждого нажатия (${clicks.join(" → ")})`);
       await page.waitForTimeout(1200);
       await page.screenshot({ path: "screenshots/desktop-smoke.png" });
       await page.waitForTimeout(3500);
@@ -524,6 +526,29 @@ try {
       const rated = await page.evaluate(() => ({ watts: window.maketka.component("R1").watts, limit: window.maketka.sim.load(window.maketka.component("R1")).limit }));
       const rAfter = await sizeOf();
       check(rated.watts === 2 && rated.limit === "2 Вт" && rAfter > rBefore * 2, `резистор R1 на 2 Вт: предел ${rated.limit}, корпус ${rBefore.toFixed(2)} → ${rAfter.toFixed(2)}`);
+
+      // Отмена: удалить деталь, Ctrl+Z, Ctrl+Y; «Очистить» тоже отменяется
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("1");
+      const ids = () => page.evaluate(() => window.maketka.scene.components.map((c) => c.id).join());
+      const full = await ids();
+      await page.evaluate(() => window.maketka.remove("R2"));
+      const removed = await ids();
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(200);
+      const undone = await ids();
+      await page.keyboard.press("Control+y");
+      await page.waitForTimeout(200);
+      const redone = await ids();
+      check(!removed.includes("R2") && undone === full && redone === removed, `Ctrl+Z вернул R2 (${undone}), Ctrl+Y снова убрал`);
+      await page.click("#btn-clear");
+      await page.click("#btn-clear");
+      await page.waitForTimeout(300);
+      const cleared = await page.evaluate(() => ({ n: window.maketka.scene.components.length, b: window.maketka.scene.boards.length }));
+      await page.click("#btn-undo");
+      await page.waitForTimeout(300);
+      const back = await page.evaluate(() => ({ ids: window.maketka.scene.components.map((c) => c.id).join(), b: window.maketka.scene.boards.length, redo: !document.getElementById("btn-redo").disabled }));
+      check(cleared.n === 0 && cleared.b === 0 && back.ids === removed && back.b > 0 && back.redo, `кнопка ↶ отменила «Очистить»: детали и платы на месте (${back.ids})`);
     }
 
     check(errors.length === 0, `${viewport.name}: нет ошибок в консоли${errors.length ? ": " + errors.join(" | ") : ""}`);
