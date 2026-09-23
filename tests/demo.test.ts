@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene } from "../src/demo";
+import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene, scopeScene } from "../src/demo";
+import { scopeFrame } from "../src/parts/scope";
 import { DEFAULT_BOARDS, applyBoards, padsAlong } from "../src/model/breadboard";
-import type { Scene } from "../src/model/types";
+import type { Oscilloscope, Scene } from "../src/model/types";
 import { Simulation } from "../src/sim/simulation";
 
 describe("пример схемы", () => {
@@ -220,5 +221,28 @@ describe("пример «Печатная плата и блок питания�
       used.set(e.hole, w.id);
     }
     for (const t of scene.traces!) expect(padsAlong(t.a, t.b)).toEqual([t.a, t.b]);
+  });
+});
+
+describe("пример «Осциллограф: как работает мигалка»", () => {
+  it("на экране коллектор VT1 качается 0 ↔ 7 В, база проваливается ниже −5 В; щупы в свободных отверстиях", () => {
+    const scene = scopeScene();
+    applyBoards(DEFAULT_BOARDS);
+    const holes = scene.components.flatMap((c) => (c.placement.mode === "board" ? c.placement.holes : []));
+    expect(holes).not.toContain("a10");
+    expect(holes).not.toContain("a11");
+    const sim = new Simulation(scene);
+    for (let t = 0; t < 6; t += 0.05) sim.step(0.05);
+    const osc = scene.components.find((c) => c.id === "P1") as Oscilloscope;
+    const f = scopeFrame(osc, sim);
+    const volts = (k: number) => f.channels[k].points.map(([, y]) => (y - f.ground) * f.channels[k].vdiv);
+    // Самописец заполнил весь экран: 5 с при 0,5 с/дел
+    expect(f.channels[0].points[0][0]).toBeLessThan(0.1);
+    expect(Math.min(...volts(0))).toBeLessThan(0.5);
+    expect(Math.max(...volts(0))).toBeGreaterThan(6.5);
+    expect(Math.min(...volts(1))).toBeLessThan(-5);
+    expect(Math.max(...volts(1))).toBeLessThan(1);
+    // Есть минус — ноль посередине экрана
+    expect(f.ground).toBe(4);
   });
 });

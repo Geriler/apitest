@@ -1,5 +1,5 @@
 import { App } from "./app";
-import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene } from "./demo";
+import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene, scopeScene } from "./demo";
 import { World } from "./view/world";
 
 async function start(): Promise<void> {
@@ -38,6 +38,10 @@ async function start(): Promise<void> {
     pcb: {
       scene: pcbScene,
       tip: "Площадки печатной платы соединены медными дорожками — щёлкните по площадке, чтобы увидеть всю цепь. Выберите блок питания G1 и уменьшите ограничение тока до 20 мА: он перейдёт в режим CC.",
+    },
+    scope: {
+      scene: scopeScene,
+      tip: "Осциллограф смотрит на транзистор VT1: жёлтый — коллектор, голубой — база. Когда открывается VT2, конденсатор C2 толкает базу VT1 в минус (≈ −6,5 В), и она медленно возвращается через R2 — так получается ритм. Нажмите на осциллограф P1: там крупный экран, развёртка и «Стоп».",
     },
     blinker: {
       scene: blinkerScene,

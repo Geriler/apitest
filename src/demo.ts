@@ -190,3 +190,19 @@ export function pcbScene(): Scene {
     ],
   };
 }
+
+/**
+ * Мигалка под осциллографом: канал 1 — коллектор VT1 (почти прямоугольник 0 ↔ 7 В), канал 2 — его база.
+ * В момент, когда VT2 открывается, C2 толкает базу VT1 глубоко в минус (≈ −6,5 В), и она по экспоненте
+ * через R2 возвращается к +0,6 В — тогда VT1 открывается снова. Это и задаёт ритм.
+ */
+export function scopeScene(): Scene {
+  const s = blinkerScene();
+  s.components.push({ id: "P1", type: "scope", timeDiv: 0.5, voltsDiv: [0, 0], placement: { mode: "free", x: -6, z: -27, rot: 0 } });
+  s.wires.push(
+    { id: "W9", a: { comp: "P1", pin: 0 }, b: { hole: "top-3" }, color: "#1b1d20" },
+    { id: "W10", a: { comp: "P1", pin: 1 }, b: { hole: "a10" }, color: "#e3b21c" },
+    { id: "W11", a: { comp: "P1", pin: 2 }, b: { hole: "a11" }, color: "#2fb8d1" },
+  );
+  return s;
+}
