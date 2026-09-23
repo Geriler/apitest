@@ -46,7 +46,10 @@ export class App {
   scene: Scene;
   sim: Simulation;
   tool: Tool = "select";
+  /** Выбранная щелчком деталь или провод. Панель справа показывает только выбранное, не наведённое. */
   selected?: string;
+  /** Выбранное щелчком отверстие (в режиме «Выбор»). */
+  selectedHole?: Hole;
   hover: Hover = { overBoard: false };
 
   private views = new Map<string, ComponentView>();
@@ -156,6 +159,7 @@ export class App {
     this.scene = s;
     this.sim = new Simulation(s);
     this.selected = undefined;
+    this.selectedHole = undefined;
     this.burnedAt.clear();
     this.cancelPending();
     this.changed();
@@ -324,7 +328,10 @@ export class App {
     for (const b of this.ui.tools.querySelectorAll<HTMLButtonElement>("[data-tool]")) {
       b.setAttribute("aria-pressed", String(b.dataset.tool === tool));
     }
-    if (tool !== "select") this.selected = undefined;
+    if (tool !== "select") {
+      this.selected = undefined;
+      this.selectedHole = undefined;
+    }
     this.updateHint();
     this.inspectorHtml = "";
     this.renderInspector();
@@ -410,7 +417,9 @@ export class App {
         else if (this.tool !== "select") this.setTool("select");
         else {
           this.selected = undefined;
+          this.selectedHole = undefined;
           this.inspectorHtml = "";
+          this.refreshMarks();
         }
       } else if (e.key === "Delete" || e.key === "Backspace") {
         if (this.selected) this.remove(this.selected);
@@ -541,6 +550,8 @@ export class App {
         } else {
           this.selected = undefined;
         }
+        this.selectedHole = !id && !h.wireId ? h.hole : undefined;
+        this.refreshMarks();
         this.inspectorHtml = "";
         this.renderInspector();
         return;
@@ -660,6 +671,7 @@ export class App {
     if (h.hole && !h.componentId) strip(h.hole, "#f0c9a8", "#b0612a");
     else if (h.hole && this.tool !== "select" && this.tool !== "delete") strip(h.hole, "#f0c9a8", "#b0612a");
     if (this.pendingHole) strip(this.pendingHole, "#f0c9a8", "#b0612a");
+    if (this.selectedHole) strip(this.selectedHole, "#f0c9a8", "#b0612a");
     if (this.pendingEnd && "hole" in this.pendingEnd) strip(HOLE_BY_ID.get(this.pendingEnd.hole)!, "#f0c9a8", "#b0612a");
     // Выделенная деталь на плате: её отверстия
     const sel = this.selected ? this.component(this.selected) : undefined;
@@ -727,15 +739,15 @@ export class App {
   // ─── Инспектор ─────────────────────────────────────────────────────────
 
   renderInspector(): void {
-    const target = this.selected ?? this.hover.componentId ?? this.hover.wireId;
+    const target = this.selected;
     let html: string;
     let key: string;
     if (target && this.component(target)) {
-      [key, html] = this.componentPanel(this.component(target)!, target === this.selected);
+      [key, html] = this.componentPanel(this.component(target)!, true);
     } else if (target && this.scene.wires.some((w) => w.id === target)) {
       [key, html] = this.wirePanel(target);
-    } else if (this.hover.hole) {
-      [key, html] = this.holePanel(this.hover.hole);
+    } else if (this.selectedHole && this.tool === "select") {
+      [key, html] = this.holePanel(this.selectedHole);
     } else if (this.isPlaceTool(this.tool)) {
       [key, html] = this.newPartPanel(this.tool);
     } else {
@@ -869,7 +881,7 @@ export class App {
       <div class="kv"><span>Соединено с</span><span>${describeNode(h.node)}</span></div>
       <div class="kv"><span>Потенциал</span><span>${v === undefined ? "не подключено" : formatSI(v, "В")}</span></div>
       <div class="kv"><span>Занято</span><span>${occ ?? "свободно"}</span></div>
-      <p class="sub">Подсвечены все отверстия, соединённые с этим внутри платы.</p>`;
+      <p class="sub">Подсвечены все отверстия, соединённые с этим внутри платы. Esc — закрыть.</p>`;
     return [`h:${h.id}`, html];
   }
 
@@ -905,7 +917,7 @@ export class App {
         <b>Как устроена макетка.</b> Пять отверстий столбца (a–e или f–j) соединены внутри. Шины + и − вдоль краёв соединены по всей длине. Наведите курсор на отверстие — подсветятся все, что с ним соединены.
       </div>
       <div class="help">
-        <b>Управление.</b> Нажмите на деталь — увидите ток и напряжение. Детали на столе можно перетаскивать. Повторное нажатие на тумблер переключает его. Вращать вид — зажать и тянуть, приближать — колесом.
+        <b>Управление.</b> Нажмите на деталь, провод или отверстие — здесь появятся ток и напряжение. Детали на столе можно перетаскивать. Повторное нажатие на тумблер переключает его. Вращать вид — зажать и тянуть, приближать — колесом.
       </div>`;
     return [`o`, html];
   }

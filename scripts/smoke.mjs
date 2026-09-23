@@ -73,6 +73,19 @@ try {
     check(!horizontalScroll, `${viewport.name}: нет горизонтальной прокрутки`);
 
     if (viewport.name === "desktop") {
+      // Панель детали — только по щелчку, не при наведении
+      const r1 = await page.evaluate(() => {
+        const s = window.maketka.world.toScreen(window.maketka.views.get("R1").hotspot);
+        return { x: s.x, y: s.y };
+      });
+      await page.mouse.move(r1.x, r1.y);
+      await page.waitForTimeout(400);
+      check(!/Резистор 3,3 Ом/.test(await page.textContent("#inspector")), "наведение на R1 не открывает его панель");
+      await page.mouse.click(r1.x, r1.y);
+      await page.waitForTimeout(400);
+      check(/Резистор 3,3 Ом/.test(await page.textContent("#inspector")), "щелчок по R1 открывает его панель");
+      await page.keyboard.press("Escape");
+
       // Замкнуть SA2 двумя нажатиями мышью: выбрать и переключить
       const sa2 = await page.evaluate(() => {
         const a = window.maketka;
