@@ -55,6 +55,41 @@ async function start(): Promise<void> {
     demoSelect.blur();
   });
   $("btn-repair").addEventListener("click", () => app.repairAll());
+
+  // Группы инструментов и меню «Настройки»: открыто не больше одного, щелчок мимо закрывает
+  const groups = [...document.querySelectorAll<HTMLDetailsElement>("#tools details.group")];
+  const menus = [...groups, $("settings-menu") as HTMLDetailsElement];
+  for (const d of menus) {
+    d.addEventListener("toggle", () => {
+      if (d.open) for (const o of menus) if (o !== d) o.open = false;
+    });
+  }
+  document.addEventListener("pointerdown", (e) => {
+    for (const d of menus) if (d.open && !d.contains(e.target as Node)) d.open = false;
+  });
+  $("tools").addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest(".group-body [data-tool]")) for (const g of groups) g.open = false;
+  });
+  // Заголовок группы подсвечен и показывает значок выбранного в ней инструмента
+  app.onTool = (tool) => {
+    for (const g of groups) {
+      const chosen = g.querySelector<HTMLElement>(`.group-body [data-tool="${tool}"]`);
+      const head = g.querySelector("summary")!;
+      head.classList.toggle("active", !!chosen);
+      head.title = chosen?.title ?? head.querySelector(".gname")!.textContent!;
+      const icon = (chosen ?? g.querySelector<HTMLElement>(".group-body [data-tool]"))!.querySelector("svg")!.cloneNode(true);
+      head.querySelector("svg")!.replaceWith(icon);
+    }
+  };
+  app.onTool(app.tool);
+
+  // «?» — сводка по схеме и подсказки
+  const helpBtn = $("btn-help");
+  helpBtn.addEventListener("click", () => {
+    app.showHelp = !app.showHelp;
+    helpBtn.setAttribute("aria-pressed", String(app.showHelp));
+    app.renderInspector();
+  });
   // Отмена и возврат: кнопки активны, только когда есть что отменять или возвращать
   const undoBtn = $("btn-undo") as HTMLButtonElement;
   const redoBtn = $("btn-redo") as HTMLButtonElement;

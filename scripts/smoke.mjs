@@ -34,6 +34,11 @@ const browser = await chromium.launch({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
 });
 const failures = [];
+/** Кнопки допусков, тока и замены — в меню «Настройки»: открыть его, если закрыто, и нажать. */
+async function settingsClick(page, selector) {
+  if (!(await page.evaluate(() => document.getElementById("settings-menu").open))) await page.click("#settings-menu > summary");
+  await page.click(selector);
+}
 const check = (ok, what) => {
   console.log(`${ok ? "ok  " : "FAIL"} ${what}`);
   if (!ok) failures.push(what);
@@ -70,13 +75,13 @@ try {
     // Режим допусков: включить, другие экземпляры, выключить — номинал возвращается
     const hlI = () => page.evaluate(() => window.maketka.sim.current(window.maketka.component("HL1")));
     const nominalI = await hlI();
-    await page.click("#btn-tol");
+    await settingsClick(page, "#btn-tol");
     const realI = await hlI();
     const rerollShown = await page.isVisible("#btn-reroll");
-    await page.click("#btn-reroll");
+    await settingsClick(page, "#btn-reroll");
     const otherI = await hlI();
     await page.screenshot({ path: `screenshots/${viewport.name}-tolerance.png` });
-    await page.click("#btn-tol");
+    await settingsClick(page, "#btn-tol");
     const backI = await hlI();
     check(
       realI !== nominalI && otherI !== realI && backI === nominalI && rerollShown && !(await page.isVisible("#btn-reroll")),
@@ -124,6 +129,27 @@ try {
     }
 
     if (viewport.name === "desktop") {
+      // Панель инструментов: группы раскрываются, выбор инструмента закрывает группу и подсвечивает её
+      await page.click('details[data-group="power"] > summary');
+      const opened = await page.isVisible('[data-tool="psu"]');
+      await page.click('[data-tool="psu"]');
+      await page.waitForTimeout(200);
+      const grp = await page.evaluate(() => ({
+        tool: window.maketka.tool,
+        open: document.querySelector('details[data-group="power"]').open,
+        active: document.querySelector('details[data-group="power"] > summary').classList.contains("active"),
+      }));
+      check(opened && grp.tool === "psu" && !grp.open && grp.active, `группа «Питание»: раскрылась, выбран блок питания, группа закрыта и подсвечена`);
+      await page.keyboard.press("1");
+      // Сводка справа — только по «?»
+      const hiddenByDefault = await page.evaluate(() => document.getElementById("inspector").hidden);
+      await page.click("#btn-help");
+      await page.waitForTimeout(200);
+      const helpShown = await page.evaluate(() => !document.getElementById("inspector").hidden && /Как устроена макетка/.test(document.getElementById("inspector").textContent));
+      await page.click("#btn-help");
+      await page.waitForTimeout(200);
+      check(hiddenByDefault && helpShown && (await page.evaluate(() => document.getElementById("inspector").hidden)), "сводка и подсказки справа — только по кнопке «?»");
+
       // Панель детали — только по щелчку, не при наведении
       const r1 = await page.evaluate(() => {
         const s = window.maketka.world.toScreen(window.maketka.views.get("R1").hotspot);
@@ -441,12 +467,12 @@ try {
 
       // Ток: выключить точки — показания остаются
       const dotsOn = await page.evaluate(() => window.maketka.world.dots.count);
-      await page.click("#btn-current");
+      await settingsClick(page, "#btn-current");
       await page.waitForTimeout(300);
       const dotsOff = await page.evaluate(() => window.maketka.world.dots.count);
       const stillCC = await page.evaluate(() => window.maketka.sim.psuMode.get("G1"));
       check(dotsOn > 0 && dotsOff === 0 && stillCC === "CC", `кнопка «Ток»: точек ${dotsOn} → ${dotsOff}, расчёт идёт (${stillCC})`);
-      await page.click("#btn-current");
+      await settingsClick(page, "#btn-current");
 
       // Платы как предметы: положить, выбрать, перетащить, убрать
       const scr = (x, y, z) =>

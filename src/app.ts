@@ -766,8 +766,14 @@ export class App {
 
   // ─── Инструменты ───────────────────────────────────────────────────────
 
+  /** Вызывается при смене инструмента (подсветка групп в панели инструментов). */
+  onTool?: (tool: string) => void;
+  /** Сводка по схеме и подсказки справа — только по кнопке «?». */
+  showHelp = false;
+
   setTool(tool: Tool): void {
     this.tool = tool;
+    this.onTool?.(tool);
     this.cancelPending();
     this.ghostRot = 0;
     for (const b of this.ui.tools.querySelectorAll<HTMLButtonElement>("[data-tool]")) {
@@ -1542,8 +1548,8 @@ export class App {
     } else {
       [key, html] = this.overviewPanel();
     }
-    // На узком экране общий список занимал бы полэкрана — показываем панель только по делу
-    this.ui.inspector.hidden = key === "o" && window.innerWidth <= 760;
+    // Сводка и подсказки — только по кнопке «?»; иначе панель справа видна, лишь когда есть что показать
+    this.ui.inspector.hidden = key === "o" && !this.showHelp;
     // Не пересоздаём разметку, пока в этой же панели открыт выпадающий список
     const focused = document.activeElement;
     if ((focused instanceof HTMLSelectElement || focused instanceof HTMLInputElement) && this.ui.inspector.contains(focused) && key === this.inspectorKey) return;
