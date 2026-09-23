@@ -36,6 +36,10 @@ const browser = await chromium.launch({
   env: { ...process.env, LC_ALL: "C.UTF-8", LANG: "C.UTF-8" },
 });
 const failures = [];
+/** Раскрыть список инструментов слева (он свёрнут, как «Примеры…»). */
+async function openTools(page) {
+  if (!(await page.evaluate(() => document.getElementById("tools").classList.contains("open")))) await page.click("#tools-toggle");
+}
 /** Открыть панель «Проекты», если она закрыта. */
 async function openProjects(page) {
   if (!(await page.evaluate(() => window.maketka.projectsOpen))) await page.click("#btn-projects");
@@ -136,6 +140,9 @@ try {
 
     if (viewport.name === "desktop") {
       // Панель инструментов: группы раскрываются, выбор инструмента закрывает группу и подсвечивает её
+      // Список инструментов изначально свёрнут
+      const collapsed = await page.evaluate(() => document.getElementById("tools-list").hidden);
+      await openTools(page);
       await page.click('details[data-group="power"] > summary');
       const opened = await page.isVisible('[data-tool="psu"]');
       await page.click('[data-tool="psu"]');
@@ -145,7 +152,8 @@ try {
         open: document.querySelector('details[data-group="power"]').open,
         active: document.querySelector('details[data-group="power"] > summary').classList.contains("active"),
       }));
-      check(opened && grp.tool === "psu" && !grp.open && grp.active, `группа «Питание»: раскрылась, выбран блок питания, группа закрыта и подсвечена`);
+      const afterPick = await page.evaluate(() => ({ hidden: document.getElementById("tools-list").hidden, label: document.querySelector(".brand-tool").textContent }));
+      check(collapsed && opened && grp.tool === "psu" && !grp.open && grp.active && afterPick.hidden && afterPick.label === "Блок питания", `инструменты свёрнуты; раскрыли, выбрали блок питания — список свернулся, в заголовке «${afterPick.label}»`);
       await page.keyboard.press("1");
       // Сводка справа — только по «?»
       const hiddenByDefault = await page.evaluate(() => document.getElementById("inspector").hidden);
@@ -545,6 +553,7 @@ try {
       const bbToast = await page.textContent("#toasts");
       check((await bb2()) && /R9/.test(bbToast ?? ""), "непустая плата не убирается, названа R9");
       await page.evaluate(() => window.maketka.remove("R9"));
+      await openTools(page);
       await page.click('[data-tool="delete"]');
       pt = await scr(bbMoved.x + 5, 3.3, bbMoved.z + 3.5);
       await page.mouse.click(pt.x, pt.y);

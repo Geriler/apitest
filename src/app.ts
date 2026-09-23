@@ -366,7 +366,7 @@ export class App {
 
   /** Надпись в шапке панели инструментов: сколько точек на всех макетках. */
   private updateBrand(): void {
-    const el = this.ui.tools.querySelector(".brand span");
+    const el = this.ui.tools.querySelector(".brand-points");
     if (el) el.textContent = `${BOARDS.filter((b) => b.kind === "breadboard").length * 400} точек`;
   }
 

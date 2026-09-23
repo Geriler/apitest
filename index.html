@@ -99,7 +99,16 @@
     margin-bottom: 4px;
   }
   .brand b { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
-  .brand span { font: 500 11px var(--mono); color: var(--muted); }
+  /* Заголовок — кнопка, раскрывающая список инструментов (по умолчанию он скрыт) */
+  button.brand { width: 100%; background: none; border: 0; border-radius: 7px; color: inherit; font: inherit; cursor: pointer; gap: 8px; align-items: center; }
+  button.brand:hover { background: var(--paper-2); }
+  #tools:not(.open) button.brand { border-bottom: 0; margin-bottom: 0; padding-bottom: 2px; }
+  .brand-tool { margin-left: auto; font: 500 12px var(--sans); color: var(--copper); }
+  .brand-chev { font-size: 12px; color: var(--muted); transition: transform 0.15s; }
+  #tools.open .brand-chev { transform: rotate(180deg); }
+  #tools-list { display: flex; flex-direction: column; gap: 2px; }
+  #tools-list[hidden] { display: none; }
+  .tools-meta { padding: 0 8px 4px; font: 500 11px var(--mono); color: var(--muted); }
   .tool {
     display: grid;
     grid-template-columns: 30px 1fr auto;
@@ -341,7 +350,12 @@
       overflow-x: auto;
       padding: 6px;
     }
-    .brand, .tool-sep, .tool kbd, .group-head .chev { display: none; }
+    .tool-sep, .tool kbd, .group-head .chev, .tools-meta { display: none; }
+    /* Внизу кнопка, список раскрывается над ней полосой */
+    #tools { flex-direction: column-reverse; overflow: visible; right: auto; }
+    #tools.open { right: 16px; }
+    button.brand { border: 0; margin: 0; padding: 4px 8px; }
+    #tools-list { flex-direction: row; overflow-x: auto; }
     /* Список группы — полосой над панелью инструментов */
     .group-body {
       position: fixed;
@@ -381,7 +395,11 @@
   <div id="stage"></div>
 
   <nav id="tools" class="panel" aria-label="Инструменты">
-    <div class="brand"><b>Макетка</b><span>400 точек</span></div>
+    <button class="brand" id="tools-toggle" aria-expanded="false" aria-controls="tools-list" title="Инструменты (горячие клавиши работают и без списка)">
+      <b>Макетка</b><span class="brand-tool">Выбор</span><span class="brand-chev" aria-hidden="true">▾</span>
+    </button>
+    <div id="tools-list" hidden>
+    <div class="tools-meta"><span class="brand-points">400 точек</span></div>
     <button class="tool" data-tool="select" aria-pressed="true" title="Выбор, перемещение, тумблеры">
       <svg viewBox="0 0 30 18"><path d="M11 3l9 6-4 1 3 5-2 1-3-5-3 3z" /></svg>Выбор<kbd>1</kbd>
     </button>
@@ -461,6 +479,7 @@
     <button class="tool" data-tool="delete" aria-pressed="false" title="Удалить деталь или провод">
       <svg viewBox="0 0 30 18"><path d="M10 4l10 10M20 4L10 14" /></svg>Удалить<kbd>Del</kbd>
     </button>
+    </div>
   </nav>
 
   <div id="actions">

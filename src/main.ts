@@ -62,6 +62,10 @@ async function start(): Promise<void> {
   for (const d of menus) {
     d.addEventListener("toggle", () => {
       if (d.open) for (const o of menus) if (o !== d) o.open = false;
+      // На телефоне список группы — полоса прямо над панелью инструментов (её высота зависит от раскрытия)
+      const body = d.querySelector<HTMLElement>(".group-body");
+      if (d.open && body && window.innerWidth <= 760) body.style.bottom = `${window.innerHeight - $("tools").getBoundingClientRect().top + 8}px`;
+      else if (body) body.style.bottom = "";
     });
   }
   document.addEventListener("pointerdown", (e) => {
@@ -70,8 +74,29 @@ async function start(): Promise<void> {
   $("tools").addEventListener("click", (e) => {
     if ((e.target as HTMLElement).closest(".group-body [data-tool]")) for (const g of groups) g.open = false;
   });
+  // Список инструментов свёрнут, как «Примеры…»: заголовок раскрывает, выбор или щелчок мимо сворачивает
+  const tools = $("tools");
+  const toolsList = $("tools-list");
+  const toolsToggle = $("tools-toggle");
+  const setToolsOpen = (open: boolean) => {
+    toolsList.hidden = !open;
+    tools.classList.toggle("open", open);
+    toolsToggle.setAttribute("aria-expanded", String(open));
+    if (!open) for (const g of groups) g.open = false;
+  };
+  toolsToggle.addEventListener("click", () => setToolsOpen(!tools.classList.contains("open")));
+  toolsList.addEventListener("click", (e) => {
+    if ((e.target as HTMLElement).closest("[data-tool]")) setToolsOpen(false);
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (!tools.contains(e.target as Node)) setToolsOpen(false);
+  });
+  const brandTool = tools.querySelector(".brand-tool")!;
+
   // Заголовок группы подсвечен и показывает значок выбранного в ней инструмента
   app.onTool = (tool) => {
+    const btn = tools.querySelector<HTMLElement>(`[data-tool="${tool}"]`);
+    if (btn) brandTool.textContent = (btn.textContent ?? "").replace(btn.querySelector("kbd")?.textContent ?? "", "").trim();
     for (const g of groups) {
       const chosen = g.querySelector<HTMLElement>(`.group-body [data-tool="${tool}"]`);
       const head = g.querySelector("summary")!;
