@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { blinkerScene, demoScene, ledDemoScene } from "../src/demo";
+import { blinkerScene, demoScene, ledDemoScene, mosfetScene } from "../src/demo";
+import type { Scene } from "../src/model/types";
 import { Simulation } from "../src/sim/simulation";
 
 describe("пример схемы", () => {
@@ -116,6 +117,60 @@ describe("пример «Мигалка»", () => {
         expect(used.get(e.hole), `${e.hole}: ${w.id} и ${used.get(e.hole)}`).toBeUndefined();
         used.set(e.hole, w.id);
       }
+    }
+  });
+});
+
+describe("пример «MOSFET: ключ и память затвора»", () => {
+  const find = (s: Scene, id: string) => s.components.find((c) => c.id === id)!;
+  const run = (sim: Simulation, seconds: number) => {
+    for (let t = 0; t < seconds; t += 0.01) sim.step(0.01);
+  };
+  const toggle = (s: Scene, sim: Simulation, id: string, closed: boolean) => {
+    (find(s, id) as { closed: boolean }).closed = closed;
+    sim.solve();
+  };
+
+  it("SA1 включает светодиод, после размыкания резистор 100 кОм закрывает 2N7000", () => {
+    const scene = mosfetScene();
+    const sim = new Simulation(scene);
+    run(sim, 0.3);
+    expect(sim.current(find(scene, "HL1"))).toBeGreaterThan(0.012);
+    toggle(scene, sim, "SA1", false);
+    run(sim, 0.2);
+    expect(sim.current(find(scene, "HL1"))).toBeLessThan(1e-6);
+  });
+
+  it("затвор IRLZ44N помнит заряд: лампа горит после размыкания SA2 и гаснет от SA3", () => {
+    const scene = mosfetScene();
+    const sim = new Simulation(scene);
+    run(sim, 0.2);
+    const lamp = find(scene, "HL2");
+    expect(sim.current(lamp)).toBeLessThan(1e-6);
+    toggle(scene, sim, "SA2", true);
+    run(sim, 0.2);
+    const on = sim.current(lamp);
+    expect(on).toBeGreaterThan(0.07);
+    toggle(scene, sim, "SA2", false);
+    run(sim, 3);
+    expect(sim.current(lamp)).toBeCloseTo(on, 3);
+    toggle(scene, sim, "SA3", true);
+    run(sim, 0.2);
+    expect(sim.current(lamp)).toBeLessThan(1e-6);
+    for (const c of scene.components) expect(sim.state(c.id).burned).toBe(false);
+    expect(sim.nonConverged).toBe(0);
+  });
+
+  it("в раскладке нет занятых дважды отверстий", () => {
+    const used = new Map<string, string>();
+    const scene = mosfetScene();
+    for (const c of scene.components) if (c.placement.mode === "board") for (const h of c.placement.holes) {
+      expect(used.get(h), `${h}: ${c.id} и ${used.get(h)}`).toBeUndefined();
+      used.set(h, c.id);
+    }
+    for (const w of scene.wires) for (const e of [w.a, w.b]) if ("hole" in e) {
+      expect(used.get(e.hole), `${e.hole}: ${w.id} и ${used.get(e.hole)}`).toBeUndefined();
+      used.set(e.hole, w.id);
     }
   });
 });

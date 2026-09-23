@@ -1,5 +1,5 @@
 import { App } from "./app";
-import { blinkerScene, demoScene, ledDemoScene } from "./demo";
+import { blinkerScene, demoScene, ledDemoScene, mosfetScene } from "./demo";
 import { World } from "./view/world";
 
 async function start(): Promise<void> {
@@ -30,6 +30,10 @@ async function start(): Promise<void> {
     leds: {
       scene: ledDemoScene,
       tip: "Разомкните SA1 — светодиод HL1 будет гаснуть несколько секунд: его питает конденсатор C1. Внизу HL3 вставлен наоборот и не горит: нажмите на него и затем F.",
+    },
+    mosfet: {
+      scene: mosfetScene,
+      tip: "Сверху 2N7000 включает светодиод от тумблера SA1 — ток затвора 0. Снизу у IRLZ44N нет стягивающего резистора: замкните и разомкните SA2 — лампа продолжит гореть, затвор «помнит» заряд. SA3 разряжает затвор.",
     },
     blinker: {
       scene: blinkerScene,

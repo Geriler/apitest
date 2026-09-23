@@ -9,6 +9,7 @@ import {
   ELECTROLYTIC_RATED_V,
   LAMPS,
   LEDS,
+  MOSFETS,
   SMD_SIZES,
   THT_RESISTOR,
   TRANSISTORS,
@@ -22,6 +23,8 @@ import {
   type Endpoint,
   type LampKind,
   type LedColor,
+  type Mosfet,
+  type MosfetKind,
   type Pin,
   type Scene,
   type SmdSize,
@@ -33,24 +36,24 @@ import { Simulation, heatThreshold, lampResistance } from "./sim/simulation";
 import { buildComponentView, buildWireView, wireCurve, mm, type ComponentView, type WireView } from "./view/builders";
 import type { World } from "./view/world";
 
-type Tool = "select" | "wire" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "lamp" | "switch" | "battery" | "delete";
-type PlaceTool = "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "lamp" | "switch" | "battery";
+type Tool = "select" | "wire" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "delete";
+type PlaceTool = "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery";
 
 // SMD пока скрыт из интерфейса (вернётся вместе с печатной платой), но сохранённые схемы с ним открываются.
-const PLACE_TOOLS: PlaceTool[] = ["tht", "cap", "diode", "led", "bjt", "lamp", "switch", "battery"];
+const PLACE_TOOLS: PlaceTool[] = ["tht", "cap", "diode", "led", "bjt", "fet", "lamp", "switch", "battery"];
 const TOOL_KEYS: Record<string, Tool> = {
-  "1": "select", "2": "wire", "3": "tht", "4": "cap", "5": "diode", "6": "led", "7": "lamp", "8": "switch", "9": "battery", "0": "bjt",
+  "1": "select", "2": "wire", "3": "tht", "4": "cap", "5": "diode", "6": "led", "7": "lamp", "8": "switch", "9": "battery", "0": "bjt", m: "fet", M: "fet", "ь": "fet", "Ь": "fet",
 };
 /** Инструмент → тип детали. */
 const TOOL_TYPE: Record<PlaceTool, Component["type"]> = {
-  tht: "resistor", smd: "resistor", cap: "capacitor", diode: "diode", led: "led", bjt: "transistor", lamp: "lamp", switch: "switch", battery: "battery",
+  tht: "resistor", smd: "resistor", cap: "capacitor", diode: "diode", led: "led", bjt: "transistor", fet: "mosfet", lamp: "lamp", switch: "switch", battery: "battery",
 };
 /**
  * Обозначения по ЕСКД: R — резистор, C — конденсатор, VD — диод, HL — лампа и светодиод
  * (приборы световой индикации), VT — транзистор, SA — выключатель, GB — батарея.
  */
 const PREFIX: Record<Component["type"], string> = {
-  resistor: "R", lamp: "HL", led: "HL", switch: "SA", battery: "GB", capacitor: "C", diode: "VD", transistor: "VT",
+  resistor: "R", lamp: "HL", led: "HL", switch: "SA", battery: "GB", capacitor: "C", diode: "VD", transistor: "VT", mosfet: "VT",
 };
 const WIRE_COLORS = ["#e3b21c", "#2f9e5a", "#2f6fd1", "#e2762a", "#8e4cc9", "#e9e9e4"];
 /** Палитра проводов для ручного выбора. */
@@ -117,6 +120,7 @@ export class App {
     ceramicUF: 0.1,
     led: "red" as LedColor,
     transistor: "BC547" as TransistorKind,
+    mosfet: "2N7000" as MosfetKind,
     /** "auto" — красный к плюсу, чёрный к минусу, остальные по кругу; иначе цвет из палитры. */
     wireColor: "auto",
   };
@@ -433,6 +437,8 @@ export class App {
         return { id: this.nextId("led"), type: "led", color: this.defaults.led, placement };
       case "bjt":
         return { id: this.nextId("transistor"), type: "transistor", kind: this.defaults.transistor, placement };
+      case "fet":
+        return { id: this.nextId("mosfet"), type: "mosfet", kind: this.defaults.mosfet, placement };
     }
   }
 
@@ -686,7 +692,7 @@ export class App {
     const h = this.hover;
     const boardOk = canGoOnBoard(TOOL_TYPE[tool], tool === "smd" ? "smd" : "tht");
 
-    if (tool === "bjt" && h.hole) {
+    if ((tool === "bjt" || tool === "fet") && h.hole) {
       const holes = this.transistorHoles(h.hole);
       if (!holes) return this.setHint("Транзистор ставится в основное поле: в шине все три вывода оказались бы замкнуты.");
       const occ = this.occupied();
@@ -780,7 +786,7 @@ export class App {
     }
     if (!this.isPlaceTool(this.tool)) return this.clearGhost();
     const tool = this.tool;
-    if (tool === "bjt" && h.hole) {
+    if ((tool === "bjt" || tool === "fet") && h.hole) {
       const holes = this.transistorHoles(h.hole);
       return holes ? this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes })).group) : this.clearGhost();
     }
@@ -825,6 +831,7 @@ export class App {
     else if (t === "smd") s = "SMD кладётся <b>на стол</b>, провода паяются к торцам. R — повернуть.";
     else if (t === "battery") s = "Нажмите на стол рядом с платой. R — повернуть.";
     else if (t === "bjt") s = "Нажмите на отверстие — транзистор займёт его и два соседних справа: <b>коллектор, база, эмиттер</b>. F — перевернуть.";
+    else if (t === "fet") s = `Нажмите на отверстие — MOSFET займёт его и два соседних справа: <b>${mosfetPinNames(this.defaults.mosfet)}</b>. F — перевернуть.`;
     else if (t !== "select" && t !== "delete") {
       // Для полярных деталей первым ставится анод / плюс
       const polar = t === "diode" || t === "led" || (t === "cap" && this.defaults.capVariant === "electrolytic");
@@ -878,6 +885,15 @@ export class App {
     </dl>`;
   }
 
+  private mosfetReadout(c: Mosfet): string {
+    const f = this.sim.mosfet(c);
+    return `<dl class="readout">
+      <div><dt>U<sub>ЗИ</sub></dt><dd>${formatSI(f.vgs, "В")}</dd></div>
+      <div><dt>I<sub>С</sub></dt><dd>${formatSI(this.sim.current(c), "А")}</dd></div>
+      <div><dt>U<sub>СИ</sub></dt><dd>${formatSI(f.vds, "В")}</dd></div>
+    </dl>`;
+  }
+
   private transistorReadout(c: Transistor): string {
     const t = this.sim.transistor(c);
     return `<dl class="readout">
@@ -898,6 +914,13 @@ export class App {
     if (t && k > t) return `<span class="pill bad">ПЕРЕГРУЗКА ×${k.toFixed(1).replace(".", ",")}</span>`;
     if (t && k > t * 0.7) return `<span class="pill warn">${c.type === "lamp" && k <= 1.05 ? "ПОЛНЫЙ НАКАЛ" : "ГРЕЕТСЯ"}</span>`;
     if (c.type === "switch") return c.closed ? `<span class="pill ok">ЗАМКНУТ</span>` : `<span class="pill warn">РАЗОМКНУТ</span>`;
+    if (c.type === "mosfet") {
+      const mode = this.sim.mosfet(c).mode;
+      if (mode === "диод") return `<span class="pill warn">ТОК ЧЕРЕЗ ПАРАЗИТНЫЙ ДИОД</span>`;
+      if (mode === "закрыт") return `<span class="pill warn">ЗАКРЫТ</span>`;
+      if (mode === "насыщение") return `<span class="pill ok">НАСЫЩЕНИЕ — ТОК ЗАДАЁТ ЗАТВОР</span>`;
+      return `<span class="pill ok">ОТКРЫТ</span>`;
+    }
     if (c.type === "transistor") {
       const mode = this.sim.transistor(c).mode;
       if (mode === "инверсный") return `<span class="pill bad">К И Э ПЕРЕПУТАНЫ — ИНВЕРСНЫЙ РЕЖИМ</span>`;
@@ -931,7 +954,11 @@ export class App {
     const polar = isPolar(c) && c.type !== "battery";
     const pinName = c.type === "capacitor" ? ["+", "−"] : ["анод", "катод"];
     const where =
-      c.type === "transistor"
+      c.type === "mosfet"
+        ? c.placement.mode === "board"
+          ? MOSFETS[c.kind].pins.map((r, i) => `${ROLE_RU[r]} ${holeLabel((c.placement as { holes: string[] }).holes[i])}`).join(", ")
+          : "на столе, на проводах"
+        : c.type === "transistor"
         ? c.placement.mode === "board"
           ? `К ${holeLabel(c.placement.holes[0])}, Б ${holeLabel(c.placement.holes[1])}, Э ${holeLabel(c.placement.holes[2])}`
           : "на столе, на проводах"
@@ -998,6 +1025,22 @@ export class App {
         title = `Диод ${DIODE_1N4007.label}`;
         body = `<p class="sub">Пропускает ток только от анода к катоду, падение ≈ 0,6–0,8 В. Кольцо на корпусе — катод. До ${formatSI(DIODE_1N4007.maxA, "А")}.</p>`;
         break;
+      case "mosfet": {
+        const spec = MOSFETS[c.kind];
+        const f = this.sim.mosfet(c);
+        const n = spec.channel === "n";
+        const rds = f.mode === "открыт" && Math.abs(f.id) > 1e-6 ? f.vds / f.id : undefined;
+        title = `MOSFET ${spec.label} (${n ? "N" : "P"}-канал)`;
+        body = `<div class="kv"><span>Ток затвора</span><span>0 А</span></div>
+          <div class="kv"><span>Порог U<sub>пор</sub></span><span>${n ? "" : "−"}${String(spec.vth).replace(".", ",")} В</span></div>
+          ${rds !== undefined ? `<div class="kv"><span>Сопротивление канала</span><span>${formatOhms(rds)}</span></div>` : ""}
+          <div class="kv"><span>Мощность</span><span>${formatSI(this.sim.power(c), "Вт")}</span></div>
+          <p class="sub">Управляется <b>напряжением</b> затвор–исток, ток через затвор не идёт. ${
+            n ? "N-канал открывается, когда затвор выше истока больше чем на порог; исток — к минусу." : "P-канал открывается, когда затвор ниже истока больше чем на порог; исток — к плюсу."
+          } Открытый канал — это малое сопротивление (${spec.rdsNote}). «Насыщение» у полевого транзистора — наоборот, приоткрытый режим: ток задаёт затвор, а не нагрузка. Затвор без стягивающего резистора «помнит» заряд. Внутри есть паразитный диод исток → сток. Выводы слева направо: ${mosfetPinNames(c.kind)}.</p>`;
+        editor = this.selectField("fet", "Тип", Object.entries(MOSFETS).map(([k, v]) => [k, `${v.label} (${v.channel.toUpperCase()}-канал, ${v.pkg})`]), c.kind);
+        break;
+      }
       case "transistor": {
         const spec = TRANSISTORS[c.kind];
         const t = this.sim.transistor(c);
@@ -1034,7 +1077,7 @@ export class App {
     const html = `<div class="eyebrow"><span class="ref">${c.id}</span></div>
       <h2>${title}</h2>
       ${this.statusPill(c)}
-      ${c.type === "transistor" ? this.transistorReadout(c) : this.readout(
+      ${c.type === "transistor" ? this.transistorReadout(c) : c.type === "mosfet" ? this.mosfetReadout(c) : this.readout(
         c.type === "battery" ? -this.sim.voltage(c) : this.sim.voltage(c),
         c.type === "battery" ? Math.abs(this.sim.current(c)) : this.sim.current(c),
         this.sim.power(c),
@@ -1099,7 +1142,7 @@ export class App {
 
   private newPartPanel(tool: PlaceTool): [string, string] {
     const names: Record<PlaceTool, string> = {
-      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: "Диод 1N4007", led: "Светодиод", bjt: "Транзистор", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
+      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: "Диод 1N4007", led: "Светодиод", bjt: "Транзистор", fet: "MOSFET", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
     };
     let editor = "";
     if (tool === "tht" || tool === "smd") editor = this.ohmsSelect(this.defaults.ohms) + (tool === "smd" ? this.smdSelect(this.defaults.smdSize) : "");
@@ -1114,6 +1157,14 @@ export class App {
           : this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(this.defaults.ceramicUF)));
     }
     if (tool === "led") editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), this.defaults.led);
+    if (tool === "fet") {
+      editor = this.selectField(
+        "fet",
+        "Тип",
+        Object.entries(MOSFETS).map(([k, v]) => [k, `${v.label} (${v.channel.toUpperCase()}-канал, ${v.pkg})`]),
+        this.defaults.mosfet,
+      );
+    }
     if (tool === "bjt") {
       editor = this.selectField(
         "bjt",
@@ -1130,6 +1181,8 @@ export class App {
           ? `<p class="sub">Пропускает ток в одну сторону.</p>${polarNote}`
           : tool === "led"
             ? `<p class="sub">Ставьте последовательно с резистором: от 9 В для красного ≈ 330–470 Ом.</p>${polarNote}`
+            : tool === "fet"
+              ? `<p class="sub">Полевой транзистор: управляется <b>напряжением</b> на затворе, ток через затвор не течёт. Ставьте резистор 10–100 кОм от затвора к истоку, иначе затвор «зависнет». Порядок ножек у корпусов разный: сейчас <b>${mosfetPinNames(this.defaults.mosfet)}</b>.</p>`
             : tool === "bjt"
               ? `<p class="sub">Три вывода: <b>коллектор, база, эмиттер</b> — встаёт в три соседних столбца слева направо. Маленький ток базы (через резистор 10–100 кОм) управляет большим током коллектора. Базу без резистора к батарее не подключайте.</p>`
             : tool === "smd"
@@ -1250,6 +1303,7 @@ export class App {
       }
       if (field === "led") this.defaults.led = value as LedColor;
       if (field === "bjt") this.defaults.transistor = value as TransistorKind;
+      if (field === "fet") this.defaults.mosfet = value as MosfetKind;
       this.inspectorHtml = "";
       this.updateHint();
       this.updateGhost();
@@ -1262,6 +1316,7 @@ export class App {
     if (c.type === "capacitor" && field === "uF") c.uF = Number(value);
     if (c.type === "led" && field === "led") c.color = value as LedColor;
     if (c.type === "transistor" && field === "bjt") c.kind = value as TransistorKind;
+    if (c.type === "mosfet" && field === "fet") c.kind = value as MosfetKind;
     // Поменяли номинал — значит, поставили новую деталь
     this.sim.repair(c.id);
     this.burnedAt.delete(c.id);
@@ -1293,7 +1348,17 @@ function label(c: Component): string {
       return `светодиод ${LEDS[c.color].label}`;
     case "transistor":
       return `транзистор ${TRANSISTORS[c.kind].label}, I<sub>к</sub>`;
+    case "mosfet":
+      return `MOSFET ${MOSFETS[c.kind].label}, I<sub>с</sub>`;
   }
+}
+
+const ROLE_RU = { G: "З", D: "С", S: "И" } as const;
+
+/** «исток, затвор, сток» — роли ножек корпуса слева направо. */
+function mosfetPinNames(kind: MosfetKind): string {
+  const names = { G: "затвор", D: "сток", S: "исток" } as const;
+  return MOSFETS[kind].pins.map((r) => names[r]).join(", ");
 }
 
 /** Заголовок и пояснение для уведомления о выходе детали из строя. */
@@ -1309,6 +1374,11 @@ function burnMessage(c: Component): [string, string] {
       return [`Светодиод ${c.id} сгорел`, `Ток больше 30 мА. Поставьте последовательно резистор: R = (U − ${String(LEDS[c.color].vf).replace(".", ",")} В) / 0,02 А.`];
     case "diode":
       return [`Диод ${c.id} сгорел`, "Ток больше 1 А. Ограничьте ток резистором."];
+    case "mosfet":
+      return [
+        `MOSFET ${c.id} сгорел`,
+        `Больше ${String(MOSFETS[c.kind].maxP).replace(".", ",")} Вт без радиатора или ток выше предела. Полевой транзистор греется, когда приоткрыт: подайте на затвор полное напряжение или ограничьте ток нагрузкой.`,
+      ];
     case "transistor":
       return [
         `Транзистор ${c.id} сгорел`,

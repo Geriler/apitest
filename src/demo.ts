@@ -105,3 +105,38 @@ export function blinkerScene(): Scene {
     ],
   };
 }
+
+/**
+ * Пример 4: MOSFET — ключ и «память» затвора. «Крона» 9 В.
+ *
+ * Сверху: 2N7000 (ножки И-З-С в c10–c12) включает красный светодиод через 470 Ом.
+ *   Затвор — тумблер SA1 к плюсу и резистор 100 кОм от затвора к истоку: разомкнули SA1 — погас.
+ * Снизу: IRLZ44N (З-С-И в h20–h22) включает лампу 12 В. Стягивающего резистора нет:
+ *   замкните и разомкните SA2 — лампа продолжит гореть, затвор держит заряд. SA3 замыкает
+ *   затвор на исток и гасит лампу.
+ */
+export function mosfetScene(): Scene {
+  return {
+    components: [
+      { id: "GB1", type: "battery", kind: "9V", placement: { mode: "free", x: -32, z: -4, rot: 0 } },
+      { id: "VT1", type: "mosfet", kind: "2N7000", placement: { mode: "board", holes: ["c10", "c11", "c12"] } },
+      { id: "HL1", type: "led", color: "red", placement: { mode: "board", holes: ["a15", "a12"] } },
+      { id: "R1", type: "resistor", variant: "tht", ohms: 470, smdSize: "0805", placement: { mode: "board", holes: ["top+14", "b15"] } },
+      { id: "SA1", type: "switch", closed: true, placement: { mode: "board", holes: ["top+7", "b11"] } },
+      { id: "R2", type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: { mode: "board", holes: ["e11", "e10"] } },
+      { id: "VT2", type: "mosfet", kind: "IRLZ44N", placement: { mode: "board", holes: ["h20", "h21", "h22"] } },
+      { id: "HL2", type: "lamp", kind: "12V", placement: { mode: "board", holes: ["bot+22", "j21"] } },
+      { id: "SA2", type: "switch", closed: false, placement: { mode: "board", holes: ["bot+16", "i20"] } },
+      { id: "SA3", type: "switch", closed: false, placement: { mode: "board", holes: ["f20", "f22"] } },
+    ],
+    wires: [
+      { id: "W1", a: { comp: "GB1", pin: 0 }, b: { hole: "top-1" }, color: "#1b1d20" },
+      { id: "W2", a: { comp: "GB1", pin: 1 }, b: { hole: "top+1" }, color: "#c8261f" },
+      { id: "W3", a: { hole: "top+25" }, b: { hole: "bot+25" }, color: "#c8261f" },
+      { id: "W4", a: { hole: "top-25" }, b: { hole: "bot-25" }, color: "#1b1d20" },
+      // Истоки на минус
+      { id: "W5", a: { hole: "a10" }, b: { hole: "top-9" }, color: "#2f6fd1" },
+      { id: "W6", a: { hole: "j22" }, b: { hole: "bot-19" }, color: "#2f6fd1" },
+    ],
+  };
+}

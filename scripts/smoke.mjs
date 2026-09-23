@@ -243,6 +243,47 @@ try {
       await page.keyboard.press("f");
       const flipped = await page.evaluate((id) => window.maketka.component(id).placement.holes.join(), q.id);
       check(flipped === "f5,f4,f3", `F переворачивает транзистор: ${flipped}`);
+
+      // Пример 4: MOSFET и память затвора (переключаем тумблеры через модель, мышью это уже проверено)
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("1");
+      await page.selectOption("#demo-select", "mosfet");
+      await page.waitForTimeout(800);
+      const setSwitch = (id, closed) =>
+        page.evaluate(([id, closed]) => {
+          const a = window.maketka;
+          a.component(id).closed = closed;
+          a.changed();
+        }, [id, closed]);
+      const lampI = () => page.evaluate(() => window.maketka.sim.current(window.maketka.component("HL2")));
+      const offBefore = await lampI();
+      await setSwitch("SA2", true);
+      await page.waitForTimeout(600);
+      await setSwitch("SA2", false);
+      await page.waitForTimeout(1200);
+      const stillOn = await lampI();
+      await page.screenshot({ path: "screenshots/desktop-mosfet.png" });
+      await setSwitch("SA3", true);
+      await page.waitForTimeout(600);
+      const offAfter = await lampI();
+      check(offBefore < 1e-6 && stillOn > 0.05 && offAfter < 1e-6, `память затвора: ${offBefore.toExponential(1)} → ${(stillOn * 1000).toFixed(0)} мА после SA2 → ${offAfter.toExponential(1)} после SA3`);
+      // Мелкий TO-92: ищем пиксель рядом с корпусом, который действительно попадает в VT1
+      const fet1 = await page.evaluate(() => {
+        const a = window.maketka;
+        const s = a.world.toScreen(a.views.get("VT1").hotspot);
+        for (let dy = 0; dy <= 30; dy += 2) {
+          for (const dx of [0, -3, 3, -6, 6]) {
+            const p = { clientX: s.x + dx, clientY: s.y + dy };
+            if (a.world.pickObject(a.world.ndcFromEvent(p))?.componentId === "VT1") return { x: p.clientX, y: p.clientY };
+          }
+        }
+        return { x: s.x, y: s.y + 6 };
+      });
+      await page.mouse.click(fet1.x, fet1.y);
+      await page.waitForTimeout(400);
+      const mpanel = await page.textContent("#inspector");
+      check(/2N7000/.test(mpanel ?? "") && /Ток затвора/.test(mpanel ?? ""), "щелчок по VT1: панель MOSFET");
+      await page.screenshot({ path: "screenshots/desktop-mosfet-panel.png" });
     }
 
     check(errors.length === 0, `${viewport.name}: нет ошибок в консоли${errors.length ? ": " + errors.join(" | ") : ""}`);

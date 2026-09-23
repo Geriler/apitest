@@ -10,13 +10,16 @@ import {
   LED_N,
   LED_RATED_A,
   LED_RS,
+  MOSFETS,
   SWITCH_RESISTANCE,
   TRANSISTORS,
   WIRE_RESISTANCE,
+  mosfetPin,
   ratedPower,
   type Component,
   type ComponentState,
   type Endpoint,
+  type Mosfet,
   type Pin,
   type Scene,
   type Transistor,
@@ -124,6 +127,7 @@ const THERMAL: Partial<Record<Component["type"], { threshold: number; rate: numb
   diode: { threshold: 1, rate: 0.6, cooling: 0.5 },
   capacitor: { threshold: 1, rate: 0.4, cooling: 0.3 },
   transistor: { threshold: 1, rate: 0.6, cooling: 0.5 },
+  mosfet: { threshold: 1, rate: 0.6, cooling: 0.5 },
 };
 
 /** С какой нагрузки деталь начинает перегреваться (0 — не греется). */
@@ -175,6 +179,65 @@ function bjt(c: Transistor) {
   };
 }
 
+// ─── MOSFET ────────────────────────────────────────────────────────────────
+
+/** Режим MOSFET. «Насыщение» у полевого транзистора — это НЕ «полностью открыт», как у биполярного. */
+export type MosfetMode = "закрыт" | "открыт" | "насыщение" | "диод";
+
+export interface MosfetState {
+  /** Ток стока в «прямом» смысле (для N — втекает в сток, для P — вытекает), без учёта паразитного диода. */
+  id: number;
+  /** Ток через паразитный диод (в его прямом направлении), А. */
+  idiode: number;
+  /** Для N: Uзи, Uси; для P — с обратным знаком (Uиз, Uис). */
+  vgs: number;
+  vds: number;
+  mode: MosfetMode;
+}
+
+/** Коэффициент наклона в подпороговой области (как n в уравнении диода). */
+const MOS_N = 1.5;
+
+/** Плавное «превышение над порогом»: ≈ Uзи − Uпор выше порога и экспоненциально мало ниже. */
+function overdrive(vgs: number, vth: number): number {
+  const s = 2 * MOS_N * VT;
+  const x = (vgs - vth) / s;
+  return s * (x > 30 ? x : Math.log1p(Math.exp(x)));
+}
+
+/**
+ * Ток канала для N-MOSFET при Uзи, Uси ≥ 0 (сток и исток симметричны: при Uси < 0 они меняются ролями).
+ * Омическая область: K·(Vov·Uси − Uси²/2); насыщение (Uси ≥ Vov): K/2·Vov².
+ */
+export function mosfetChannel(k: number, vth: number, vgs: number, vds: number): number {
+  if (vds < 0) return -mosfetChannel(k, vth, vgs - vds, -vds);
+  const vov = overdrive(vgs, vth);
+  return vds < vov ? k * (vov * vds - (vds * vds) / 2) : (k / 2) * vov * vov;
+}
+
+/**
+ * Ёмкости затвора, Ф. У 2N7000 входная ёмкость — десятки пикофарад, у IRLZ44N ≈ 1,7 нФ; здесь 10 нФ
+ * у всех — как у биполярных, для сходимости на переключениях. Соотношение как у настоящих MOSFET:
+ * затвор–сток примерно в 10 раз меньше, чем затвор–исток. Поэтому «висящий» затвор при стоке на 9 В
+ * наводкой поднимается примерно до 0,8 В — ниже порога (при равных ёмкостях было бы 4,5 В).
+ */
+export const GATE_SOURCE_CAPACITANCE = 10e-9;
+export const GATE_DRAIN_CAPACITANCE = 1e-9;
+
+/** Паразитный диод исток → сток (для N-канала). */
+const BODY_DIODE = { is: 1e-13, n: 1, rs: 0.01 };
+
+function mos(c: Mosfet) {
+  const spec = MOSFETS[c.kind];
+  return {
+    spec,
+    sign: spec.channel === "n" ? 1 : -1,
+    g: mosfetPin(c.kind, "G"),
+    d: mosfetPin(c.kind, "D"),
+    s: mosfetPin(c.kind, "S"),
+  };
+}
+
 export interface Load {
   ratio: number;
   /** Что сравнивается с пределом: для подписи в интерфейсе. */
@@ -207,7 +270,9 @@ export class Simulation {
 
   /** Есть ли что-то, что зависит от времени: конденсаторы или транзисторы (у них ёмкости переходов). */
   private hasCapacitors(): boolean {
-    return this.scene.components.some((c) => (c.type === "capacitor" || c.type === "transistor") && !this.state(c.id).burned);
+    return this.scene.components.some(
+      (c) => (c.type === "capacitor" || c.type === "transistor" || c.type === "mosfet") && !this.state(c.id).burned,
+    );
   }
 
   /** Схема для решателя при заданных линеаризациях диодов и транзисторов и шаге h для конденсаторов. */
@@ -222,6 +287,10 @@ export class Simulation {
       const open = { id: c.id, a, b, r: Infinity };
       if (c.type === "transistor") {
         if (!burned) this.transistorStamps(c, out, extras);
+        continue;
+      }
+      if (c.type === "mosfet") {
+        if (!burned) this.mosfetStamps(c, out, extras);
         continue;
       }
       if (burned && c.type !== "battery" && c.type !== "switch") {
@@ -295,6 +364,53 @@ export class Simulation {
     extras.vccs.push({ a: C, b: E, cp: B, cn: C, g: -gr });
   }
 
+  /**
+   * MOSFET: ток канала линеаризуется в точке (Uзи, Uси): I ≈ I0 + gm·ΔUзи + gds·ΔUси
+   * (производные — численно). Плюс паразитный диод и ёмкости затвора. Для P-канала — всё с обратным знаком.
+   */
+  private mosfetStamps(c: Mosfet, out: Branch[], extras: Required<Extras>): void {
+    const m = mos(c);
+    const [G, D, S] = [pinNode(c, m.g), pinNode(c, m.d), pinNode(c, m.s)];
+    const vgs0 = this.junction.get(`${c.id}:vgs`) ?? 0;
+    const vds0 = this.junction.get(`${c.id}:vds`) ?? 0;
+    const f = (vgs: number, vds: number) => mosfetChannel(m.spec.k, m.spec.vth, vgs, vds);
+    const i0 = f(vgs0, vds0);
+    const dv = 1e-6;
+    const gm = (f(vgs0 + dv, vds0) - f(vgs0 - dv, vds0)) / (2 * dv);
+    const gds = (f(vgs0, vds0 + dv) - f(vgs0, vds0 - dv)) / (2 * dv) + GMIN;
+    // I(С→И) = знак·(I0 − gm·vgs0 − gds·vds0) + gm·(Vз − Vи) + gds·(Vс − Vи)
+    extras.currents.push({ a: D, b: S, j: m.sign * (i0 - gm * vgs0 - gds * vds0) });
+    extras.vccs.push({ a: D, b: S, cp: G, cn: S, g: gm });
+    extras.vccs.push({ a: D, b: S, cp: D, cn: S, g: gds });
+    // Паразитный диод: у N — анод исток, у P — анод сток
+    const body = diodeBranch(BODY_DIODE, this.junction.get(`${c.id}:body`) ?? 0);
+    out.push(m.sign > 0 ? { id: `${c.id}:body`, a: S, b: D, ...body } : { id: `${c.id}:body`, a: D, b: S, ...body });
+    // Ёмкости затвора; они же связывают затвор со схемой, даже если он ни к чему не подключён
+    for (const [key, a, b, cap] of [
+      [`${c.id}:cgs`, G, S, GATE_SOURCE_CAPACITANCE],
+      [`${c.id}:cgd`, G, D, GATE_DRAIN_CAPACITANCE],
+    ] as const) {
+      out.push({ id: key, a, b, r: this.h / cap, emf: -(this.capVoltage.get(key) ?? 0) });
+    }
+  }
+
+  /** Токи и напряжения MOSFET из текущего решения. */
+  mosfet(c: Mosfet): MosfetState {
+    const m = mos(c);
+    const v = (pin: Pin) => this.solution.voltage.get(pinNode(c, pin));
+    const [vg, vd, vs] = [v(m.g), v(m.d), v(m.s)];
+    if (vg === undefined || vd === undefined || vs === undefined) return { id: 0, idiode: 0, vgs: 0, vds: 0, mode: "закрыт" };
+    const vgs = m.sign * (vg - vs);
+    const vds = m.sign * (vd - vs);
+    if (this.state(c.id).burned) return { id: 0, idiode: 0, vgs, vds, mode: "закрыт" };
+    const id = mosfetChannel(m.spec.k, m.spec.vth, vgs, vds);
+    const idiode = this.solution.branches.get(`${c.id}:body`)?.current ?? 0;
+    const vov = overdrive(vgs, m.spec.vth);
+    const mode: MosfetMode =
+      idiode > 1e-4 && vds < 0 ? "диод" : Math.abs(id) < 1e-6 ? "закрыт" : Math.abs(vds) < vov ? "открыт" : "насыщение";
+    return { id, idiode, vgs, vds, mode };
+  }
+
   /** Токи и напряжения транзистора из текущего решения. */
   transistor(c: Transistor): TransistorState {
     const zero: TransistorState = { ic: 0, ib: 0, ie: 0, vbe: 0, vce: 0, vbc: 0, mode: "отсечка" };
@@ -321,6 +437,12 @@ export class Simulation {
     return { ic, ib, ie: ic + ib, vbe, vbc, vce: vbe - vbc, mode };
   }
 
+  /**
+   * Сколько ещё итераций Ньютона можно потратить на текущий вызов step(). Обычный шаг тратит
+   * десятки итераций; бюджет срабатывает только на схемах, которые не сходятся.
+   */
+  private budget = Infinity;
+
   /** Текущий шаг по времени, с (для ёмкостей). */
   private h = SUBSTEP;
 
@@ -334,11 +456,33 @@ export class Simulation {
   private solveAt(h: number): boolean {
     const diodes = this.scene.components.filter((c) => (c.type === "diode" || c.type === "led") && !this.state(c.id).burned);
     const bjts = this.scene.components.filter((c): c is Transistor => c.type === "transistor" && !this.state(c.id).burned);
+    const fets = this.scene.components.filter((c): c is Mosfet => c.type === "mosfet" && !this.state(c.id).burned);
     for (let iter = 1; iter <= 100; iter++) {
       const { out, extras } = this.branches(h);
       this.solution = solveCircuit(out, [], extras);
       this.lastIterations = iter;
+      if (--this.budget < 0) return false;
       let converged = true;
+      for (const t of fets) {
+        const m = mos(t);
+        const volt = (pin: Pin) => this.solution.voltage.get(pinNode(t, pin)) ?? 0;
+        // Шаг по Uзи и Uси ограничен (как fetlim/limvds в SPICE), чтобы Ньютон не перескакивал через порог
+        const steps: [string, number, number][] = [
+          [`${t.id}:vgs`, m.sign * (volt(m.g) - volt(m.s)), 0.5],
+          [`${t.id}:vds`, m.sign * (volt(m.d) - volt(m.s)), 2],
+        ];
+        for (const [key, vterm, maxStep] of steps) {
+          const vold = this.junction.get(key) ?? 0;
+          const vnew = vold + Math.max(-maxStep, Math.min(maxStep, vterm - vold));
+          if (Math.abs(vnew - vold) > 1e-7) converged = false;
+          this.junction.set(key, vnew);
+        }
+        const br = this.solution.branches.get(`${t.id}:body`)!;
+        const vold = this.junction.get(`${t.id}:body`) ?? 0;
+        const vnew = limitJunction(-br.voltage - br.current * BODY_DIODE.rs, vold, BODY_DIODE);
+        if (Math.abs(vnew - vold) > 1e-7) converged = false;
+        this.junction.set(`${t.id}:body`, vnew);
+      }
       for (const t of bjts) {
         const m = bjt(t);
         const volt = (pin: Pin) => this.solution.voltage.get(pinNode(t, pin)) ?? 0;
@@ -386,12 +530,17 @@ export class Simulation {
   voltage(c: Component): number {
     if (c.type === "capacitor") return this.capVoltage.get(c.id) ?? 0;
     if (c.type === "transistor") return this.transistor(c).vce;
+    if (c.type === "mosfet") return this.mosfet(c).vds;
     return -this.branch(c.id).voltage;
   }
 
   /** Ток от вывода 0 к выводу 1 через деталь, А. */
   current(c: Component): number {
     if (c.type === "transistor") return this.transistor(c).ic;
+    if (c.type === "mosfet") {
+      const f = this.mosfet(c);
+      return f.id - f.idiode;
+    }
     return this.branch(c.id).current;
   }
 
@@ -406,6 +555,10 @@ export class Simulation {
       case "transistor": {
         const t = this.transistor(c);
         return Math.max(0, t.vce * t.ic + t.vbe * t.ib);
+      }
+      case "mosfet": {
+        const f = this.mosfet(c);
+        return Math.max(0, f.vds * f.id) + Math.max(0, -f.vds * f.idiode);
       }
       case "battery": {
         // Мощность, которую батарея отдаёт в цепь
@@ -440,6 +593,15 @@ export class Simulation {
         if (c.variant === "ceramic") return { ratio: Math.abs(v) / CERAMIC_RATED_V, what: "напряжение", limit: `${CERAMIC_RATED_V} В` };
         if (v < 0) return { ratio: -v / ELECTROLYTIC_REVERSE_V, what: "обратное напряжение", limit: `${ELECTROLYTIC_REVERSE_V} В` };
         return { ratio: v / ELECTROLYTIC_RATED_V, what: "напряжение", limit: `${ELECTROLYTIC_RATED_V} В` };
+      }
+      case "mosfet": {
+        const spec = MOSFETS[c.kind];
+        const f = this.mosfet(c);
+        const byI = Math.max(Math.abs(f.id), Math.abs(f.idiode)) / spec.maxId;
+        const byP = this.power(c) / spec.maxP;
+        return byI >= byP
+          ? { ratio: byI, what: "ток", limit: spec.maxId >= 1 ? `${spec.maxId} А` : `${spec.maxId * 1000} мА` }
+          : { ratio: byP, what: "мощность", limit: `${String(spec.maxP).replace(".", ",")} Вт` };
       }
       case "transistor": {
         const spec = TRANSISTORS[c.kind];
@@ -479,6 +641,7 @@ export class Simulation {
    * и заряд обновляется. Возвращает детали, вышедшие из строя на этом шаге.
    */
   step(dt: number): Component[] {
+    this.budget = 5000;
     const failed: Component[] = [];
     const transient = this.hasCapacitors();
     const n = transient ? Math.max(1, Math.round(dt / SUBSTEP)) : 1;
@@ -491,6 +654,7 @@ export class Simulation {
       }
     }
     if (transient) this.solveAt(SUBSTEP);
+    this.budget = Infinity;
     return failed;
   }
 
@@ -502,7 +666,8 @@ export class Simulation {
   private advance(h: number, depth: number): Component[] {
     const saved = new Map(this.junction);
     const ok = this.solveAt(h);
-    if (!ok && depth < 15) {
+    // Если схема упорно не сходится, не дробим до бесконечности: страница не должна зависнуть
+    if (!ok && depth < 15 && this.budget > 0) {
       this.junction = saved;
       return [...this.advance(h / 2, depth + 1), ...this.advance(h / 2, depth + 1)];
     }
@@ -512,6 +677,9 @@ export class Simulation {
       if (c.type === "capacitor") this.capVoltage.set(c.id, -this.branch(c.id).voltage);
       if (c.type === "transistor") {
         for (const key of [`${c.id}:cbe`, `${c.id}:cbc`]) this.capVoltage.set(key, -this.branch(key).voltage);
+      }
+      if (c.type === "mosfet") {
+        for (const key of [`${c.id}:cgs`, `${c.id}:cgd`]) this.capVoltage.set(key, -this.branch(key).voltage);
       }
     }
     return ok ? this.heat(h) : [];

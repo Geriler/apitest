@@ -86,6 +86,33 @@ export const TRANSISTORS = {
 };
 export type TransistorKind = keyof typeof TRANSISTORS;
 
+/**
+ * MOSFET: квадратичная модель канала I = K/2·(Uзи − Uпор)² с плавным переходом в подпороговую область.
+ * K подобран по сопротивлению открытого канала из даташита, Uпор — типовое (у экземпляров разброс,
+ * у 2N7000 по даташиту 0,8–3 В). maxP — без радиатора. pins — роли ножек слева направо.
+ */
+export const MOSFETS = {
+  "2N7000": {
+    label: "2N7000", channel: "n" as const, pkg: "TO-92" as const, pins: ["S", "G", "D"] as const,
+    vth: 2.1, k: 0.065, maxId: 0.2, maxP: 0.4, rdsNote: "≈ 2 Ом при Uзи = 10 В",
+  },
+  IRLZ44N: {
+    label: "IRLZ44N", channel: "n" as const, pkg: "TO-220" as const, pins: ["G", "D", "S"] as const,
+    vth: 1.5, k: 13, maxId: 47, maxP: 2, rdsNote: "≈ 0,02 Ом при Uзи = 5 В",
+  },
+  IRF9540N: {
+    label: "IRF9540N", channel: "p" as const, pkg: "TO-220" as const, pins: ["G", "D", "S"] as const,
+    vth: 3, k: 1.2, maxId: 23, maxP: 2, rdsNote: "≈ 0,12 Ом при Uзи = −10 В",
+  },
+};
+export type MosfetKind = keyof typeof MOSFETS;
+export type MosfetRole = "G" | "D" | "S";
+
+/** Номер вывода детали с данной ролью. */
+export function mosfetPin(kind: MosfetKind, role: MosfetRole): 0 | 1 | 2 {
+  return MOSFETS[kind].pins.indexOf(role) as 0 | 1 | 2;
+}
+
 /** Сопротивление провода-перемычки, Ом (≈ 10 см медного провода 22 AWG). */
 export const WIRE_RESISTANCE = 0.005;
 /** Сопротивление замкнутого выключателя, Ом. */
@@ -145,7 +172,16 @@ export interface Transistor extends Base {
   kind: TransistorKind;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor;
+/**
+ * Полевой транзистор с изолированным затвором (MOSFET). Выводы — в порядке ножек корпуса
+ * слева направо (маркировкой к себе); какой из них затвор, сток и исток — см. MOSFETS[kind].pins.
+ */
+export interface Mosfet extends Base {
+  type: "mosfet";
+  kind: MosfetKind;
+}
+
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */
@@ -183,13 +219,14 @@ export function isPolar(c: Component): boolean {
     c.type === "led" ||
     c.type === "battery" ||
     c.type === "transistor" ||
+    c.type === "mosfet" ||
     (c.type === "capacitor" && c.variant === "electrolytic")
   );
 }
 
 /** Сколько выводов у детали. */
 export function pinCount(c: Component): number {
-  return c.type === "transistor" ? 3 : 2;
+  return c.type === "transistor" || c.type === "mosfet" ? 3 : 2;
 }
 
 export function electrolyticSize(uF: number) {
