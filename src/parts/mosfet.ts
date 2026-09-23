@@ -4,6 +4,7 @@ import { pinNode } from "../sim/nodes";
 import type { Simulation } from "../sim/simulation";
 import * as tolerance from "../sim/tolerance";
 import type { Tolerance } from "../sim/tolerance";
+import { transistorView } from "./transistor";
 import type { PartDef, Stamp } from "./types";
 
 /** Режим MOSFET. «Насыщение» у полевого транзистора — это НЕ «полностью открыт», как у биполярного. */
@@ -173,4 +174,5 @@ export const mosfet: PartDef<Mosfet> = {
       : { ratio: byP, what: "мощность", limit: `${String(spec.maxP).replace(".", ",")} Вт` };
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
+  view: transistorView,
 };

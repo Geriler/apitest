@@ -1,3 +1,5 @@
+import * as THREE from "three";
+import { axialLayout, type ComponentView, disposeGroup, mm, tagPickable } from "../view/kit";
 import { diodeSpec, type Diode } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { formatLimit } from "../sim/devices";
@@ -24,4 +26,41 @@ export const diode: PartDef<Diode> = {
     return { ratio: Math.max(0, sim.current(c)) / maxA, what: "ток", limit: formatLimit(maxA, "А") };
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
+  view: diodeView,
 };
+
+// ─── 3D: Диоды 1N4148, 1N4007, 1N5408 ──────────
+
+function diodeView(c: Diode): ComponentView {
+  const group = new THREE.Group();
+  const spec = diodeSpec(c);
+  const L = mm(spec.lengthMm);
+  const r = mm(spec.diameterMm) / 2;
+  const body = new THREE.Group();
+  // 1N4148 — в прозрачном оранжевом стекле с чёрным кольцом, выпрямительные — в чёрном пластике с серым
+  const baseColor = spec.glass ? 0xd9772a : 0x1b1c1f;
+  const bodyMat = spec.glass
+    ? new THREE.MeshPhysicalMaterial({ color: baseColor, roughness: 0.1, transmission: 0.3, transparent: true, opacity: 0.85 })
+    : new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.35 });
+  const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(r, L - 2 * r, 6, 20), bodyMat);
+  capsule.rotation.z = Math.PI / 2;
+  body.add(capsule);
+  // Серебристое кольцо — катод (вывод 1, локальная +X)
+  const bandMat = spec.glass ? new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.5 }) : new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.6, roughness: 0.35 });
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.03, r * 1.03, L * 0.14, 20), bandMat);
+  band.rotation.z = Math.PI / 2;
+  band.position.x = L * 0.3;
+  body.add(band);
+  const { pins, hotspot } = axialLayout(c, group, body, L, r);
+  tagPickable(group, c.id);
+  return {
+    group,
+    pins,
+    hotspot,
+    update(v) {
+      bodyMat.color.set(v.burned ? 0x0c0b0a : baseColor);
+      bodyMat.emissive.setRGB(1, 0.3, 0.05).multiplyScalar(!v.burned && v.heat > 0.3 ? (v.heat - 0.3) * 1.2 : 0);
+    },
+    dispose: () => disposeGroup(group),
+  };
+}

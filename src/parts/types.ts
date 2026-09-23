@@ -7,6 +7,7 @@
 import type { Component } from "../model/types";
 import type { Load, Simulation } from "../sim/simulation";
 import type { Branch, Extras } from "../sim/solver";
+import type { ComponentView } from "../view/kit";
 
 /** Куда деталь складывает свои ветви для решателя. */
 export interface Stamp {
@@ -44,6 +45,8 @@ export interface PartDef<C extends Component = Component> {
   rated?(c: C): number;
   /** Заголовок и пояснение уведомления, когда деталь выходит из строя. */
   burn(c: C): [string, string];
+  /** 3D-вид детали на столе или на плате (без припоя — его добавляет builders.ts). */
+  view(c: C): ComponentView;
 
   // ─── Расчёт ─────────────────────────────────────────────────────────────
 

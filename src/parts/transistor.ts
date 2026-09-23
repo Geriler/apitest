@@ -1,4 +1,6 @@
-import { TRANSISTORS, type Pin, type Transistor } from "../model/types";
+import * as THREE from "three";
+import { boardFrame, type ComponentView, disposeGroup, freeTransform, holePos, lead, mm, tagPickable } from "../view/kit";
+import { TRANSISTORS, type Pin, type Transistor, MOSFETS, Mosfet } from "../model/types";
 import { VT, diodeBranch, limitJunction } from "../sim/devices";
 import { pinNode } from "../sim/nodes";
 import type { Simulation } from "../sim/simulation";
@@ -152,4 +154,137 @@ export const transistor: PartDef<Transistor> = {
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
   reversed: (c, sim) => sim.transistor(c).mode === "инверсный",
+  view: transistorView,
 };
+
+// ─── 3D: Транзистор TO-92 ──────────
+
+function to92Label(label: string): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = "#1d1e21";
+  g.fillRect(0, 0, 256, 256);
+  g.fillStyle = "#c9ccd1";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  // Маркировка одной строкой; шрифт уменьшается, чтобы длинные (IRLZ44N) влезли по ширине
+  let size = 64;
+  do {
+    g.font = `600 ${size}px "IBM Plex Mono", ui-monospace, monospace`;
+    size -= 2;
+  } while (g.measureText(label).width > 230 && size > 20);
+  g.fillText(label, 128, 128);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * Корпус TO-92: полуцилиндр Ø 4,8 мм с плоской гранью, на ней маркировка.
+ * Выводы с шагом 2,54 мм по локальной оси X: коллектор (−X), база, эмиттер (+X);
+ * плоская грань смотрит в +Z — как если держать транзистор маркировкой к себе.
+ */
+export function transistorView(c: Transistor | Mosfet): ComponentView {
+  const group = new THREE.Group();
+  const label = c.type === "transistor" ? TRANSISTORS[c.kind].label : MOSFETS[c.kind].label;
+  const pkg = c.type === "transistor" ? "TO-92" : MOSFETS[c.kind].pkg;
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1d1e21, roughness: 0.55 });
+  const faceMat = new THREE.MeshStandardMaterial({ map: to92Label(label), roughness: 0.55 });
+  const body = new THREE.Group();
+  let h: number;
+  if (pkg === "TO-92") {
+    const r = mm(2.4);
+    h = mm(4.8);
+    // Полуцилиндр задней стороной (z ≤ 0)
+    const back = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 32, 1, false, Math.PI / 2, Math.PI), bodyMat);
+    back.position.y = h / 2;
+    body.add(back);
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(2 * r, h), faceMat);
+    face.position.y = h / 2;
+    body.add(face);
+    // Торцы — полукруги над той же задней половиной: после поворота на −90° вокруг X
+    // верхняя половина круга (y ≥ 0) ложится на z ≤ 0
+    const topCap = new THREE.Mesh(new THREE.CircleGeometry(r, 32, 0, Math.PI), bodyMat);
+    topCap.rotation.x = -Math.PI / 2;
+    topCap.position.y = h;
+    body.add(topCap);
+    const bottomCap = new THREE.Mesh(new THREE.CircleGeometry(r, 32, 0, Math.PI), bodyMat);
+    bottomCap.rotation.x = Math.PI / 2; // смотрит вниз; y ≥ 0 → z ≥ 0, поэтому ещё разворот
+    bottomCap.rotation.z = Math.PI;
+    body.add(bottomCap);
+  } else {
+    // TO-220: пластиковый корпус 10 × 9 × 4,5 мм и металлический фланец с отверстием под радиатор
+    const w = mm(10), hb = mm(9), t = mm(4.5);
+    const plastic = new THREE.Mesh(new THREE.BoxGeometry(w, hb, t), [bodyMat, bodyMat, bodyMat, bodyMat, faceMat, bodyMat]);
+    plastic.position.set(0, hb / 2, 0);
+    body.add(plastic);
+    const tabShape = new THREE.Shape();
+    tabShape.moveTo(-w / 2, 0);
+    tabShape.lineTo(w / 2, 0);
+    tabShape.lineTo(w / 2, mm(6.5));
+    tabShape.lineTo(-w / 2, mm(6.5));
+    tabShape.closePath();
+    const hole = new THREE.Path();
+    hole.absarc(0, mm(3.3), mm(1.8), 0, Math.PI * 2, true);
+    tabShape.holes.push(hole);
+    const tab = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(tabShape, { depth: mm(1.3), bevelEnabled: false }),
+      new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 0.85, roughness: 0.3 }),
+    );
+    tab.position.set(0, hb, -t / 2);
+    body.add(tab);
+    h = hb + mm(6.5);
+  }
+
+  const step = mm(2.54);
+  // У TO-92 ножки у корпуса сведены (1,27 мм), у TO-220 идут с шагом 2,54 мм
+  const bodyPitch = pkg === "TO-92" ? step * 0.5 : step;
+  let pins: THREE.Vector3[];
+  let hotspot: THREE.Vector3;
+  if (c.placement.mode === "free") {
+    const bottom = 1.3;
+    body.position.y = bottom;
+    group.add(body);
+    for (const k of [-1, 0, 1]) {
+      group.add(lead([new THREE.Vector3(k * bodyPitch, bottom + 0.1, 0), new THREE.Vector3(k * bodyPitch, 0.5, 0), new THREE.Vector3(k * step * 1.2, mm(0.3), 0.8)], mm(0.22)));
+    }
+    group.position.set(c.placement.x, 0, c.placement.z);
+    group.rotation.y = c.placement.rot;
+    pins = [-1, 0, 1].map((k) => freeTransform(c, new THREE.Vector3(k * step * 1.2, mm(0.3), 0.8)));
+    hotspot = freeTransform(c, new THREE.Vector3(0, bottom + h, 0));
+  } else {
+    // Три соседних отверстия: корпус над средним, плоской гранью «вперёд» относительно направления К → Э
+    const holes = c.placement.holes;
+    const f = boardFrame([holes[0], holes[2]]);
+    const H = f.p0.y;
+    pins = holes.map((id) => holePos(id));
+    const bottom = H + 1.0;
+    body.position.set(f.mid.x, bottom, f.mid.z);
+    body.rotation.y = f.angle;
+    group.add(body);
+    pins.forEach((p, i) => {
+      const atBody = f.mid.clone().addScaledVector(f.dir, (i - 1) * bodyPitch).setY(bottom + 0.1);
+      group.add(lead([p.clone().setY(H - 0.2), p.clone().setY(H + 0.35), atBody.clone().setY(H + 0.7), atBody], mm(0.22)));
+    });
+    hotspot = f.mid.clone().setY(bottom + h);
+  }
+
+  tagPickable(group, c.id);
+  return {
+    group,
+    pins,
+    hotspot,
+    update(v) {
+      if (v.burned) {
+        bodyMat.color.set(0x0b0a09);
+        faceMat.color.set(0x333333);
+        bodyMat.emissive.set(0x000000);
+        return;
+      }
+      bodyMat.emissive.setRGB(1, 0.3, 0.05).multiplyScalar(v.heat > 0.3 ? (v.heat - 0.3) * 1.2 : 0);
+    },
+    dispose: () => disposeGroup(group),
+  };
+}
