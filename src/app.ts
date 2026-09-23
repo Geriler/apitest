@@ -57,6 +57,7 @@ import {
   type MosfetKind,
   type Pin,
   type Scene,
+  type SchematicLayout,
   type SmdSize,
   type Transistor,
   type TransistorKind,
@@ -823,10 +824,12 @@ export class App {
     if (!el || !this.showSchematic) return;
     let svg: string;
     try {
-      svg = schematicSvg(this.scene, this.sim, this.selected ?? this.picked);
+      svg = schematicSvg(this.scene, this.sim, this.selected ?? this.picked, this.schematicLayout());
     } catch {
       svg = ""; // сборка в промежуточном состоянии (например, пропало отверстие) — нарисуем в следующий раз
     }
+    const reset = el.querySelector<HTMLElement>("#btn-sch-reset");
+    if (reset) reset.hidden = !this.scene.schematic;
     const html = svg || `<p class="sub">На столе нет деталей — схема появится, когда вы что-нибудь соберёте.</p>`;
     if (html === this.schematicHtml) return;
     const body = el.querySelector(".sch-body");
@@ -846,9 +849,77 @@ export class App {
     this.schematicHtml = html;
   }
 
+  /** Ручная раскладка схемы с учётом перетаскивания, которое идёт прямо сейчас. */
+  private schematicLayout(): SchematicLayout {
+    const base = this.scene.schematic ?? {};
+    const d = this.schDrag;
+    if (!d?.moved) return base;
+    return d.kind === "part" ? { ...base, x: { ...base.x, [d.id]: d.value } } : { ...base, y: { ...base.y, [d.id]: d.value } };
+  }
+
+  /** Перетаскивание на схеме: деталь — по горизонтали, линия цепи — по вертикали. */
+  private schDrag?: { kind: "part" | "net"; id: string; base: number; start: number; scale: number; value: number; moved: boolean };
+  /** Только что тащили — щелчок, который браузер пришлёт следом, не считается. */
+  private schJustDragged = false;
+
+  /** Вернуть автоматическую раскладку схемы (отменяется Ctrl+Z). */
+  resetSchematicLayout(): void {
+    delete this.scene.schematic;
+    this.save();
+    this.record();
+    this.schematicHtml = "";
+    this.renderSchematic();
+  }
+
+  private bindSchematicDrag(el: HTMLElement): void {
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      const target = e.target as Element;
+      const svg = target.closest("svg.sch") as SVGSVGElement | null;
+      const part = target.closest<SVGGElement>("[data-part]");
+      const net = part ? null : target.closest<SVGGElement>("[data-net]");
+      if (!svg || (!part && !net)) return;
+      // Экранных пикселей на единицу чертежа (схема может быть вписана в панель)
+      const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width || 1;
+      this.schDrag = part
+        ? { kind: "part", id: part.dataset.part!, base: Number(part.dataset.x), start: e.clientX, scale, value: Number(part.dataset.x), moved: false }
+        : { kind: "net", id: net!.dataset.net!, base: Number(net!.dataset.y), start: e.clientY, scale, value: Number(net!.dataset.y), moved: false };
+    });
+    el.addEventListener("pointermove", (e) => {
+      const d = this.schDrag;
+      if (!d) return;
+      const delta = ((d.kind === "part" ? e.clientX : e.clientY) - d.start) / d.scale;
+      if (!d.moved && Math.abs(delta * d.scale) < 4) return;
+      // Указатель захватываем, только когда действительно потащили: иначе щелчок уйдёт панели, а не детали
+      if (!d.moved) el.setPointerCapture(e.pointerId);
+      d.moved = true;
+      // Шаг 4 единицы — линии проще выровнять
+      const value = Math.max(20, Math.round((d.base + delta) / 4) * 4);
+      if (value === d.value) return;
+      d.value = value;
+      this.renderSchematic();
+    });
+    const finish = () => {
+      const d = this.schDrag;
+      this.schDrag = undefined;
+      if (!d?.moved) return;
+      const base = this.scene.schematic ?? {};
+      this.scene.schematic = d.kind === "part" ? { ...base, x: { ...base.x, [d.id]: d.value } } : { ...base, y: { ...base.y, [d.id]: d.value } };
+      this.schJustDragged = true;
+      setTimeout(() => (this.schJustDragged = false), 0);
+      this.save();
+      this.record();
+      this.renderSchematic();
+    };
+    el.addEventListener("pointerup", finish);
+    el.addEventListener("pointercancel", finish);
+  }
+
   /** Щелчок по детали на схеме: тумблер переключается, остальное — панель детали. */
   private bindSchematic(): void {
+    if (this.ui.schematic) this.bindSchematicDrag(this.ui.schematic);
     this.ui.schematic?.addEventListener("click", (e) => {
+      if (this.schJustDragged) return;
       const part = (e.target as Element).closest<SVGGElement>("[data-part]");
       const c = part ? this.component(part.dataset.part!) : undefined;
       if (!c) return;

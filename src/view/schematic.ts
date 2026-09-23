@@ -25,6 +25,7 @@ import {
   type Mosfet,
   type Pin,
   type Scene,
+  type SchematicLayout,
   type Transistor,
 } from "../model/types";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
@@ -162,6 +163,52 @@ function symbol2(c: Component): string {
   }
 }
 
+const isSource = (c: Component) => c.type === "battery" || c.type === "psu";
+
+/**
+ * Порядок цепей сверху вниз — только по соединениям, не по напряжениям, чтобы чертёж не
+ * перестраивался, когда щёлкают тумблером: сверху плюс источников, снизу минус, между ними —
+ * по числу деталей от плюса (ближе к плюсу — выше). Цепи, до которых от плюса не дойти, — перед минусом.
+ */
+function netOrder(scene: Scene, count: number, pins: Map<string, number[]>): number[] {
+  const plus = new Set<number>();
+  const minus = new Set<number>();
+  for (const c of scene.components) {
+    if (!isSource(c)) continue;
+    plus.add(pins.get(c.id)![1]);
+    minus.add(pins.get(c.id)![0]);
+  }
+  const adj = new Map<number, Set<number>>();
+  for (const c of scene.components) {
+    if (isSource(c)) continue;
+    const ns = pins.get(c.id)!;
+    for (const a of ns) for (const b of ns) if (a !== b) (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+  }
+  // Без источников — от цепи первой детали
+  const start = plus.size ? [...plus] : count ? [0] : [];
+  const dist = new Map<number, number>(start.map((n) => [n, 0]));
+  const queue = [...start];
+  while (queue.length) {
+    const n = queue.shift()!;
+    if (minus.has(n) && !plus.has(n)) continue; // через минус дальше не идём
+    for (const m of adj.get(n) ?? []) {
+      if (!dist.has(m)) {
+        dist.set(m, dist.get(n)! + 1);
+        queue.push(m);
+      }
+    }
+  }
+  const group = (n: number) => (plus.has(n) ? 0 : minus.has(n) ? 3 : dist.has(n) ? 1 : 2);
+  return Array.from({ length: count }, (_, i) => i).sort((a, b) => group(a) - group(b) || (dist.get(a) ?? 0) - (dist.get(b) ?? 0) || a - b);
+}
+
+/** Устойчивое имя цепи для ручной раскладки: первый по алфавиту вывод на ней («R1.0»). */
+function netKeys(scene: Scene, count: number, pins: Map<string, number[]>): string[] {
+  const names: string[][] = Array.from({ length: count }, () => []);
+  for (const c of scene.components) pins.get(c.id)!.forEach((n, p) => names[n].push(`${c.id}.${p}`));
+  return names.map((list) => list.sort()[0] ?? "");
+}
+
 interface Placed {
   c: Component;
   x: number;
@@ -176,7 +223,7 @@ interface Placed {
  * Схема сборки строкой SVG. highlight — деталь, выделенная сейчас (обводится медным цветом).
  * Пустая строка, если деталей нет.
  */
-export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string): string {
+export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, layout: SchematicLayout = scene.schematic ?? {}): string {
   if (!scene.components.length) return "";
   const { nets, pins } = buildNetlist(scene);
   // Потенциал цепи — первое известное значение среди её узлов
@@ -187,16 +234,10 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string):
     }
     return undefined;
   });
-  const order = nets
-    .map((_, i) => i)
-    .sort((a, b) => {
-      const va = volts[a];
-      const vb = volts[b];
-      if (va === undefined || vb === undefined) return (va === undefined ? 1 : 0) - (vb === undefined ? 1 : 0) || a - b;
-      return vb - va || a - b;
-    });
+  const order = netOrder(scene, nets.length, pins);
   const row = new Map(order.map((net, r) => [net, r]));
-  const Y = (net: number) => TOP + row.get(net)! * ROW;
+  const keys = netKeys(scene, nets.length, pins);
+  const Y = (net: number) => layout.y?.[keys[net]] ?? TOP + row.get(net)! * ROW;
 
   // Сначала источники, потом остальное — по верхней и нижней цепи
   const rank = (c: Component) => (c.type === "battery" || c.type === "psu" ? 0 : 1);
@@ -209,6 +250,9 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string):
   let x = LEFT;
   for (const c of parts) {
     const netOf = pins.get(c.id)!;
+    const auto = pinCount(c) === 2 ? x : x + COL * 0.4;
+    // Ручной сдвиг детали по горизонтали: остальные остаются на своих местах
+    const px = layout.x?.[c.id] ?? auto;
     const current = Math.abs(c.type === "transistor" ? sim.transistor(c).ic : c.type === "mosfet" ? sim.mosfet(c).id : sim.current(c));
     const label = (lx: number, ly: number) =>
       `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(value(c))}</text>` +
@@ -219,29 +263,30 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string):
       let bottom = Math.max(ya, yb);
       let extra = "";
       const attach: [number, number][] = [
-        [netOf[0], x],
-        [netOf[1], x],
+        [netOf[0], px],
+        [netOf[1], px],
       ];
       if (ya === yb) {
         // Оба вывода в одной цепи: деталь висит петлёй под линией
         bottom = top + ROW * 0.7;
-        extra = `<path d="M${x} ${num(bottom)}H${x + 24}V${top}"/>`;
-        attach[1] = [netOf[1], x + 24];
+        extra = `<path d="M${px} ${num(bottom)}H${px + 24}V${num(top)}"/>`;
+        attach[1] = [netOf[1], px + 24];
       }
       const yc = (top + bottom) / 2;
       const flip = ya > yb ? -1 : 1; // вывод 0 внизу — переворачиваем обозначение
       const svg =
         // Невидимая область щелчка: обозначение и подпись
-        `<rect class="hit" x="${x - 16}" y="${num(yc - 26)}" width="96" height="52"/>` +
-        `<path d="M${x} ${top}V${num(yc - HALF)}M${x} ${num(yc + HALF)}V${num(bottom)}"/>${extra}` +
-        `<g transform="translate(${x} ${num(yc)}) scale(1 ${flip})">${symbol2(c)}</g>` +
-        label(x + 18, yc);
-      placed.push({ c, x, attach, svg, bottom });
+        `<rect class="hit" x="${num(px - 16)}" y="${num(yc - 26)}" width="96" height="52"/>` +
+        `<path d="M${num(px)} ${num(top)}V${num(yc - HALF)}M${num(px)} ${num(yc + HALF)}V${num(bottom)}"/>${extra}` +
+        `<g transform="translate(${num(px)} ${num(yc)}) scale(1 ${flip})">${symbol2(c)}</g>` +
+        label(px + 18, yc);
+      placed.push({ c, x: px, attach, svg, bottom });
       x += COL;
     } else {
       // Транзистор: основной путь (К–Э или С–И) вертикально, управляющий вывод — слева
       const t = c as Transistor | Mosfet;
       x += COL * 0.4;
+      const tx = px;
       const roles =
         t.type === "transistor"
           ? { up: 0 as Pin, ctrl: 1 as Pin, down: 2 as Pin }
@@ -252,15 +297,15 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string):
       let top = Math.min(yUp, yDown);
       let bottom = Math.max(yUp, yDown);
       let extra = "";
-      const lx = x + 8;
+      const lx = tx + 8;
       const attach: [number, number][] = [
         [netOf[roles.up], lx],
         [netOf[roles.down], lx],
-        [netOf[roles.ctrl], x - 30],
+        [netOf[roles.ctrl], tx - 30],
       ];
       if (yUp === yDown) {
         bottom = top + ROW * 0.8;
-        extra = `<path d="M${lx} ${num(bottom)}H${lx + 22}V${top}"/>`;
+        extra = `<path d="M${num(lx)} ${num(bottom)}H${num(lx + 22)}V${num(top)}"/>`;
         attach[1] = [netOf[roles.down], lx + 22];
       }
       const yc = (top + bottom) / 2;
@@ -281,22 +326,23 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string):
       // Управляющий вывод: от затвора / базы влево и к своей цепи
       const gx = t.type === "transistor" ? -6 : -9;
       const svg =
-        `<rect class="hit" x="${x - 22}" y="${num(yc - 34)}" width="110" height="56"/>` +
-        `<path d="M${lx} ${top}V${num(yc - 17)}M${lx} ${num(yc + 17)}V${num(bottom)}"/>${extra}` +
-        `<path d="M${num(x + gx)} ${num(yc)}H${x - 30}V${num(yCtrl)}"/>` +
-        `<g transform="translate(${x} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${body}</g>` +
-        label(x + 24, yc - 20);
-      placed.push({ c, x, attach, svg, bottom: Math.max(bottom, yCtrl) });
+        `<rect class="hit" x="${num(tx - 22)}" y="${num(yc - 34)}" width="110" height="56"/>` +
+        `<path d="M${num(lx)} ${num(top)}V${num(yc - 17)}M${num(lx)} ${num(yc + 17)}V${num(bottom)}"/>${extra}` +
+        `<path d="M${num(tx + gx)} ${num(yc)}H${num(tx - 30)}V${num(yCtrl)}"/>` +
+        `<g transform="translate(${num(tx)} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${body}</g>` +
+        label(tx + 24, yc - 20);
+      placed.push({ c, x: tx, attach, svg, bottom: Math.max(bottom, yCtrl) });
       x += COL * 1.1;
     }
   }
 
-  // Линии цепей: от крайней левой до крайней правой точки подключения; точки — в T-соединениях
+  // Линии цепей: от крайней левой до крайней правой точки подключения; точки — в T-соединениях.
+  // Подпись потенциала — над линией у левого края; широкая невидимая полоса — чтобы линию было легко взять мышью.
   const netsSvg: string[] = [];
   for (const [net] of row) {
     const xs = placed.flatMap((p) => p.attach.filter(([n]) => n === net).map(([, ax]) => ax));
     if (!xs.length) continue;
-    const y = Y(net);
+    const y = num(Y(net));
     const min = Math.min(...xs);
     const max = Math.max(...xs);
     const [a, b] = min === max ? [min - 10, max + 10] : [min, max];
@@ -306,15 +352,16 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string):
       .join("");
     const v = volts[net];
     netsSvg.push(
-      `<path d="M${num(a)} ${y}H${num(b)}"/>${dots}` +
-        `<text x="${num(a - 6)}" y="${y + 4}" class="volt" text-anchor="end">${v === undefined ? "—" : formatVolts(v)}</text>`,
+      `<g class="net" data-net="${esc(keys[net])}" data-y="${y}">` +
+        `<path class="nethit" d="M${num(a)} ${y}H${num(b)}"/><path d="M${num(a)} ${y}H${num(b)}"/>${dots}` +
+        `<text x="${num(a + 4)}" y="${num(Number(y) - 5)}" class="volt">${v === undefined ? "—" : formatVolts(v)}</text></g>`,
     );
   }
 
-  const width = x + 70;
-  const height = Math.max(...placed.map((p) => p.bottom), TOP + (order.length - 1) * ROW) + 40;
+  const width = Math.max(x, ...placed.map((p) => p.x + 60)) + 110;
+  const height = Math.max(...placed.map((p) => p.bottom), ...order.map((n) => Y(n))) + 40;
   const partsSvg = placed
-    .map((p) => `<g class="part${p.c.id === highlight ? " sel" : ""}" data-part="${esc(p.c.id)}">${p.svg}</g>`)
+    .map((p) => `<g class="part${p.c.id === highlight ? " sel" : ""}" data-part="${esc(p.c.id)}" data-x="${num(p.x)}">${p.svg}</g>`)
     .join("");
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" class="sch" viewBox="0 0 ${num(width)} ${num(height)}" width="${num(width)}" height="${num(height)}" role="img" aria-label="Принципиальная схема">` +

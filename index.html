@@ -191,10 +191,13 @@
   .sch .dot, .sch .fill { fill: var(--ink); stroke: none; }
   .sch .thin { stroke-width: 1.1; }
   .sch .thick { stroke-width: 3; }
-  .sch text { fill: var(--ink); stroke: none; font: 500 10.5px var(--mono); }
+  /* Подложка цвета фона под текстом: линии не перечёркивают подписи */
+  .sch text { fill: var(--ink); stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round; paint-order: stroke; font: 500 10.5px var(--mono); }
+  .sch .nethit { stroke: transparent; stroke-width: 12; cursor: ns-resize; }
+  .sch .net:hover path:not(.nethit) { stroke: var(--copper); }
+  .sch .part { cursor: ew-resize; }
   .sch text.ref { fill: var(--copper); font-weight: 600; }
   .sch text.sub, .sch text.volt { fill: var(--muted); }
-  .sch .part { cursor: pointer; }
   .sch .hit { fill: transparent; stroke: none; pointer-events: all; }
   .sch .part:hover :is(path, rect:not(.hit), circle:not(.dot, .fill)), .sch .part.sel :is(path, rect:not(.hit), circle:not(.dot, .fill)) { stroke: var(--copper); }
   .sch .part:hover :is(.dot, .fill), .sch .part.sel :is(.dot, .fill) { fill: var(--copper); }
@@ -490,8 +493,9 @@
 
   <section id="schematic" class="panel" hidden aria-label="Принципиальная схема">
     <div class="sch-head">
-      <span><span class="eyebrow">схема</span> <small>цепи сверху вниз — от плюса к минусу; щелчок по детали — её панель</small></span>
+      <span><span class="eyebrow">схема</span> <small>детали и линии цепей можно двигать мышью; щелчок по детали — её панель</small></span>
       <span class="row" style="margin: 0; flex-wrap: nowrap;">
+        <button class="btn inline" id="btn-sch-reset" hidden title="Вернуть автоматическую раскладку">Сбросить</button>
         <button class="btn inline" id="btn-sch-zoom" aria-pressed="false" title="Натуральная величина с прокруткой или по размеру панели">100 %</button>
         <button class="btn inline" id="btn-sch-close" aria-label="Закрыть схему" title="Закрыть">×</button>
       </span>

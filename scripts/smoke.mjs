@@ -722,6 +722,25 @@ try {
       await page.waitForTimeout(300);
       const sa1After = await page.evaluate(() => window.maketka.component("SA1").closed);
       check(schSel.sel === "R1" && /Резистор/.test(schSel.title ?? "") && sa1After === !sa1Before, `щелчок по R1 на схеме — его панель, по SA1 — переключение (${sa1Before} → ${sa1After})`);
+      // Чертёж не перестраивается от щелчка тумблером
+      const netYs = () => page.evaluate(() => [...document.querySelectorAll("#schematic [data-net]")].map((g) => `${g.dataset.net}:${g.dataset.y}`).join());
+      const ysBefore = await netYs();
+      await page.click('#schematic [data-part="SA1"]');
+      await page.waitForTimeout(400);
+      check((await netYs()) === ysBefore, "щелчок тумблером на схеме не перестраивает чертёж");
+      // Перетаскивание: R1 вправо, потом Ctrl+Z
+      const r1box = await page.locator('#schematic [data-part="R1"] .hit').boundingBox();
+      await page.mouse.move(r1box.x + 10, r1box.y + r1box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(r1box.x + 50, r1box.y + r1box.height / 2, { steps: 5 });
+      await page.mouse.move(r1box.x + 90, r1box.y + r1box.height / 2, { steps: 5 });
+      await page.mouse.up();
+      await page.waitForTimeout(300);
+      const schDragged = await page.evaluate(() => ({ x: window.maketka.scene.schematic?.x?.R1, sel: window.maketka.selected, reset: !document.getElementById("btn-sch-reset").hidden }));
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(300);
+      const schUndone = await page.evaluate(() => window.maketka.scene.schematic?.x?.R1);
+      check(schDragged.x > 0 && schDragged.reset && schUndone === undefined, `R1 на схеме перетащен (x = ${schDragged.x}), «Сбросить» появилась, Ctrl+Z вернул`);
       await page.screenshot({ path: "screenshots/desktop-schematic.png" });
       await page.click("#btn-schematic");
 

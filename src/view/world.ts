@@ -9,6 +9,11 @@ import { breadboardTexture, matTexture, pcbTexture, puffTexture } from "./textur
 
 const MAX_DOTS = 3000;
 const MAX_PUFFS = 240;
+/**
+ * Яркость точек тока. Ниже порога свечения (2,2): точки чёткие, без ореола — иначе десятки
+ * точек на проводах засвечивают картинку. Светятся только нити ламп, светодиоды и искры.
+ */
+const DOT_BRIGHTNESS = 1.5;
 
 /** Частица дыма или искра. */
 interface Puff {
@@ -115,7 +120,7 @@ export class World {
     this.dots = new THREE.InstancedMesh(
       // Радиус больше, чем у провода (≈ 0,3), иначе точки прячутся внутри изоляции
       new THREE.SphereGeometry(0.36, 12, 8),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff1a8).multiplyScalar(2.6) }),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff1a8).multiplyScalar(DOT_BRIGHTNESS) }),
       MAX_DOTS,
     );
     this.dots.count = 0;

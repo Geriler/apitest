@@ -91,6 +91,7 @@ async function start(): Promise<void> {
   };
   schBtn.addEventListener("click", () => setSchematic(!app.showSchematic));
   $("btn-sch-close").addEventListener("click", () => setSchematic(false));
+  $("btn-sch-reset").addEventListener("click", () => app.resetSchematicLayout());
   const zoomBtn = $("btn-sch-zoom");
   zoomBtn.addEventListener("click", () => {
     const actual = $("schematic").classList.toggle("actual");

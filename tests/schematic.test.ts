@@ -37,26 +37,57 @@ describe("принципиальная схема", () => {
     expect(pins.get("R1")![0]).toBe(pins.get("R2")![0]);
   });
 
-  it("чертёж: каждая деталь подписана, цепи идут сверху вниз по убыванию потенциала, без NaN", () => {
+  it("чертёж: каждая деталь подписана, плюс источника сверху, минус снизу, без NaN", () => {
     for (const scene of [demoScene(), blinkerScene(), mosfetScene(), pcbScene()]) {
       const sim = new Simulation(scene);
       const svg = schematicSvg(scene, sim, scene.components[0].id);
       expect(svg).not.toMatch(/NaN|undefined/);
       for (const c of scene.components) expect(svg).toContain(`data-part="${c.id}"`);
       expect(svg).toContain('class="part sel"');
-      // Подписи напряжений цепей идут в порядке убывания
-      const volts = [...svg.matchAll(/class="volt"[^>]*>([^<]+)</g)].map((m) => m[1]);
-      const toNum = (t: string) => {
-        const m = t.match(/^(−?-?[\d,]+)\s*(мк|м)?В$/);
-        if (!m) return NaN;
-        const k = m[2] === "м" ? 1e-3 : m[2] === "мк" ? 1e-6 : 1;
-        return Number(m[1].replace(",", ".").replace("−", "-")) * k;
-      };
-      const ys = [...svg.matchAll(/<path d="M[\d.]+ ([\d.]+)H[\d.]+"\/>(?:<circle[^>]*>)*<text[^>]*class="volt"[^>]*>([^<]+)</g)].map((m) => [Number(m[1]), toNum(m[2])]);
-      expect(ys.length).toBe(volts.length);
-      const sorted = [...ys].sort((a, b) => a[0] - b[0]).map(([, v]) => v).filter((v) => !Number.isNaN(v));
-      for (let i = 1; i < sorted.length; i++) expect(sorted[i]).toBeLessThanOrEqual(sorted[i - 1] + 1e-9);
+      const src = scene.components.find((c) => c.type === "battery" || c.type === "psu")!;
+      const ys = [...svg.matchAll(/data-net="([^"]+)" data-y="([\d.]+)"/g)].map((m) => [m[1], Number(m[2])] as const);
+      const yOf = (key: string) => ys.find(([k]) => k === key)?.[1];
+      // Имя цепи — первый по алфавиту вывод на ней; у источника вывод 1 — плюс, 0 — минус
+      const { pins } = buildNetlist(scene);
+      const keyOf = (net: number) =>
+        scene.components.flatMap((c) => pins.get(c.id)!.map((n, p) => (n === net ? `${c.id}.${p}` : ""))).filter(Boolean).sort()[0];
+      const plusY = yOf(keyOf(pins.get(src.id)![1]))!;
+      const minusY = yOf(keyOf(pins.get(src.id)![0]))!;
+      for (const [, y] of ys) {
+        expect(y).toBeGreaterThanOrEqual(plusY);
+        expect(y).toBeLessThanOrEqual(minusY);
+      }
     }
+  });
+
+  it("чертёж не перестраивается, когда щёлкают тумблером: меняется только его значок и цифры", () => {
+    const scene = demoScene();
+    const sim = new Simulation(scene);
+    // Без цифр и без самих тумблеров (их значок меняется); всё остальное должно совпасть до символа
+    const shape = (svg: string) =>
+      svg
+        .replace(/>[^<]*<\/text>/g, "></text>")
+        .split('<g class="part')
+        .filter((seg) => !/^[^>]*data-part="SA\d"/.test(seg))
+        .join('<g class="part');
+    const before = shape(schematicSvg(scene, sim));
+    for (const c of scene.components) if (c.type === "switch") c.closed = !c.closed;
+    sim.solve();
+    expect(shape(schematicSvg(scene, sim))).toBe(before);
+  });
+
+  it("ручная раскладка: деталь сдвигается по горизонтали, линия цепи — по вертикали", () => {
+    const scene = demoScene();
+    const sim = new Simulation(scene);
+    const auto = schematicSvg(scene, sim);
+    const partX = (svg: string, id: string) => Number(svg.match(new RegExp(`data-part="${id}" data-x="([\\d.]+)"`))![1]);
+    const netY = (svg: string, key: string) => Number(svg.match(new RegExp(`data-net="${key.replace(".", "\\.")}" data-y="([\\d.]+)"`))![1]);
+    const key = auto.match(/data-net="([^"]+)"/)![1];
+    const moved = schematicSvg(scene, sim, undefined, { x: { R1: partX(auto, "R1") + 200 }, y: { [key]: netY(auto, key) + 37 } });
+    expect(partX(moved, "R1")).toBe(partX(auto, "R1") + 200);
+    expect(netY(moved, key)).toBe(netY(auto, key) + 37);
+    // Остальные детали на месте
+    expect(partX(moved, "R2")).toBe(partX(auto, "R2"));
   });
 
   it("пустой стол — пустая схема", () => {
