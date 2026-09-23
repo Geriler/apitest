@@ -172,8 +172,13 @@ async function start(): Promise<void> {
   });
 
   const loop = () => {
-    app.frame();
+    // Следующий кадр планируем в любом случае: ошибка в одном кадре не должна останавливать страницу
     requestAnimationFrame(loop);
+    try {
+      app.frame();
+    } catch (e) {
+      console.error(e);
+    }
   };
   loop();
 

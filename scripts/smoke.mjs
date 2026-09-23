@@ -724,6 +724,39 @@ try {
       check(schSel.sel === "R1" && /Резистор/.test(schSel.title ?? "") && sa1After === !sa1Before, `щелчок по R1 на схеме — его панель, по SA1 — переключение (${sa1Before} → ${sa1After})`);
       await page.screenshot({ path: "screenshots/desktop-schematic.png" });
       await page.click("#btn-schematic");
+
+      // Схема пользователя «Элемент ИЛИ» со светодиодами 1 Вт: страница не зависает, ошибок нет
+      const orText = (await import("node:fs")).readFileSync("tests/fixtures/element-or.json", "utf8");
+      await page.evaluate((text) => {
+        const d = JSON.parse(text);
+        d.scene.components = d.scene.components.map((c) => (c.type === "lamp" ? { id: c.id, type: "led", color: "red", size: "1W", placement: c.placement } : c));
+        window.maketka.replaceScene(d.scene);
+        for (const id of ["SA3", "SA4"]) window.maketka.component(id).closed = false;
+        window.maketka.changed();
+      }, orText);
+      // Время одного шага расчёта (кадры здесь не показательны: тестовый браузер рисует 3D программно)
+      const stepMs = await page.evaluate(
+        () =>
+          new Promise((resolve) => {
+            const sim = window.maketka.sim;
+            const orig = sim.step.bind(sim);
+            let total = 0;
+            let n = 0;
+            sim.step = (dt) => {
+              const t = performance.now();
+              const r = orig(dt);
+              total += performance.now() - t;
+              n++;
+              return r;
+            };
+            setTimeout(() => {
+              sim.step = orig;
+              resolve(n ? total / n : Infinity);
+            }, 2500);
+          }),
+      );
+      const orToast = (await page.textContent("#toasts")) ?? "";
+      check(stepMs < 60 && !/не справился/.test(orToast), `«Элемент ИЛИ» со светодиодами: шаг расчёта ${stepMs.toFixed(0)} мс, ошибок нет`);
       await page.keyboard.press("Escape");
     }
 

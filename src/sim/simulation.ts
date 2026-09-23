@@ -147,6 +147,30 @@ function limitJunction(vnew: number, vold: number, p: DiodeParams): number {
   return vnew;
 }
 
+/**
+ * Если Ньютон за 20 итераций не сошёлся, он обычно ходит по кругу между «переход заперт» и
+ * «переход открыт» (например, светодиод на почти неподключённом стоке закрытого MOSFET).
+ * Тогда берём только половину шага — качели гаснут.
+ */
+function damp(vnew: number, vold: number, iter: number): number {
+  return iter > 20 ? vold + (vnew - vold) / 2 : vnew;
+}
+
+/**
+ * Сошёлся ли переход: напряжение почти не меняется или (как в SPICE) почти не меняется ток.
+ * Второе нужно для перехода на «висящем» узле (светодиод последовательно с разомкнутым
+ * тумблером): ток там — пикоамперы, и напряжение дрожит в пределах точности вычислений.
+ * Ток сравнивается с тем, к которому стремится решение (target — до ограничения шага):
+ * иначе запертый в начале расчёта светодиод «сошёлся» бы, не успев открыться.
+ */
+function junctionSettled(p: DiodeParams, vold: number, vnew: number, target: number): boolean {
+  if (Math.abs(vnew - vold) <= 1e-7) return true;
+  const i = (v: number) => p.is * (Math.exp(Math.min(v, 5) / (p.n * VT)) - 1);
+  const io = i(vold);
+  const inew = i(target);
+  return Math.abs(inew - io) <= 1e-9 + 1e-6 * Math.max(Math.abs(io), Math.abs(inew));
+}
+
 /** Малая проводимость параллельно переходу: помогает сходимости, на результат не влияет (1 нА на 1 кВ). */
 const GMIN = 1e-12;
 
@@ -156,7 +180,10 @@ const GMIN = 1e-12;
  */
 function diodeBranch(p: DiodeParams, vj: number): { r: number; emf: number } {
   const e = Math.exp(vj / (p.n * VT));
-  const id = p.is * (e - 1);
+  // Ток утечки GMIN·vj входит и в ток, и в наклон: касательная к I(v) = Is·(e^v/nVt − 1) + GMIN·v.
+  // Если учесть GMIN только в наклоне, узел, который держится на одном запертом диоде
+  // (светодиод последовательно с разомкнутым тумблером), уходит на итерациях вразнос.
+  const id = p.is * (e - 1) + GMIN * vj;
   const gd = (p.is / (p.n * VT)) * e + GMIN;
   return { r: 1 / gd + p.rs, emf: id / gd - vj };
 }
@@ -305,7 +332,7 @@ export class Simulation {
   readonly psuMode = new Map<string, "CV" | "CC">();
   /** Напряжение на переходе диода с прошлого решения — начальное приближение для Ньютона. */
   private junction = new Map<string, number>();
-  solution!: Solution;
+  solution: Solution = { nodeOf: new Map(), voltage: new Map(), branches: new Map() };
   /** Сколько итераций Ньютона потребовало последнее решение (для тестов и отладки). */
   lastIterations = 0;
 
@@ -532,7 +559,16 @@ export class Simulation {
     let flips = 0;
     for (let iter = 1; iter <= 100; iter++) {
       const { out, extras } = this.branches(h);
-      this.solution = solveCircuit(out, [], extras);
+      // Вырожденная или плохо обусловленная система (нечисла в ответе) — итерация не удалась;
+      // остаётся прошлое решение, шаг будет повторён мельче
+      let solution: Solution;
+      try {
+        solution = solveCircuit(out, [], extras);
+      } catch {
+        return false;
+      }
+      if (![...solution.voltage.values()].every(Number.isFinite)) return false;
+      this.solution = solution;
       this.lastIterations = iter;
       if (--this.budget < 0) return false;
       let converged = true;
@@ -563,8 +599,9 @@ export class Simulation {
         }
         const br = this.solution.branches.get(`${t.id}:body`)!;
         const vold = this.junction.get(`${t.id}:body`) ?? 0;
-        const vnew = limitJunction(-br.voltage - br.current * BODY_DIODE.rs, vold, BODY_DIODE);
-        if (Math.abs(vnew - vold) > 1e-7) converged = false;
+        const target = -br.voltage - br.current * BODY_DIODE.rs;
+        const vnew = limitJunction(target, vold, BODY_DIODE);
+        if (!junctionSettled(BODY_DIODE, vold, vnew, target)) converged = false;
         this.junction.set(`${t.id}:body`, vnew);
       }
       for (const t of bjts) {
@@ -587,8 +624,9 @@ export class Simulation {
         const vold = this.junction.get(d.id) ?? 0;
         // Напряжение на выводах минус падение на Rs — напряжение на переходе
         const vterm = -br.voltage;
-        const vnew = limitJunction(vterm - br.current * p.rs, vold, p);
-        if (Math.abs(vnew - vold) > 1e-7) converged = false;
+        const target = vterm - br.current * p.rs;
+        const vnew = damp(limitJunction(target, vold, p), vold, iter);
+        if (!junctionSettled(p, vold, vnew, target)) converged = false;
         this.junction.set(d.id, vnew);
       }
       if (converged) return true;
@@ -762,7 +800,11 @@ export class Simulation {
       this.junction = saved;
       return [...this.advance(h / 2, depth + 1), ...this.advance(h / 2, depth + 1)];
     }
-    if (!ok) this.nonConverged++;
+    if (!ok) {
+      this.nonConverged++;
+      // Не сошлось совсем — оставляем переходы как до шага, а не последнюю (возможно, негодную) итерацию
+      this.junction = saved;
+    }
     for (const c of this.scene.components) {
       if (this.state(c.id).burned) continue;
       if (c.type === "capacitor") this.capVoltage.set(c.id, -this.branch(c.id).voltage);

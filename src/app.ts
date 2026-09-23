@@ -112,6 +112,8 @@ const TOLERANCE_KEY = "maketka.tolerance.v1";
 const CURRENT_KEY = "maketka.showCurrent.v1";
 /** Сколько шагов можно отменить. */
 const HISTORY_LIMIT = 100;
+/** Сколько времени расчёт может занять за один такт, мс. */
+const TICK_BUDGET_MS = 25;
 /** Долгое нажатие на сенсорном экране (вместо Shift+щелчка), мс. */
 const LONG_PRESS_MS = 450;
 
@@ -260,7 +262,12 @@ export class App {
 
   /** Вызывать после любого изменения сцены. */
   changed(): void {
-    this.sim.solve();
+    this.simErrorShown = false;
+    try {
+      this.sim.solve();
+    } catch (e) {
+      this.simFailed(e);
+    }
     this.rebuild();
     this.save();
     this.record();
@@ -669,9 +676,27 @@ export class App {
     const steps = Math.max(1, Math.ceil(real / 0.05));
     const dt = real / steps;
     for (let i = 0; i < steps; i++) {
+      // Тяжёлая схема не должна вешать страницу: не больше ~25 мс расчёта за раз,
+      // остальное время пропускаем — схема идёт в замедленном времени
+      if (i > 0 && performance.now() - now > TICK_BUDGET_MS) break;
       this.time += dt;
-      for (const c of this.sim.step(dt)) this.onBurn(c);
+      try {
+        for (const c of this.sim.step(dt)) this.onBurn(c);
+      } catch (e) {
+        this.simFailed(e);
+        return;
+      }
     }
+  }
+
+  private simErrorShown = false;
+
+  /** Расчёт упал (так быть не должно): пишем в консоль и один раз говорим об этом, страница живёт дальше. */
+  private simFailed(e: unknown): void {
+    console.error("Ошибка расчёта схемы", e);
+    if (this.simErrorShown) return;
+    this.simErrorShown = true;
+    this.toast("Расчёт схемы не справился", "Песочница продолжает работать, но показания могут быть неверными. Измените схему или отмените последнее действие (Ctrl+Z).");
   }
 
   frame(): void {
