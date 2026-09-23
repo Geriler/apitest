@@ -812,10 +812,16 @@ function transistorView(c: Transistor | Mosfet): ComponentView {
     const face = new THREE.Mesh(new THREE.PlaneGeometry(2 * r, h), faceMat);
     face.position.y = h / 2;
     body.add(face);
-    const topCap = new THREE.Mesh(new THREE.CircleGeometry(r, 32, Math.PI, Math.PI), bodyMat);
+    // Торцы — полукруги над той же задней половиной: после поворота на −90° вокруг X
+    // верхняя половина круга (y ≥ 0) ложится на z ≤ 0
+    const topCap = new THREE.Mesh(new THREE.CircleGeometry(r, 32, 0, Math.PI), bodyMat);
     topCap.rotation.x = -Math.PI / 2;
     topCap.position.y = h;
     body.add(topCap);
+    const bottomCap = new THREE.Mesh(new THREE.CircleGeometry(r, 32, 0, Math.PI), bodyMat);
+    bottomCap.rotation.x = Math.PI / 2; // смотрит вниз; y ≥ 0 → z ≥ 0, поэтому ещё разворот
+    bottomCap.rotation.z = Math.PI;
+    body.add(bottomCap);
   } else {
     // TO-220: пластиковый корпус 10 × 9 × 4,5 мм и металлический фланец с отверстием под радиатор
     const w = mm(10), hb = mm(9), t = mm(4.5);
