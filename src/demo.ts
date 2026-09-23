@@ -1,4 +1,4 @@
-import { padsAlong } from "./model/breadboard";
+import { DEFAULT_BOARDS, applyBoards, padsAlong } from "./model/breadboard";
 import type { Scene, Trace } from "./model/types";
 
 /**
@@ -161,8 +161,12 @@ function tracePath(prefix: string, pads: string[], counter: { n: number }): Trac
  * Если выставить ограничение 20 мА, блок перейдёт в CC: напряжение упадёт, светодиоды потускнеют.
  */
 export function pcbScene(): Scene {
+  // Дорожки делятся по площадкам, а их ищут среди плат на столе. На столе может не быть
+  // печатной платы (после «Очистить») — поэтому сначала стартовый набор, как в самой схеме.
+  applyBoards(DEFAULT_BOARDS);
   const c = { n: 1 };
   return {
+    boards: DEFAULT_BOARDS.map((b) => ({ ...b })),
     components: [
       { id: "G1", type: "psu", volts: 9, amps: 0.1, on: true, placement: { mode: "free", x: -31, z: 21, rot: 0 } },
       { id: "R1", type: "resistor", variant: "tht", ohms: 470, smdSize: "0805", placement: { mode: "board", holes: ["pC4", "pC8"] } },

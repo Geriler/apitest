@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene } from "../src/demo";
-import { padsAlong } from "../src/model/breadboard";
+import { DEFAULT_BOARDS, applyBoards, padsAlong } from "../src/model/breadboard";
 import type { Scene } from "../src/model/types";
 import { Simulation } from "../src/sim/simulation";
 
@@ -177,6 +177,15 @@ describe("пример «MOSFET: ключ и память затвора»", () 
 });
 
 describe("пример «Печатная плата и блок питания»", () => {
+  it("загружается и на пустой стол (после «Очистить»): свои платы, те же дорожки", () => {
+    const expected = pcbScene();
+    applyBoards([]);
+    let scene: Scene | undefined;
+    expect(() => (scene = pcbScene())).not.toThrow();
+    expect(scene!.traces).toEqual(expected.traces);
+    expect(scene!.boards).toEqual(DEFAULT_BOARDS);
+  });
+
   it("оба светодиода горят ≈ 15 мА от шин по дорожкам, блок в CV", () => {
     const scene = pcbScene();
     const sim = new Simulation(scene);

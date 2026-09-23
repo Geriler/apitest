@@ -488,6 +488,14 @@ try {
       const again = await boards();
       check(again.length === 1 && again[0].id === "BB1", `на пустой стол положена ${again.map((b) => b.id).join()}`);
       await page.keyboard.press("1");
+      // Пример с печатной платой загружается и на пустой стол
+      await page.click("#btn-clear");
+      await page.click("#btn-clear");
+      await page.waitForTimeout(300);
+      await page.selectOption("#demo-select", "pcb");
+      await page.waitForTimeout(500);
+      const pcbDemo = await page.evaluate(() => ({ parts: window.maketka.scene.components.length, traces: window.maketka.scene.traces.length, hl1: window.maketka.sim.current(window.maketka.component("HL1")) }));
+      check(pcbDemo.parts === 5 && pcbDemo.traces > 0 && pcbDemo.hl1 > 0.01, `пример «Печатная плата» после «Очистить»: ${pcbDemo.parts} деталей, ${pcbDemo.traces} дорожек, HL1 ${(pcbDemo.hl1 * 1000).toFixed(1)} мА`);
       await page.screenshot({ path: "screenshots/desktop-mosfet-panel.png" });
     }
 
