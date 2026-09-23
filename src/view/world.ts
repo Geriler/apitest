@@ -4,8 +4,8 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { BOARD, HOLES, type Hole } from "../model/breadboard";
-import { breadboardTexture, matTexture, puffTexture } from "./textures";
+import { BOARD, HOLES, PCB, type Hole } from "../model/breadboard";
+import { breadboardTexture, matTexture, pcbTexture, puffTexture } from "./textures";
 
 const MAX_DOTS = 3000;
 const MAX_PUFFS = 240;
@@ -28,11 +28,14 @@ export class World {
   readonly controls: OrbitControls;
   readonly componentLayer = new THREE.Group();
   readonly wireLayer = new THREE.Group();
+  /** Медные дорожки печатной платы. */
+  readonly traceLayer = new THREE.Group();
   readonly overlay = new THREE.Group();
 
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private boardTop: THREE.Mesh;
+  private pcb: THREE.Mesh;
   private table: THREE.Mesh;
   private holeMarks: THREE.InstancedMesh;
   private dots: THREE.InstancedMesh;
@@ -112,6 +115,15 @@ export class World {
     this.boardTop = body;
     this.scene.add(board);
 
+    // Печатная плата перед макеткой
+    const fr4 = new THREE.MeshStandardMaterial({ color: 0x2c6e47, roughness: 0.55 });
+    const pcbTop = new THREE.MeshStandardMaterial({ map: pcbTexture(), roughness: 0.45, metalness: 0.05 });
+    this.pcb = new THREE.Mesh(new THREE.BoxGeometry(PCB.width, PCB.height, PCB.depth), [fr4, fr4, pcbTop, fr4, fr4, fr4]);
+    this.pcb.position.set(PCB.x, PCB.height / 2, PCB.z);
+    this.pcb.castShadow = true;
+    this.pcb.receiveShadow = true;
+    this.scene.add(this.pcb);
+
     // Подсветка отверстий: квадраты над гнёздами, по умолчанию скрыты
     this.holeMarks = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(0.62, 0.62).rotateX(-Math.PI / 2),
@@ -142,7 +154,7 @@ export class World {
       this.scene.add(s);
     }
 
-    this.scene.add(this.componentLayer, this.wireLayer, this.overlay);
+    this.scene.add(this.componentLayer, this.wireLayer, this.traceLayer, this.overlay);
 
     // Постобработка: свечение ламп и искр
     this.composer = new EffectComposer(this.renderer);
@@ -189,10 +201,10 @@ export class World {
     const shift = (this.insets.right - this.insets.left) / 2;
     if (shift) this.camera.setViewOffset(w, h, shift, 0, w, h);
     else this.camera.clearViewOffset();
-    const halfWidth = narrow ? 17 : 30;
+    const halfWidth = narrow ? 18 : 32;
     const tanH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * aspect * usable;
     const dist = THREE.MathUtils.clamp(halfWidth / tanH, 60, 140);
-    const target = narrow ? new THREE.Vector3(0, 0, 3) : new THREE.Vector3(-9, 0, -1);
+    const target = narrow ? new THREE.Vector3(0, 0, 8) : new THREE.Vector3(-9, 0, 5);
     const dir = new THREE.Vector3(0.04, 0.7, 0.71).normalize();
     this.controls.target.copy(target);
     this.camera.position.copy(target).addScaledVector(dir, dist);
@@ -223,7 +235,7 @@ export class World {
         this.holeMarks.setMatrixAt(i, zero);
         return;
       }
-      m.makeTranslation(h.x, BOARD.height + 0.01, h.z);
+      m.makeTranslation(h.x, h.y + 0.01, h.z);
       this.holeMarks.setMatrixAt(i, m);
       this.holeMarks.setColorAt(i, color.set(c));
     });
@@ -249,14 +261,24 @@ export class World {
     return new THREE.Vector2(((v.x + 1) / 2) * r.width + r.left, ((1 - v.y) / 2) * r.height + r.top);
   }
 
+  /** Верхняя грань какой-либо платы под курсором. */
+  private boardHit(ndc: THREE.Vector2): { point: THREE.Vector3; board: Hole["board"] } | undefined {
+    this.setRay(ndc);
+    const hit = this.raycaster.intersectObjects([this.boardTop, this.pcb], false)[0];
+    if (!hit) return undefined;
+    const board = hit.object === this.pcb ? "pcb" : "breadboard";
+    const top = board === "pcb" ? PCB.height : BOARD.height;
+    return hit.point.y > top - 0.01 ? { point: hit.point, board } : undefined;
+  }
+
   /** Ближайшее отверстие под курсором (если курсор над платой). */
   pickHole(ndc: THREE.Vector2): Hole | undefined {
-    this.setRay(ndc);
-    const hit = this.raycaster.intersectObject(this.boardTop, false)[0];
-    if (!hit || hit.point.y < BOARD.height - 0.01) return undefined;
+    const hit = this.boardHit(ndc);
+    if (!hit) return undefined;
     let best: Hole | undefined;
     let bestD = 0.6;
     for (const h of HOLES) {
+      if (h.board !== hit.board) continue;
       const d = Math.hypot(h.x - hit.point.x, h.z - hit.point.z);
       if (d < bestD) {
         bestD = d;
@@ -268,24 +290,22 @@ export class World {
 
   /** Попадает ли курсор на плату (даже мимо отверстия). */
   overBoard(ndc: THREE.Vector2): boolean {
-    this.setRay(ndc);
-    const hit = this.raycaster.intersectObject(this.boardTop, false)[0];
-    return !!hit && hit.point.y > BOARD.height - 0.01;
+    return !!this.boardHit(ndc);
   }
 
   /** Точка на столе под курсором (мимо платы). */
   pickTable(ndc: THREE.Vector2): THREE.Vector3 | undefined {
     this.setRay(ndc);
-    const hits = this.raycaster.intersectObjects([this.boardTop, this.table], false);
+    const hits = this.raycaster.intersectObjects([this.boardTop, this.pcb, this.table], false);
     return hits[0]?.object === this.table ? hits[0].point.clone() : undefined;
   }
 
   /** Ближайшая деталь или провод под курсором. */
-  pickObject(ndc: THREE.Vector2): { componentId?: string; wireId?: string } | undefined {
+  pickObject(ndc: THREE.Vector2): { componentId?: string; wireId?: string; traceId?: string } | undefined {
     this.setRay(ndc);
-    const hit = this.raycaster.intersectObjects([this.componentLayer, this.wireLayer], true)[0];
+    const hit = this.raycaster.intersectObjects([this.componentLayer, this.wireLayer, this.traceLayer], true)[0];
     if (!hit) return undefined;
-    return { componentId: hit.object.userData.componentId, wireId: hit.object.userData.wireId };
+    return { componentId: hit.object.userData.componentId, wireId: hit.object.userData.wireId, traceId: hit.object.userData.traceId };
   }
 
   // ─── Ток ───────────────────────────────────────────────────────────────

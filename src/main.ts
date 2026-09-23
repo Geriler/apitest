@@ -1,5 +1,5 @@
 import { App } from "./app";
-import { blinkerScene, demoScene, ledDemoScene, mosfetScene } from "./demo";
+import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene } from "./demo";
 import { World } from "./view/world";
 
 async function start(): Promise<void> {
@@ -34,6 +34,10 @@ async function start(): Promise<void> {
     mosfet: {
       scene: mosfetScene,
       tip: "Сверху 2N7000 включает светодиод от тумблера SA1 — ток затвора 0. Снизу у IRLZ44N нет стягивающего резистора: замкните и разомкните SA2 — лампа продолжит гореть, затвор «помнит» заряд. SA3 разряжает затвор.",
+    },
+    pcb: {
+      scene: pcbScene,
+      tip: "Площадки печатной платы соединены медными дорожками — щёлкните по площадке, чтобы увидеть всю цепь. Выберите блок питания G1 и уменьшите ограничение тока до 20 мА: он перейдёт в режим CC.",
     },
     blinker: {
       scene: blinkerScene,

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { BOARD, COLUMNS, HOLE_BY_ID, describeNode, holeLabel, holesOnNode, type Hole } from "./model/breadboard";
+import { HOLE_BY_ID, describeNode, holeAt, holeLabel, holesOnNode, padsAlong, type Hole } from "./model/breadboard";
 import {
   BATTERIES,
   CERAMICS,
@@ -10,6 +10,7 @@ import {
   LAMPS,
   LEDS,
   MOSFETS,
+  PSU_LIMITS,
   SMD_SIZES,
   THT_RESISTOR,
   TRANSISTORS,
@@ -32,30 +33,31 @@ import {
   type TransistorKind,
 } from "./model/types";
 import { colorBands, e12Values, formatOhms, formatSI, smdCode } from "./sim/resistorCodes";
-import { Simulation, VT, diodeParams, heatThreshold, lampResistance } from "./sim/simulation";
+import { Simulation, VT, diodeParams, heatThreshold, lampResistance, traceResistance, wireResistance } from "./sim/simulation";
 import * as tolerance from "./sim/tolerance";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
-import { buildComponentView, buildWireView, wireCurve, mm, type ComponentView, type WireView } from "./view/builders";
+import { buildComponentView, buildTraceView, buildWireView, wireCurve, mm, type ComponentView, type WireView } from "./view/builders";
 import type { World } from "./view/world";
 
-type Tool = "select" | "wire" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "delete";
-type PlaceTool = "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery";
+type Tool = "select" | "wire" | "trace" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
+type PlaceTool = "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu";
 
 // SMD пока скрыт из интерфейса (вернётся вместе с печатной платой), но сохранённые схемы с ним открываются.
-const PLACE_TOOLS: PlaceTool[] = ["tht", "cap", "diode", "led", "bjt", "fet", "lamp", "switch", "battery"];
+const PLACE_TOOLS: PlaceTool[] = ["tht", "cap", "diode", "led", "bjt", "fet", "lamp", "switch", "battery", "psu"];
 const TOOL_KEYS: Record<string, Tool> = {
   "1": "select", "2": "wire", "3": "tht", "4": "cap", "5": "diode", "6": "led", "7": "lamp", "8": "switch", "9": "battery", "0": "bjt", m: "fet", M: "fet", "ь": "fet", "Ь": "fet",
+  t: "trace", T: "trace", "е": "trace", "Е": "trace", p: "psu", P: "psu", "з": "psu", "З": "psu",
 };
 /** Инструмент → тип детали. */
 const TOOL_TYPE: Record<PlaceTool, Component["type"]> = {
-  tht: "resistor", smd: "resistor", cap: "capacitor", diode: "diode", led: "led", bjt: "transistor", fet: "mosfet", lamp: "lamp", switch: "switch", battery: "battery",
+  tht: "resistor", smd: "resistor", cap: "capacitor", diode: "diode", led: "led", bjt: "transistor", fet: "mosfet", lamp: "lamp", switch: "switch", battery: "battery", psu: "psu",
 };
 /**
  * Обозначения по ЕСКД: R — резистор, C — конденсатор, VD — диод, HL — лампа и светодиод
  * (приборы световой индикации), VT — транзистор, SA — выключатель, GB — батарея.
  */
 const PREFIX: Record<Component["type"], string> = {
-  resistor: "R", lamp: "HL", led: "HL", switch: "SA", battery: "GB", capacitor: "C", diode: "VD", transistor: "VT", mosfet: "VT",
+  resistor: "R", lamp: "HL", led: "HL", switch: "SA", battery: "GB", capacitor: "C", diode: "VD", transistor: "VT", mosfet: "VT", psu: "G",
 };
 const WIRE_COLORS = ["#e3b21c", "#2f9e5a", "#2f6fd1", "#e2762a", "#8e4cc9", "#e9e9e4"];
 /** Палитра проводов для ручного выбора. */
@@ -79,6 +81,7 @@ interface Hover {
   pin?: { comp: string; pin: Pin; pos: THREE.Vector3 };
   componentId?: string;
   wireId?: string;
+  traceId?: string;
   table?: THREE.Vector3;
   overBoard: boolean;
 }
@@ -95,6 +98,9 @@ export class App {
 
   private views = new Map<string, ComponentView>();
   private wireViews = new Map<string, WireView>();
+  private traceViews = new Map<string, { mesh: THREE.Object3D; curve: THREE.Curve<THREE.Vector3>; length: number }>();
+  /** Площадка, от которой продолжается дорожка (инструмент «Дорожка»). */
+  private pendingPad?: Hole;
   private dotPhase = new Map<string, number>();
   private pendingHole?: Hole;
   private pendingEnd?: Endpoint;
@@ -124,6 +130,8 @@ export class App {
     led: "red" as LedColor,
     transistor: "BC547" as TransistorKind,
     mosfet: "2N7000" as MosfetKind,
+    psuVolts: 5,
+    psuAmps: 0.5,
     /** "auto" — красный к плюсу, чёрный к минусу, остальные по кругу; иначе цвет из палитры. */
     wireColor: "auto",
   };
@@ -300,8 +308,18 @@ export class App {
       this.world.wireLayer.remove(w.mesh);
       w.dispose();
     }
+    for (const t of this.traceViews.values()) {
+      this.world.traceLayer.remove(t.mesh);
+      t.mesh.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
+    }
     this.views.clear();
     this.wireViews.clear();
+    this.traceViews.clear();
+    for (const t of this.scene.traces ?? []) {
+      const tv = buildTraceView(t.id, HOLE_BY_ID.get(t.a)!, HOLE_BY_ID.get(t.b)!);
+      this.traceViews.set(t.id, tv);
+      this.world.traceLayer.add(tv.mesh);
+    }
     for (const c of this.scene.components) {
       const v = buildComponentView(c);
       this.views.set(c.id, v);
@@ -319,7 +337,7 @@ export class App {
   endpointPos(e: Endpoint): THREE.Vector3 {
     if ("hole" in e) {
       const h = HOLE_BY_ID.get(e.hole)!;
-      return new THREE.Vector3(h.x, BOARD.height, h.z);
+      return new THREE.Vector3(h.x, h.y, h.z);
     }
     return this.views.get(e.comp)!.pins[e.pin].clone();
   }
@@ -332,6 +350,15 @@ export class App {
       burned: s.burned,
       shorted: this.sim.isShorted(c),
       time: this.time,
+      display:
+        c.type === "psu"
+          ? {
+              volts: Math.abs(this.sim.branch(c.id).voltage),
+              amps: Math.max(0, this.sim.branch(c.id).current),
+              mode: this.sim.psuMode.get(c.id) ?? "CV",
+              on: c.on,
+            }
+          : undefined,
     };
   }
 
@@ -411,6 +438,21 @@ export class App {
       for (let k = 0; k < n; k++) phases.push((k / n + phase) % 1);
       items.push({ curve: wv.curve, phases });
     }
+    for (const t of this.scene.traces ?? []) {
+      const tv = this.traceViews.get(t.id);
+      if (!tv) continue;
+      const i = this.sim.branch(t.id).current;
+      const a = Math.abs(i);
+      if (a < 1e-6) continue;
+      const speed = THREE.MathUtils.clamp(2 + 2.2 * Math.log10(a / 1e-3), 0.6, 14) * Math.sign(i);
+      const phase = ((this.dotPhase.get(t.id) ?? 0) + (speed * dt) / tv.length + 1) % 1;
+      this.dotPhase.set(t.id, phase);
+      // На дорожках точки реже, чем на проводах: иначе они засвечивают медь
+      const n = Math.max(1, Math.floor(tv.length / 3));
+      const phases: number[] = [];
+      for (let k = 0; k < n; k++) phases.push((k / n + phase) % 1);
+      items.push({ curve: tv.curve, phases });
+    }
     this.world.setDots(items);
   }
 
@@ -452,6 +494,7 @@ export class App {
 
   private cancelPending(): void {
     this.pendingHole = undefined;
+    this.pendingPad = undefined;
     this.pendingEnd = undefined;
     this.clearGhost();
     this.refreshMarks();
@@ -517,6 +560,8 @@ export class App {
         return { id: this.nextId("transistor"), type: "transistor", kind: this.defaults.transistor, placement };
       case "fet":
         return { id: this.nextId("mosfet"), type: "mosfet", kind: this.defaults.mosfet, placement };
+      case "psu":
+        return { id: this.nextId("psu"), type: "psu", volts: this.defaults.psuVolts, amps: this.defaults.psuAmps, on: true, placement };
     }
   }
 
@@ -525,11 +570,13 @@ export class App {
    * (у правого края платы — сдвиг влево). Только основное поле: в шине все выводы замкнулись бы.
    */
   private transistorHoles(h: Hole): string[] | undefined {
-    if (h.kind !== "main") return undefined;
-    const row = h.id[0];
-    const col = Number(h.id.slice(1));
-    const start = Math.min(col, COLUMNS - 2);
-    return [start, start + 1, start + 2].map((c) => `${row}${c}`);
+    if (h.kind === "rail") return undefined;
+    // Три подряд вправо; если справа край платы — сдвигаемся влево
+    for (const shift of [0, -1, -2]) {
+      const holes = [0, 1, 2].map((k) => holeAt(h.board, h.x + shift + k, h.z));
+      if (holes.every((x) => x && x.kind !== "rail")) return holes.map((x) => x!.id);
+    }
+    return undefined;
   }
 
   /**
@@ -538,7 +585,7 @@ export class App {
    */
   flip(id?: string): void {
     const c = id ? this.component(id) : undefined;
-    if (!c || c.type === "battery") return;
+    if (!c || c.type === "battery" || c.type === "psu") return;
     if (c.placement.mode === "board") {
       // Для транзистора: К-Б-Э → Э-Б-К
       c.placement.holes = [...c.placement.holes].reverse();
@@ -573,7 +620,7 @@ export class App {
     window.addEventListener("keydown", (e) => {
       if ((e.target as HTMLElement).tagName === "SELECT") return;
       if (e.key === "Escape") {
-        if (this.pendingHole || this.pendingEnd) this.cancelPending();
+        if (this.pendingHole || this.pendingEnd || this.pendingPad) this.cancelPending();
         else if (this.tool !== "select") this.setTool("select");
         else {
           this.selected = undefined;
@@ -631,7 +678,13 @@ export class App {
     const obj = this.world.pickObject(ndc);
     h.componentId = obj?.componentId;
     h.wireId = obj?.wireId;
-    if (!h.componentId && !h.wireId) {
+    h.traceId = obj?.traceId;
+    if (this.tool === "trace") {
+      // Дорожку рисуем по площадкам: детали и провода не мешают
+      h.hole = this.world.pickHole(ndc);
+      return h;
+    }
+    if (!h.componentId && !h.wireId && !h.traceId) {
       h.hole = this.world.pickHole(ndc);
       if (!h.overBoard) h.table = this.world.pickTable(ndc);
     } else if (this.tool !== "select" && this.tool !== "delete") {
@@ -656,8 +709,9 @@ export class App {
     this.hover = this.computeHover(e);
     const el = this.world.renderer.domElement;
     const interactive =
-      (this.tool === "select" && (this.hover.componentId || this.hover.wireId)) ||
-      (this.tool === "delete" && (this.hover.componentId || this.hover.wireId)) ||
+      (this.tool === "select" && (this.hover.componentId || this.hover.wireId || this.hover.traceId)) ||
+      (this.tool === "delete" && (this.hover.componentId || this.hover.wireId || this.hover.traceId)) ||
+      (this.tool === "trace" && this.hover.hole?.board === "pcb") ||
       (this.tool === "wire" && (this.hover.hole || this.hover.pin)) ||
       (this.isPlaceTool(this.tool) && (this.hover.hole || this.hover.table));
     el.style.cursor = interactive ? "pointer" : "";
@@ -707,12 +761,12 @@ export class App {
             this.changed();
           }
           this.selected = id;
-        } else if (h.wireId) {
-          this.selected = h.wireId;
+        } else if (h.wireId || h.traceId) {
+          this.selected = h.wireId ?? h.traceId;
         } else {
           this.selected = undefined;
         }
-        this.selectedHole = !id && !h.wireId ? h.hole : undefined;
+        this.selectedHole = !id && !h.wireId && !h.traceId ? h.hole : undefined;
         this.refreshMarks();
         this.inspectorHtml = "";
         this.renderInspector();
@@ -721,9 +775,12 @@ export class App {
       case "delete":
         if (h.componentId) this.remove(h.componentId);
         else if (h.wireId) this.remove(h.wireId);
+        else if (h.traceId) this.remove(h.traceId);
         return;
       case "wire":
         return this.clickWire();
+      case "trace":
+        return this.clickTrace();
       default:
         return this.clickPlace(this.tool);
     }
@@ -753,11 +810,69 @@ export class App {
     this.updateHint();
   }
 
+  /**
+   * Дорожка рисуется цепочкой: щелчок по площадке — начало, каждый следующий — новый отрезок
+   * от предыдущей площадки. Щелчок по той же площадке или Esc — конец.
+   */
+  private clickTrace(): void {
+    const h = this.hover.hole;
+    if (!h) return;
+    if (h.board !== "pcb") return this.setHint("Дорожки рисуются только на печатной плате. На макетке соединяйте проводами.");
+    if (!this.pendingPad) {
+      this.pendingPad = h;
+      this.refreshMarks();
+      this.updateHint();
+      return;
+    }
+    if (h.id === this.pendingPad.id) return this.cancelPending();
+    const traces = (this.scene.traces ??= []);
+    // Дорожка, проходящая по площадкам, соединяется с каждой из них — делим на отрезки
+    const pads = padsAlong(this.pendingPad.id, h.id);
+    for (let i = 0; i < pads.length - 1; i++) {
+      const [a, b] = [pads[i], pads[i + 1]];
+      if (!traces.some((t) => (t.a === a && t.b === b) || (t.a === b && t.b === a))) {
+        traces.push({ id: this.nextTraceId(), a, b });
+      }
+    }
+    this.pendingPad = h;
+    this.clearGhost();
+    this.changed();
+    this.updateHint();
+  }
+
+  private nextTraceId(): string {
+    let n = 1;
+    for (const t of this.scene.traces ?? []) {
+      const m = t.id.match(/^T(\d+)$/);
+      if (m) n = Math.max(n, Number(m[1]) + 1);
+    }
+    return `T${n}`;
+  }
+
+  /** Все площадки, соединённые с данной дорожками (обход графа); для макетки — отверстия полосы. */
+  private netHoles(hole: Hole): Hole[] {
+    if (hole.board !== "pcb") return holesOnNode(hole.node);
+    const seen = new Set([hole.id]);
+    const queue = [hole.id];
+    while (queue.length) {
+      const id = queue.pop()!;
+      for (const t of this.scene.traces ?? []) {
+        const other = t.a === id ? t.b : t.b === id ? t.a : undefined;
+        if (other && !seen.has(other)) {
+          seen.add(other);
+          queue.push(other);
+        }
+      }
+    }
+    return [...seen].map((id) => HOLE_BY_ID.get(id)!);
+  }
+
   /** Выбранный цвет или «авто»: красный к плюсу батареи, чёрный к минусу, остальные по кругу. */
   private pickWireColor(a: Endpoint, b: Endpoint): string {
     if (this.defaults.wireColor !== "auto") return this.defaults.wireColor;
     for (const e of [a, b]) {
-      if ("comp" in e && this.component(e.comp)?.type === "battery") return e.pin === 1 ? "#c8261f" : "#1b1d20";
+      const t = "comp" in e ? this.component(e.comp)?.type : undefined;
+      if ("comp" in e && (t === "battery" || t === "psu")) return e.pin === 1 ? "#c8261f" : "#1b1d20";
       if ("hole" in e) {
         const pol = HOLE_BY_ID.get(e.hole)!.polarity;
         if (pol) return pol === "+" ? "#c8261f" : "#1b1d20";
@@ -791,6 +906,7 @@ export class App {
         return;
       }
       if (this.pendingHole.id === h.hole.id) return this.cancelPending();
+      if (this.pendingHole.board !== h.hole.board) return this.setHint("Выводы детали должны быть на одной плате. Между платами — провод.");
       const span = Math.hypot(this.pendingHole.x - h.hole.x, this.pendingHole.z - h.hole.z);
       if (span > MAX_LEAD_SPAN) return this.setHint(`Слишком далеко: выводы дотянутся максимум на ${MAX_LEAD_SPAN} отверстий. Для дальних точек используйте провод.`);
       const c = this.newComponent(tool, { mode: "board", holes: [this.pendingHole.id, h.hole.id] });
@@ -805,7 +921,9 @@ export class App {
       return this.setHint(
         tool === "smd"
           ? "У SMD-резистора нет ножек — в макетку он не вставляется. Положите его на стол рядом и припаяйте провода к торцам."
-          : "Батарея ставится на стол. Подключите её к шинам платы проводами.",
+          : tool === "psu"
+            ? "Блок питания ставится на стол. Подключите клеммы к плате проводами."
+            : "Батарея ставится на стол. Подключите её к шинам платы проводами.",
       );
     }
     if (this.pendingHole) return; // ждём второе отверстие
@@ -827,6 +945,7 @@ export class App {
       }));
     } else {
       this.scene.wires = this.scene.wires.filter((w) => w.id !== id);
+      this.scene.traces = (this.scene.traces ?? []).filter((t) => t.id !== id);
     }
     this.sim.scene = this.scene;
     if (this.selected === id) this.selected = undefined;
@@ -838,13 +957,14 @@ export class App {
   private refreshMarks(): void {
     const marks = new Map<string, THREE.ColorRepresentation>();
     const strip = (hole: Hole, color: string, own: string) => {
-      for (const x of holesOnNode(hole.node)) marks.set(x.id, color);
+      for (const x of this.netHoles(hole)) marks.set(x.id, color);
       marks.set(hole.id, own);
     };
     const h = this.hover;
     if (h.hole && !h.componentId) strip(h.hole, "#f0c9a8", "#b0612a");
     else if (h.hole && this.tool !== "select" && this.tool !== "delete") strip(h.hole, "#f0c9a8", "#b0612a");
     if (this.pendingHole) strip(this.pendingHole, "#f0c9a8", "#b0612a");
+    if (this.pendingPad) strip(this.pendingPad, "#f0c9a8", "#b0612a");
     if (this.selectedHole) strip(this.selectedHole, "#f0c9a8", "#b0612a");
     if (this.pendingEnd && "hole" in this.pendingEnd) strip(HOLE_BY_ID.get(this.pendingEnd.hole)!, "#f0c9a8", "#b0612a");
     // Выделенная деталь на плате: её отверстия
@@ -856,11 +976,14 @@ export class App {
   private updateGhost(): void {
     const h = this.hover;
     if (this.tool === "wire" && this.pendingEnd) {
-      const target = h.pin?.pos ?? (h.hole ? new THREE.Vector3(h.hole.x, BOARD.height, h.hole.z) : h.table);
+      const target = h.pin?.pos ?? (h.hole ? new THREE.Vector3(h.hole.x, h.hole.y, h.hole.z) : h.table);
       if (!target) return this.clearGhost();
       const a = this.endpointPos(this.pendingEnd);
       const geom = new THREE.TubeGeometry(wireCurve(a, target), 40, mm(0.75), 8, false);
       return this.showGhost(new THREE.Mesh(geom));
+    }
+    if (this.tool === "trace" && this.pendingPad && h.hole?.board === "pcb" && h.hole.id !== this.pendingPad.id) {
+      return this.showGhost(buildTraceView("ghost", this.pendingPad, h.hole).mesh);
     }
     if (!this.isPlaceTool(this.tool)) return this.clearGhost();
     const tool = this.tool;
@@ -908,6 +1031,10 @@ export class App {
     if (t === "wire") s = this.pendingEnd ? "Второй конец: <b>отверстие</b> или <b>вывод</b> детали. Esc — отмена." : "Первый конец провода: <b>отверстие</b> или <b>вывод</b> детали на столе.";
     else if (t === "smd") s = "SMD кладётся <b>на стол</b>, провода паяются к торцам. R — повернуть.";
     else if (t === "battery") s = "Нажмите на стол рядом с платой. R — повернуть.";
+    else if (t === "psu") s = "Нажмите на стол рядом с платой. Напряжение и ограничение тока — в панели справа.";
+    else if (t === "trace") s = this.pendingPad
+      ? `Дорожка от <b>${holeLabel(this.pendingPad.id)}</b>: следующая площадка. Щелчок по той же или Esc — закончить.`
+      : "Нажмите на <b>площадку</b> печатной платы, затем на следующую — между ними ляжет медная дорожка.";
     else if (t === "bjt") s = "Нажмите на отверстие — транзистор займёт его и два соседних справа: <b>коллектор, база, эмиттер</b>. F — перевернуть.";
     else if (t === "fet") s = `Нажмите на отверстие — MOSFET займёт его и два соседних справа: <b>${mosfetPinNames(this.defaults.mosfet)}</b>. F — перевернуть.`;
     else if (t !== "select" && t !== "delete") {
@@ -932,6 +1059,8 @@ export class App {
     let key: string;
     if (target && this.component(target)) {
       [key, html] = this.componentPanel(this.component(target)!, true);
+    } else if (target && (this.scene.traces ?? []).some((t) => t.id === target)) {
+      [key, html] = this.tracePanel(target);
     } else if (target && this.scene.wires.some((w) => w.id === target)) {
       [key, html] = this.wirePanel(target);
     } else if (this.selectedHole && this.tool === "select") {
@@ -940,6 +1069,8 @@ export class App {
       [key, html] = this.newPartPanel(this.tool);
     } else if (this.tool === "wire") {
       [key, html] = this.wireToolPanel();
+    } else if (this.tool === "trace") {
+      [key, html] = this.traceToolPanel();
     } else {
       [key, html] = this.overviewPanel();
     }
@@ -947,7 +1078,7 @@ export class App {
     this.ui.inspector.hidden = key === "o" && window.innerWidth <= 760;
     // Не пересоздаём разметку, пока в этой же панели открыт выпадающий список
     const focused = document.activeElement;
-    if (focused instanceof HTMLSelectElement && this.ui.inspector.contains(focused) && key === this.inspectorKey) return;
+    if ((focused instanceof HTMLSelectElement || focused instanceof HTMLInputElement) && this.ui.inspector.contains(focused) && key === this.inspectorKey) return;
     if (key === this.inspectorKey && html === this.inspectorHtml) return;
     this.inspectorKey = key;
     this.inspectorHtml = html;
@@ -992,6 +1123,12 @@ export class App {
     if (t && k > t) return `<span class="pill bad">ПЕРЕГРУЗКА ×${k.toFixed(1).replace(".", ",")}</span>`;
     if (t && k > t * 0.7) return `<span class="pill warn">${c.type === "lamp" && k <= 1.05 ? "ПОЛНЫЙ НАКАЛ" : "ГРЕЕТСЯ"}</span>`;
     if (c.type === "switch") return c.closed ? `<span class="pill ok">ЗАМКНУТ</span>` : `<span class="pill warn">РАЗОМКНУТ</span>`;
+    if (c.type === "psu") {
+      if (!c.on) return `<span class="pill warn">ВЫХОД ВЫКЛЮЧЕН</span>`;
+      return this.sim.psuMode.get(c.id) === "CC"
+        ? `<span class="pill warn">CC — ОГРАНИЧЕНИЕ ТОКА</span>`
+        : `<span class="pill ok">CV — ДЕРЖИТ НАПРЯЖЕНИЕ</span>`;
+    }
     if (c.type === "mosfet") {
       const mode = this.sim.mosfet(c).mode;
       if (mode === "диод") return `<span class="pill warn">ТОК ЧЕРЕЗ ПАРАЗИТНЫЙ ДИОД</span>`;
@@ -1029,7 +1166,7 @@ export class App {
 
   private componentPanel(c: Component, pinned: boolean): [string, string] {
     const s = this.sim.state(c.id);
-    const polar = isPolar(c) && c.type !== "battery";
+    const polar = isPolar(c) && c.type !== "battery" && c.type !== "psu";
     const pinName = c.type === "capacitor" ? ["+", "−"] : ["анод", "катод"];
     const where =
       c.type === "mosfet"
@@ -1103,6 +1240,16 @@ export class App {
         title = `Диод ${DIODE_1N4007.label}`;
         body = `<p class="sub">Пропускает ток только от анода к катоду, падение ≈ 0,6–0,8 В. Кольцо на корпусе — катод. До ${formatSI(DIODE_1N4007.maxA, "А")}.</p>`;
         break;
+      case "psu": {
+        title = "Лабораторный блок питания";
+        body = `<div class="field"><label for="f-psuV">Напряжение: <b>${formatSI(c.volts, "В")}</b></label>
+            <input type="range" id="f-psuV" data-field="psuV" min="0" max="${PSU_LIMITS.maxV}" step="0.1" value="${c.volts}" /></div>
+          <div class="field"><label for="f-psuA">Ограничение тока: <b>${formatSI(c.amps, "А")}</b></label>
+            <input type="range" id="f-psuA" data-field="psuA" min="0.01" max="${PSU_LIMITS.maxA}" step="0.01" value="${c.amps}" /></div>
+          <div class="row"><button class="btn inline" data-act="psuToggle" id="btn-psu">${c.on ? "Выключить выход" : "Включить выход"}</button></div>
+          <p class="sub">Держит заданное напряжение (CV), пока нагрузка берёт меньше тока, чем ограничение. Если больше — держит ток (CC), а напряжение само падает. Поэтому короткое замыкание ему не страшно, а светодиод можно питать без резистора, выставив 20 мА.</p>`;
+        break;
+      }
       case "mosfet": {
         const spec = MOSFETS[c.kind];
         const f = this.sim.mosfet(c);
@@ -1156,8 +1303,8 @@ export class App {
       <h2>${title}</h2>
       ${this.statusPill(c)}
       ${c.type === "transistor" ? this.transistorReadout(c) : c.type === "mosfet" ? this.mosfetReadout(c) : this.readout(
-        c.type === "battery" ? -this.sim.voltage(c) : this.sim.voltage(c),
-        c.type === "battery" ? Math.abs(this.sim.current(c)) : this.sim.current(c),
+        c.type === "battery" || c.type === "psu" ? -this.sim.voltage(c) : this.sim.voltage(c),
+        c.type === "battery" || c.type === "psu" ? Math.abs(this.sim.current(c)) : this.sim.current(c),
         this.sim.power(c),
         c.type === "capacitor" ? ["W", formatSI(this.sim.energy(c), "Дж")] : undefined,
       )}
@@ -1180,7 +1327,8 @@ export class App {
       <div class="kv"><span>От</span><span>${name(w.a)}</span></div>
       <div class="kv"><span>До</span><span>${name(w.b)}</span></div>
       <div class="field"><label>Цвет</label>${this.swatches(w.color, false)}</div>
-      <p class="sub">Сопротивление провода ≈ 5 мОм. Светлые точки показывают направление тока (от плюса к минусу), скорость — его силу.</p>
+      <div class="kv"><span>Сопротивление</span><span>${formatOhms(wireResistance(this.scene, w))}</span></div>
+      <p class="sub">Медь 22 AWG, ≈ 53 мОм на метр — сопротивление зависит от длины провода. Светлые точки показывают направление тока (от плюса к минусу), скорость — его силу.</p>
       ${this.selected === id ? `<div class="row"><button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button></div>` : ""}`;
     return [`w:${id}`, html];
   }
@@ -1196,6 +1344,31 @@ export class App {
           }>${c.hex === "auto" ? "A" : ""}</button>`,
       )
       .join("")}</div>`;
+  }
+
+  private tracePanel(id: string): [string, string] {
+    const t = (this.scene.traces ?? []).find((x) => x.id === id)!;
+    const b = this.sim.branch(id);
+    const a = HOLE_BY_ID.get(t.a)!;
+    const c = HOLE_BY_ID.get(t.b)!;
+    const lengthMm = Math.hypot(a.x - c.x, a.z - c.z) * 2.54;
+    const html = `<div class="eyebrow"><span class="ref">${id}</span> · дорожка</div>
+      <h2>Медная дорожка</h2>
+      ${this.readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
+      <div class="kv"><span>От</span><span>${holeLabel(t.a)}</span></div>
+      <div class="kv"><span>До</span><span>${holeLabel(t.b)}</span></div>
+      <div class="kv"><span>Длина</span><span>${String(lengthMm.toFixed(1)).replace(".", ",")} мм</span></div>
+      <div class="kv"><span>Сопротивление</span><span>${formatOhms(traceResistance(t.a, t.b))}</span></div>
+      <p class="sub">Медь 35 мкм, ширина 0,6 мм: ≈ 0,82 мОм на миллиметр. Чтобы набрать хотя бы 1 Ом, понадобилось бы ≈ 1,2 м такой дорожки.</p>
+      <div class="row"><button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button></div>`;
+    return [`t:${id}`, html];
+  }
+
+  private traceToolPanel(): [string, string] {
+    const html = `<div class="eyebrow">печатная плата</div><h2>Дорожка</h2>
+      <p class="sub">На печатной плате площадки <b>ничем не соединены</b> — в отличие от макетки. Соединения рисуются медными дорожками: площадка → площадка → … Esc — закончить.</p>
+      <p class="sub">Детали ставятся на площадки так же, как в макетку, и припаиваются. Провода можно вести от площадок к батарее, блоку питания или макетке.</p>`;
+    return [`tt`, html];
   }
 
   private wireToolPanel(): [string, string] {
@@ -1221,7 +1394,7 @@ export class App {
 
   private newPartPanel(tool: PlaceTool): [string, string] {
     const names: Record<PlaceTool, string> = {
-      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: "Диод 1N4007", led: "Светодиод", bjt: "Транзистор", fet: "MOSFET", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
+      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: "Диод 1N4007", led: "Светодиод", bjt: "Транзистор", fet: "MOSFET", psu: "Блок питания", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
     };
     let editor = "";
     if (tool === "tht" || tool === "smd") editor = this.ohmsSelect(this.defaults.ohms) + (tool === "smd" ? this.smdSelect(this.defaults.smdSize) : "");
@@ -1331,6 +1504,24 @@ export class App {
     root.querySelectorAll<HTMLSelectElement>("select[data-field]").forEach((sel) => {
       sel.addEventListener("change", () => this.applyField(sel.dataset.field!, sel.value));
     });
+    // Ползунки блока питания: меняем уставку на лету, без перестройки сцены
+    root.querySelectorAll<HTMLInputElement>("input[type=range][data-field]").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const c = this.selected ? this.component(this.selected) : undefined;
+        if (c?.type !== "psu") return;
+        const v = Number(inp.value);
+        if (inp.dataset.field === "psuV") c.volts = v;
+        if (inp.dataset.field === "psuA") c.amps = v;
+        this.sim.solve();
+        this.save();
+        const label = inp.previousElementSibling?.querySelector("b");
+        if (label) label.textContent = formatSI(v, inp.dataset.field === "psuV" ? "В" : "А");
+      });
+      inp.addEventListener("change", () => {
+        inp.blur();
+        this.inspectorHtml = "";
+      });
+    });
     root.querySelectorAll<HTMLButtonElement>("[data-color]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const color = btn.dataset.color!;
@@ -1363,6 +1554,13 @@ export class App {
           this.sim.repair(id);
           this.burnedAt.delete(id);
           this.changed();
+        }
+        if (act === "psuToggle") {
+          const c = this.component(id);
+          if (c?.type === "psu") {
+            c.on = !c.on;
+            this.changed();
+          }
         }
         if (act === "toggle") {
           const c = this.component(id);
@@ -1436,6 +1634,8 @@ function label(c: Component): string {
       return `транзистор ${TRANSISTORS[c.kind].label}, I<sub>к</sub>`;
     case "mosfet":
       return `MOSFET ${MOSFETS[c.kind].label}, I<sub>с</sub>`;
+    case "psu":
+      return c.on ? `блок питания ${formatSI(c.volts, "В")} / ${formatSI(c.amps, "А")}` : "блок питания, выход выкл.";
   }
 }
 

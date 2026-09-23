@@ -1,4 +1,41 @@
 import { HOLE_BY_ID } from "../model/breadboard";
+
+/** Выходное сопротивление лабораторного блока в режиме CV, Ом. */
+const PSU_R_CV = 0.005;
+/** В режиме CC блок — источник тока; внутренняя проводимость ничтожна (100 МОм параллельно). */
+const PSU_R_CC = 1e8;
+
+/** Где на столе конец провода (x, z в шагах 2,54 мм). У детали на столе — её центр (выводы рядом). */
+function endpointXZ(scene: Scene, e: Endpoint): [number, number] {
+  if ("hole" in e) {
+    const h = HOLE_BY_ID.get(e.hole)!;
+    return [h.x, h.z];
+  }
+  const c = scene.components.find((x) => x.id === e.comp)!;
+  if (c.placement.mode === "free") return [c.placement.x, c.placement.z];
+  const h = HOLE_BY_ID.get(c.placement.holes[e.pin])!;
+  return [h.x, h.z];
+}
+
+/**
+ * Сопротивление провода, Ом: длина дуги провода (как он нарисован — концы поднимаются
+ * над платой на 1–7 шагов) × сопротивление меди 22 AWG.
+ */
+export function wireResistance(scene: Scene, w: { a: Endpoint; b: Endpoint }): number {
+  const [ax, az] = endpointXZ(scene, w.a);
+  const [bx, bz] = endpointXZ(scene, w.b);
+  const d = Math.hypot(ax - bx, az - bz);
+  const rise = Math.min(7, Math.max(1, 0.8 + d * 0.22));
+  return (d + 2 * rise) * 2.54 * WIRE_OHM_PER_MM;
+}
+
+/** Сопротивление дорожки между двумя площадками, Ом (длина в шагах 2,54 мм). */
+export function traceResistance(aId: string, bId: string): number {
+  const a = HOLE_BY_ID.get(aId)!;
+  const b = HOLE_BY_ID.get(bId)!;
+  const mmLen = Math.hypot(a.x - b.x, a.z - b.z) * 2.54;
+  return Math.max(1e-4, mmLen * TRACE_OHM_PER_MM);
+}
 import {
   CERAMIC_RATED_V,
   DIODE_1N4007,
@@ -9,8 +46,9 @@ import {
   LED_RS,
   MOSFETS,
   SWITCH_RESISTANCE,
+  TRACE_OHM_PER_MM,
   TRANSISTORS,
-  WIRE_RESISTANCE,
+  WIRE_OHM_PER_MM,
   mosfetPin,
   ratedPower,
   type Component,
@@ -18,6 +56,7 @@ import {
   type Endpoint,
   type Mosfet,
   type Pin,
+  type PowerSupply,
   type Scene,
   type Transistor,
 } from "../model/types";
@@ -249,6 +288,8 @@ export class Simulation {
   readonly states = new Map<string, ComponentState>();
   /** Напряжение на конденсаторе (вывод 0 минус вывод 1), В. Сохраняется между шагами — это заряд. */
   readonly capVoltage = new Map<string, number>();
+  /** Режим лабораторных блоков: держат напряжение (CV) или ток (CC). */
+  readonly psuMode = new Map<string, "CV" | "CC">();
   /** Напряжение на переходе диода с прошлого решения — начальное приближение для Ньютона. */
   private junction = new Map<string, number>();
   solution!: Solution;
@@ -317,6 +358,16 @@ export class Simulation {
         case "switch":
           out.push({ id: c.id, a, b, r: c.closed ? SWITCH_RESISTANCE : Infinity });
           break;
+        case "psu": {
+          if (!c.on) {
+            out.push(open);
+            break;
+          }
+          // CV: ЭДС = уставка, почти нулевое сопротивление. CC: ток = ограничение (эквивалент Нортона).
+          const cc = this.psuMode.get(c.id) === "CC";
+          out.push(cc ? { id: c.id, a, b, r: PSU_R_CC, emf: c.amps * PSU_R_CC } : { id: c.id, a, b, r: PSU_R_CV, emf: c.volts });
+          break;
+        }
         case "capacitor": {
           // Неявный метод Эйлера: I = C·(v − v_пред)/h → ветвь с r = h/C и ЭДС −v_пред.
           const C = tolerance.capacitance(c, this.tolerance);
@@ -333,7 +384,10 @@ export class Simulation {
       }
     }
     for (const w of this.scene.wires) {
-      out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: WIRE_RESISTANCE });
+      out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: wireResistance(this.scene, w) });
+    }
+    for (const t of this.scene.traces ?? []) {
+      out.push({ id: t.id, a: HOLE_BY_ID.get(t.a)!.node, b: HOLE_BY_ID.get(t.b)!.node, r: traceResistance(t.a, t.b) });
     }
     return { out, extras };
   }
@@ -461,12 +515,25 @@ export class Simulation {
     const diodes = this.scene.components.filter((c) => (c.type === "diode" || c.type === "led") && !this.state(c.id).burned);
     const bjts = this.scene.components.filter((c): c is Transistor => c.type === "transistor" && !this.state(c.id).burned);
     const fets = this.scene.components.filter((c): c is Mosfet => c.type === "mosfet" && !this.state(c.id).burned);
+    const psus = this.scene.components.filter((c): c is PowerSupply => c.type === "psu" && c.on);
+    let flips = 0;
     for (let iter = 1; iter <= 100; iter++) {
       const { out, extras } = this.branches(h);
       this.solution = solveCircuit(out, [], extras);
       this.lastIterations = iter;
       if (--this.budget < 0) return false;
       let converged = true;
+      // Лабораторный блок: CV, пока ток меньше ограничения; иначе CC, пока напряжение не выше уставки
+      for (const p of psus) {
+        const br = this.solution.branches.get(p.id)!;
+        const mode = this.psuMode.get(p.id) ?? "CV";
+        const next = mode === "CV" ? (br.current > p.amps * (1 + 1e-9) ? "CC" : "CV") : br.voltage > p.volts * (1 + 1e-9) ? "CV" : "CC";
+        if (next !== mode && flips < 8) {
+          this.psuMode.set(p.id, next);
+          flips++;
+          converged = false;
+        }
+      }
       for (const t of fets) {
         const m = mos(t, this.tolerance);
         const volt = (pin: Pin) => this.solution.voltage.get(pinNode(t, pin)) ?? 0;
@@ -520,7 +587,7 @@ export class Simulation {
   solve(): void {
     for (const c of this.scene.components) this.state(c.id);
     const alive = new Set(this.scene.components.map((c) => c.id));
-    for (const m of [this.states, this.capVoltage, this.junction]) {
+    for (const m of [this.states, this.capVoltage, this.junction, this.psuMode]) {
       for (const key of [...m.keys()]) if (!alive.has(key.split(":")[0])) m.delete(key);
     }
     this.solveAt(SUBSTEP);
@@ -564,6 +631,8 @@ export class Simulation {
         const f = this.mosfet(c);
         return Math.max(0, f.vds * f.id) + Math.max(0, -f.vds * f.idiode);
       }
+      case "psu":
+        return Math.max(0, this.branch(c.id).current * this.branch(c.id).voltage);
       case "battery": {
         // Мощность, которую батарея отдаёт в цепь
         const bat = tolerance.battery(c, this.tolerance);

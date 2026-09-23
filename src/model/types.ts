@@ -113,8 +113,11 @@ export function mosfetPin(kind: MosfetKind, role: MosfetRole): 0 | 1 | 2 {
   return MOSFETS[kind].pins.indexOf(role) as 0 | 1 | 2;
 }
 
-/** Сопротивление провода-перемычки, Ом (≈ 10 см медного провода 22 AWG). */
-export const WIRE_RESISTANCE = 0.005;
+/**
+ * Сопротивление провода-перемычки на миллиметр длины, Ом: медь 22 AWG (0,326 мм²),
+ * ρ/S = 1,72e−8 / 0,326e−6 ≈ 53 мОм/м. Провод 10 см — около 5 мОм.
+ */
+export const WIRE_OHM_PER_MM = 1.72e-8 / 0.326e-6 / 1000;
 /** Сопротивление замкнутого выключателя, Ом. */
 export const SWITCH_RESISTANCE = 0.01;
 
@@ -181,7 +184,21 @@ export interface Mosfet extends Base {
   kind: MosfetKind;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet;
+/**
+ * Лабораторный источник питания: держит заданное напряжение (режим CV), пока ток меньше
+ * ограничения; если нагрузка требует больше — держит ток (режим CC), напряжение падает.
+ * Выводы: 0 — минус (чёрная клемма), 1 — плюс (красная).
+ */
+export interface PowerSupply extends Base {
+  type: "psu";
+  volts: number;
+  amps: number;
+  on: boolean;
+}
+
+export const PSU_LIMITS = { maxV: 30, maxA: 3 };
+
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */
@@ -195,9 +212,24 @@ export interface Wire {
   color: string;
 }
 
+/**
+ * Медная дорожка печатной платы между двумя площадками (отрезок).
+ * Фольга 35 мкм, ширина 0,6 мм: сопротивление ≈ 0,82 мОм на миллиметр длины.
+ */
+export interface Trace {
+  id: string;
+  a: string;
+  b: string;
+}
+
+/** Удельное сопротивление дорожки, Ом/мм: ρ(Cu) / (ширина × толщина) = 1,72e−8 / (0,6e−3 × 35e−6) / 1000. */
+export const TRACE_OHM_PER_MM = 1.72e-8 / (0.6e-3 * 35e-6) / 1000;
+
 export interface Scene {
   components: Component[];
   wires: Wire[];
+  /** Дорожки печатной платы (в старых сохранениях может не быть). */
+  traces?: Trace[];
 }
 
 /** Что с деталью происходит во время симуляции. */
@@ -218,6 +250,7 @@ export function isPolar(c: Component): boolean {
     c.type === "diode" ||
     c.type === "led" ||
     c.type === "battery" ||
+    c.type === "psu" ||
     c.type === "transistor" ||
     c.type === "mosfet" ||
     (c.type === "capacitor" && c.variant === "electrolytic")
@@ -255,7 +288,7 @@ export function ratedPower(c: Component): number | undefined {
 
 /** Может ли деталь стоять в макетной плате: у SMD нет ножек. У батареи — отдельный корпус. */
 export function canGoOnBoard(type: ComponentType, variant?: "tht" | "smd"): boolean {
-  if (type === "battery") return false;
+  if (type === "battery" || type === "psu") return false;
   if (type === "resistor") return variant !== "smd";
   return true;
 }

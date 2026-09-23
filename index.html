@@ -295,6 +295,9 @@
     <button class="tool" data-tool="wire" aria-pressed="false" title="Провод между отверстиями и выводами">
       <svg viewBox="0 0 30 18"><circle cx="4" cy="9" r="2" /><path d="M6 9h18" /><circle cx="26" cy="9" r="2" /></svg>Провод<kbd>2</kbd>
     </button>
+    <button class="tool" data-tool="trace" aria-pressed="false" title="Медная дорожка на печатной плате">
+      <svg viewBox="0 0 30 18"><circle cx="4" cy="13" r="2.4" /><path d="M6.4 13h6l5-8h6" stroke-width="2.4" /><circle cx="25.5" cy="5" r="2.4" /></svg>Дорожка<kbd>T</kbd>
+    </button>
     <div class="tool-sep"></div>
     <button class="tool" data-tool="tht" aria-pressed="false" title="Резистор 0,25 Вт">
       <svg viewBox="0 0 30 18"><path d="M1 9h7M22 9h7" /><rect x="8" y="5" width="14" height="8" /></svg>Резистор<kbd>3</kbd>
@@ -323,6 +326,9 @@
     <button class="tool" data-tool="battery" aria-pressed="false" title="Батарея (ставится на стол)">
       <svg viewBox="0 0 30 18"><path d="M1 9h11M18 9h11M12 3v12M18 6v6" /></svg>Батарея<kbd>9</kbd>
     </button>
+    <button class="tool" data-tool="psu" aria-pressed="false" title="Лабораторный блок питания 0–30 В, 0–3 А">
+      <svg viewBox="0 0 30 18"><rect x="5" y="2" width="20" height="14" rx="1.5" /><path d="M8 5h9v4H8zM20 12.5h1M23 12.5h0" /><circle cx="10" cy="12.5" r="1.5" /></svg>Блок питания<kbd>P</kbd>
+    </button>
     <div class="tool-sep"></div>
     <button class="tool" data-tool="delete" aria-pressed="false" title="Удалить деталь или провод">
       <svg viewBox="0 0 30 18"><path d="M10 4l10 10M20 4L10 14" /></svg>Удалить<kbd>Del</kbd>
@@ -336,6 +342,7 @@
       <option value="leds">Конденсатор и светодиоды</option>
       <option value="blinker">Мигалка на транзисторах</option>
       <option value="mosfet">MOSFET: ключ и память затвора</option>
+      <option value="pcb">Печатная плата и блок питания</option>
     </select>
     <button class="btn" id="btn-tol" aria-pressed="false" title="Разброс параметров, как у настоящих деталей">Допуски: выкл.</button>
     <button class="btn" id="btn-reroll" hidden title="Те же номиналы, другие экземпляры деталей">Другие экземпляры</button>

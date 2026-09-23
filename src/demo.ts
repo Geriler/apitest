@@ -1,4 +1,5 @@
-import type { Scene } from "./model/types";
+import { padsAlong } from "./model/breadboard";
+import type { Scene, Trace } from "./model/types";
 
 /**
  * Пример: отсек 3 × AA (4,5 В) слева от платы, провода к верхним шинам.
@@ -137,6 +138,51 @@ export function mosfetScene(): Scene {
       // Истоки на минус
       { id: "W5", a: { hole: "a10" }, b: { hole: "top-9" }, color: "#2f6fd1" },
       { id: "W6", a: { hole: "j22" }, b: { hole: "bot-19" }, color: "#2f6fd1" },
+    ],
+  };
+}
+
+/** Дорожки по ломаной из площадок, с делением в каждой пересечённой площадке (как в редакторе). */
+function tracePath(prefix: string, pads: string[], counter: { n: number }): Trace[] {
+  const out: Trace[] = [];
+  for (let i = 0; i < pads.length - 1; i++) {
+    const seg = padsAlong(pads[i], pads[i + 1]);
+    for (let k = 0; k < seg.length - 1; k++) out.push({ id: `${prefix}${counter.n++}`, a: seg[k], b: seg[k + 1] });
+  }
+  return out;
+}
+
+/**
+ * Пример 5: печатная плата и лабораторный блок питания.
+ *
+ * Блок 9 В / 100 мА подключён к площадкам A1 (+) и N1 (−). Дорожки: шина «+» по ряду A,
+ * шина «−» по ряду N; от них — два светодиода с резисторами 470 Ом (красный и зелёный).
+ * Ток ≈ (9 − 2) / 470 ≈ 15 мА на каждый — блок в режиме CV.
+ * Если выставить ограничение 20 мА, блок перейдёт в CC: напряжение упадёт, светодиоды потускнеют.
+ */
+export function pcbScene(): Scene {
+  const c = { n: 1 };
+  return {
+    components: [
+      { id: "G1", type: "psu", volts: 9, amps: 0.1, on: true, placement: { mode: "free", x: -31, z: 21, rot: 0 } },
+      { id: "R1", type: "resistor", variant: "tht", ohms: 470, smdSize: "0805", placement: { mode: "board", holes: ["pC4", "pC8"] } },
+      { id: "HL1", type: "led", color: "red", placement: { mode: "board", holes: ["pE8", "pF8"] } },
+      { id: "R2", type: "resistor", variant: "tht", ohms: 470, smdSize: "0805", placement: { mode: "board", holes: ["pC12", "pC16"] } },
+      { id: "HL2", type: "led", color: "green", placement: { mode: "board", holes: ["pE16", "pF16"] } },
+    ],
+    wires: [
+      { id: "W1", a: { comp: "G1", pin: 1 }, b: { hole: "pA1" }, color: "#c8261f" },
+      { id: "W2", a: { comp: "G1", pin: 0 }, b: { hole: "pN1" }, color: "#1b1d20" },
+    ],
+    traces: [
+      ...tracePath("T", ["pA1", "pA20"], c), // шина +
+      ...tracePath("T", ["pN1", "pN20"], c), // шина −
+      ...tracePath("T", ["pA4", "pC4"], c),
+      ...tracePath("T", ["pC8", "pE8"], c),
+      ...tracePath("T", ["pF8", "pN8"], c),
+      ...tracePath("T", ["pA12", "pC12"], c),
+      ...tracePath("T", ["pC16", "pE16"], c),
+      ...tracePath("T", ["pF16", "pN16"], c),
     ],
   };
 }

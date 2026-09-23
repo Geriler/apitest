@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { BOARD, COLUMNS, HOLES, ROWS } from "../model/breadboard";
+import { BOARD, COLUMNS, HOLES, PCB, ROWS, padX, padZ } from "../model/breadboard";
 
 /** Пикселей на единицу длины (шаг 2,54 мм) в текстуре платы. */
 const PX = 48;
@@ -61,6 +61,7 @@ export function breadboardTexture(): THREE.CanvasTexture {
   // Отверстия: квадратные гнёзда с тенью
   const s = 0.42 * PX;
   for (const hole of HOLES) {
+    if (hole.board !== "breadboard") continue;
     const cx = X(hole.x);
     const cz = Z(hole.z);
     g.fillStyle = "#c9c4b5";
@@ -135,4 +136,50 @@ export function puffTexture(): THREE.CanvasTexture {
   g.fillStyle = grad;
   g.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(canvas);
+}
+
+/** Печатная плата: зелёная маска, лужёные площадки с отверстиями, шелкография (номера и буквы). */
+export function pcbTexture(): THREE.CanvasTexture {
+  const w = PCB.width * PX;
+  const h = PCB.depth * PX;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext("2d")!;
+  const X = (x: number) => (x - PCB.x + PCB.width / 2) * PX;
+  const Z = (z: number) => (z - PCB.z + PCB.depth / 2) * PX;
+  g.fillStyle = "#1f5c3a";
+  g.fillRect(0, 0, w, h);
+  // Рамка шелкографии
+  g.strokeStyle = "#e8ecdf";
+  g.lineWidth = 3;
+  g.strokeRect(6, 6, w - 12, h - 12);
+  g.fillStyle = "#e8ecdf";
+  g.font = `500 ${PX * 0.36}px "IBM Plex Mono", ui-monospace, monospace`;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  for (let c = 1; c <= PCB.cols; c++) {
+    if (c === 1 || c % 5 === 0) g.fillText(String(c), X(padX(c)), Z(padZ(0)) - PX * 0.85);
+  }
+  PCB.rows.forEach((r, i) => g.fillText(r, X(padX(1)) - PX * 0.85, Z(padZ(i))));
+  g.textAlign = "right";
+  g.fillText("МАКЕТКА · PCB 1,6 мм", w - PX * 0.5, h - PX * 0.45);
+  // Площадки: лужёное кольцо и отверстие
+  for (const hole of HOLES) {
+    if (hole.board !== "pcb") continue;
+    const cx = X(hole.x);
+    const cz = Z(hole.z);
+    g.fillStyle = "#c9ccc4";
+    g.beginPath();
+    g.arc(cx, cz, PX * 0.36, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#15191a";
+    g.beginPath();
+    g.arc(cx, cz, PX * 0.16, 0, Math.PI * 2);
+    g.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
 }

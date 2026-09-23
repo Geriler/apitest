@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { blinkerScene, demoScene, ledDemoScene, mosfetScene } from "../src/demo";
+import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene } from "../src/demo";
+import { padsAlong } from "../src/model/breadboard";
 import type { Scene } from "../src/model/types";
 import { Simulation } from "../src/sim/simulation";
 
@@ -172,5 +173,43 @@ describe("пример «MOSFET: ключ и память затвора»", () 
       expect(used.get(e.hole), `${e.hole}: ${w.id} и ${used.get(e.hole)}`).toBeUndefined();
       used.set(e.hole, w.id);
     }
+  });
+});
+
+describe("пример «Печатная плата и блок питания»", () => {
+  it("оба светодиода горят ≈ 15 мА от шин по дорожкам, блок в CV", () => {
+    const scene = pcbScene();
+    const sim = new Simulation(scene);
+    const led = (id: string) => scene.components.find((c) => c.id === id)!;
+    for (const id of ["HL1", "HL2"]) {
+      expect(sim.current(led(id))).toBeGreaterThan(0.013);
+      expect(sim.current(led(id))).toBeLessThan(0.016);
+    }
+    expect(sim.psuMode.get("G1") ?? "CV").toBe("CV");
+  });
+
+  it("ограничение 20 мА переводит блок в CC: на оба светодиода вместе 20 мА", () => {
+    const scene = pcbScene();
+    const g1 = scene.components.find((c) => c.id === "G1")!;
+    if (g1.type !== "psu") throw new Error("demo изменился");
+    g1.amps = 0.02;
+    const sim = new Simulation(scene);
+    expect(sim.psuMode.get("G1")).toBe("CC");
+    const total = ["HL1", "HL2"].reduce((sum, id) => sum + sim.current(scene.components.find((c) => c.id === id)!), 0);
+    expect(total).toBeCloseTo(0.02, 5);
+  });
+
+  it("в раскладке нет занятых дважды площадок; каждая дорожка — отрезок между соседними площадками", () => {
+    const scene = pcbScene();
+    const used = new Map<string, string>();
+    for (const c of scene.components) if (c.placement.mode === "board") for (const h of c.placement.holes) {
+      expect(used.get(h), `${h}: ${c.id} и ${used.get(h)}`).toBeUndefined();
+      used.set(h, c.id);
+    }
+    for (const w of scene.wires) for (const e of [w.a, w.b]) if ("hole" in e) {
+      expect(used.get(e.hole), `${e.hole}: ${w.id} и ${used.get(e.hole)}`).toBeUndefined();
+      used.set(e.hole, w.id);
+    }
+    for (const t of scene.traces!) expect(padsAlong(t.a, t.b)).toEqual([t.a, t.b]);
   });
 });

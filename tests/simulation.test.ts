@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { HOLES, HOLE_BY_ID, describeNode } from "../src/model/breadboard";
 import type { Scene } from "../src/model/types";
-import { Simulation } from "../src/sim/simulation";
+import { Simulation, wireResistance } from "../src/sim/simulation";
 
 /** Батарея 9 В на столе, провода к шинам, резистор между шиной и полосой, лампа от полосы к минусу. */
 function demoScene(ohms: number, variant: "tht" | "smd" = "tht"): Scene {
@@ -28,10 +28,11 @@ function demoScene(ohms: number, variant: "tht" | "smd" = "tht"): Scene {
 }
 
 describe("макетная плата", () => {
-  it("400 отверстий: 300 в поле и 100 в шинах", () => {
+  it("400 отверстий: 300 в поле и 100 в шинах; id уникальны вместе с площадками печатной платы", () => {
     expect(HOLES.filter((h) => h.kind === "main")).toHaveLength(300);
     expect(HOLES.filter((h) => h.kind === "rail")).toHaveLength(100);
-    expect(new Set(HOLES.map((h) => h.id)).size).toBe(400);
+    expect(HOLES.filter((h) => h.board === "breadboard")).toHaveLength(400);
+    expect(new Set(HOLES.map((h) => h.id)).size).toBe(HOLES.length);
   });
 
   it("a–e одного столбца соединены, а через канавку — нет", () => {
@@ -45,9 +46,11 @@ describe("макетная плата", () => {
 
 describe("симуляция", () => {
   it("ток идёт: батарея → провод → шина → резистор → полоса → лампа → шина → батарея", () => {
-    const sim = new Simulation(demoScene(10));
-    // 9 В, rвнутр = 1,5; R = 10; лампа 6,3/0,3 = 21 Ом; провода 2 × 0,005
-    const expected = 9 / (1.5 + 10 + 21 + 0.01);
+    const scene = demoScene(10);
+    const sim = new Simulation(scene);
+    // 9 В, rвнутр = 1,5; R = 10; лампа 6,3/0,3 = 21 Ом; плюс сопротивление двух проводов по их длине
+    const wires = scene.wires.reduce((sum, w) => sum + wireResistance(scene, w), 0);
+    const expected = 9 / (1.5 + 10 + 21 + wires);
     expect(sim.branch("L").current).toBeCloseTo(expected, 9);
     expect(sim.branch("R").current).toBeCloseTo(expected, 9);
     expect(Math.abs(sim.branch("w+").current)).toBeCloseTo(expected, 9);

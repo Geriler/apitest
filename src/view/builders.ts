@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { BOARD, HOLE_BY_ID } from "../model/breadboard";
+import { HOLE_BY_ID, type Hole } from "../model/breadboard";
 import {
   BATTERIES,
   CERAMICS,
@@ -16,6 +16,7 @@ import {
   type Lamp,
   type Led,
   type Mosfet,
+  type PowerSupply,
   type Resistor,
   type Switch,
   type Transistor,
@@ -25,7 +26,6 @@ import { smdLabelTexture } from "./textures";
 
 /** Миллиметры → единицы сцены (шаг 2,54 мм). */
 export const mm = (v: number) => v / 2.54;
-const H = BOARD.height;
 const Y = new THREE.Vector3(0, 1, 0);
 
 export interface Visual {
@@ -36,6 +36,8 @@ export interface Visual {
   burned: boolean;
   shorted: boolean;
   time: number;
+  /** Показания лабораторного блока (для его дисплея). */
+  display?: { volts: number; amps: number; mode: "CV" | "CC"; on: boolean };
 }
 
 export interface ComponentView {
@@ -63,7 +65,7 @@ function lead(points: THREE.Vector3[], radius = mm(0.3)): THREE.Mesh {
 
 function holePos(id: string): THREE.Vector3 {
   const h = HOLE_BY_ID.get(id)!;
-  return new THREE.Vector3(h.x, H, h.z);
+  return new THREE.Vector3(h.x, h.y, h.z);
 }
 
 /** Мировые позиции точек, заданных в локальных координатах свободно стоящей детали. */
@@ -86,6 +88,7 @@ function disposeGroup(group: THREE.Group): void {
   group.traverse((o) => {
     const m = o as THREE.Mesh;
     if (m.isMesh) {
+      if (m.userData.shared) return;
       m.geometry.dispose();
       const mats = Array.isArray(m.material) ? m.material : [m.material];
       for (const mat of mats) {
@@ -131,6 +134,7 @@ function axialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, L: 
     return { pins, hotspot };
   }
   const f = boardFrame(c.placement.holes);
+  const H = f.p0.y; // поверхность платы: макетка или печатная плата
   pins = [f.p0, f.p1];
   if (f.dist >= L + 0.8) {
     // Лёжа над платой
@@ -180,6 +184,7 @@ function radialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, sp
     return { pins, hotspot };
   }
   const f = boardFrame(c.placement.holes);
+  const H = f.p0.y;
   pins = [f.p0, f.p1];
   const y = H + bottom;
   body.position.set(f.mid.x, y, f.mid.z);
@@ -344,6 +349,7 @@ function lampView(c: Lamp): ComponentView {
   } else {
     // Миниатюрная лампа с проволочными выводами, Ø 5 мм
     const f = boardFrame(c.placement.holes);
+    const H = f.p0.y;
     pins = [f.p0, f.p1];
     const r = mm(2.5);
     const y = H + 2.4;
@@ -413,6 +419,7 @@ function switchView(c: Switch): ComponentView {
     hotspot = freeTransform(c, new THREE.Vector3(0, 2.4, 0));
   } else {
     const f = boardFrame(c.placement.holes);
+    const H = f.p0.y;
     pins = [f.p0, f.p1];
     const y = H + 0.7;
     body.position.set(f.mid.x, y, f.mid.z);
@@ -852,6 +859,7 @@ function transistorView(c: Transistor | Mosfet): ComponentView {
     // Три соседних отверстия: корпус над средним, плоской гранью «вперёд» относительно направления К → Э
     const holes = c.placement.holes;
     const f = boardFrame([holes[0], holes[2]]);
+    const H = f.p0.y;
     pins = holes.map((id) => holePos(id));
     const bottom = H + 1.0;
     body.position.set(f.mid.x, bottom, f.mid.z);
@@ -882,7 +890,147 @@ function transistorView(c: Transistor | Mosfet): ComponentView {
   };
 }
 
+// ─── Лабораторный источник питания ─────────────────────────────────────────
+
+/**
+ * Передняя панель: дисплей (напряжение и ток), индикаторы CV/CC и «Выход», подписи ручек.
+ * Рисуется на canvas и обновляется, только когда показания меняются.
+ */
+class PsuPanel {
+  readonly canvas = document.createElement("canvas");
+  readonly texture: THREE.CanvasTexture;
+  private last = "";
+
+  constructor() {
+    this.canvas.width = 700;
+    this.canvas.height = 350;
+    this.texture = new THREE.CanvasTexture(this.canvas);
+    this.texture.colorSpace = THREE.SRGBColorSpace;
+    this.draw({ volts: 0, amps: 0, mode: "CV", on: false });
+  }
+
+  draw(d: NonNullable<Visual["display"]>): void {
+    const v = d.on ? d.volts.toFixed(2).padStart(5, " ") : "--.--";
+    const a = d.on ? d.amps.toFixed(3) : "-.---";
+    const key = `${v}|${a}|${d.mode}|${d.on}`;
+    if (key === this.last) return;
+    this.last = key;
+    const g = this.canvas.getContext("2d")!;
+    const W = this.canvas.width, Hh = this.canvas.height;
+    g.fillStyle = "#2b2f33";
+    g.fillRect(0, 0, W, Hh);
+    // Дисплей
+    g.fillStyle = "#0b0f0c";
+    g.fillRect(30, 30, 420, 200);
+    g.font = `600 84px "IBM Plex Mono", ui-monospace, monospace`;
+    g.textAlign = "right";
+    g.textBaseline = "middle";
+    g.fillStyle = "#ff5a3c";
+    g.fillText(`${v}V`, 430, 85);
+    g.fillStyle = "#5dff8a";
+    g.fillText(`${a}A`, 430, 180);
+    // Индикаторы CV / CC / ВЫХОД
+    const lamp = (x: number, y: number, lit: boolean, color: string, label: string) => {
+      g.fillStyle = lit ? color : "#3a3f44";
+      g.beginPath();
+      g.arc(x, y, 14, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "#cfd5d9";
+      g.font = `600 26px "IBM Plex Sans", system-ui, sans-serif`;
+      g.textAlign = "left";
+      g.fillText(label, x + 24, y + 1);
+    };
+    lamp(490, 60, d.on && d.mode === "CV", "#5dff8a", "CV");
+    lamp(490, 110, d.on && d.mode === "CC", "#ff5a3c", "CC");
+    lamp(490, 160, d.on, "#ffd23c", "ВЫХОД");
+    // Подписи
+    g.fillStyle = "#cfd5d9";
+    g.font = `600 30px "IBM Plex Sans", system-ui, sans-serif`;
+    g.textAlign = "center";
+    g.fillText("U", 95, 300);
+    g.fillText("I", 225, 300);
+    g.fillText("−", 470, 300);
+    g.fillText("+", 610, 300);
+    g.font = `500 22px "IBM Plex Mono", ui-monospace, monospace`;
+    g.fillText("0–30 V · 0–3 A", 560, 215);
+    this.texture.needsUpdate = true;
+  }
+}
+
+/**
+ * Компактный лабораторный блок 70 × 35 × 50 мм (настоящие больше, но тогда он заслонил бы макетку).
+ * Передняя панель смотрит в +Z; клеммы внизу справа: чёрная (минус, вывод 0) и красная (плюс, вывод 1).
+ */
+function psuView(c: PowerSupply): ComponentView {
+  const group = new THREE.Group();
+  const W = mm(70), Hh = mm(35), D = mm(50);
+  const caseMat = new THREE.MeshStandardMaterial({ color: 0x3d4449, roughness: 0.5, metalness: 0.2 });
+  const panel = new PsuPanel();
+  const faceMat = new THREE.MeshStandardMaterial({
+    map: panel.texture,
+    roughness: 0.6,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: panel.texture,
+    emissiveIntensity: 0.35,
+  });
+  const box = new THREE.Mesh(new THREE.BoxGeometry(W, Hh, D), [caseMat, caseMat, caseMat, caseMat, faceMat, caseMat]);
+  box.position.y = Hh / 2;
+  group.add(box);
+  // Ручки U и I
+  const knobMat = new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.4 });
+  for (const u of [95 / 700, 225 / 700]) {
+    const knob = new THREE.Mesh(new THREE.CylinderGeometry(mm(4), mm(4.3), mm(4), 24), knobMat);
+    knob.rotation.x = Math.PI / 2;
+    knob.position.set(-W / 2 + u * W, Hh * 0.33, D / 2 + mm(2));
+    group.add(knob);
+  }
+  // Клеммы
+  const posts: THREE.Vector3[] = [];
+  for (const [u, color] of [[470 / 700, 0x1b1d20], [610 / 700, 0xc8261f]] as const) {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(mm(2.6), mm(2.6), mm(6), 20), new THREE.MeshStandardMaterial({ color, roughness: 0.4 }));
+    post.rotation.x = Math.PI / 2;
+    const p = new THREE.Vector3(-W / 2 + u * W, Hh * 0.33, D / 2 + mm(3));
+    post.position.copy(p);
+    group.add(post);
+    posts.push(p.clone().setZ(D / 2 + mm(6)));
+  }
+  if (c.placement.mode !== "free") throw new Error("Блок питания ставится только на стол");
+  group.position.set(c.placement.x, 0, c.placement.z);
+  group.rotation.y = c.placement.rot;
+  tagPickable(group, c.id);
+  const pins = posts.map((p) => freeTransform(c, p));
+  return {
+    group,
+    pins,
+    hotspot: freeTransform(c, new THREE.Vector3(0, Hh, 0)),
+    update(v) {
+      if (v.display) panel.draw(v.display);
+    },
+    dispose: () => disposeGroup(group),
+  };
+}
+
+/** Припой на площадках печатной платы: конус вокруг вывода. */
+const solderMaterial = new THREE.MeshStandardMaterial({ color: 0xd4d6d8, metalness: 0.9, roughness: 0.25 });
+const solderGeometry = new THREE.ConeGeometry(mm(1.1), mm(1.2), 16);
+
 export function buildComponentView(c: Component): ComponentView {
+  const view = buildBaseView(c);
+  if (c.placement.mode === "board") {
+    for (const id of c.placement.holes) {
+      const h = HOLE_BY_ID.get(id)!;
+      if (h.board !== "pcb") continue;
+      const blob = new THREE.Mesh(solderGeometry, solderMaterial);
+      blob.position.set(h.x, h.y + mm(0.5), h.z);
+      blob.userData.componentId = c.id;
+      blob.userData.shared = true;
+      view.group.add(blob);
+    }
+  }
+  return view;
+}
+
+function buildBaseView(c: Component): ComponentView {
   switch (c.type) {
     case "resistor":
       return resistorView(c);
@@ -901,6 +1049,8 @@ export function buildComponentView(c: Component): ComponentView {
     case "transistor":
     case "mosfet":
       return transistorView(c);
+    case "psu":
+      return psuView(c);
   }
 }
 
@@ -936,4 +1086,34 @@ export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, co
       mat.dispose();
     },
   };
+}
+
+// ─── Дорожки печатной платы ────────────────────────────────────────────────
+
+const copperMaterial = new THREE.MeshStandardMaterial({ color: 0xc8793a, metalness: 0.65, roughness: 0.35 });
+
+/**
+ * Медная дорожка между двумя площадками: плоская полоса со скруглёнными концами.
+ * Настоящая — 0,6 мм; рисуем 0,76 мм (0,3 шага), чтобы было видно издалека.
+ */
+export function buildTraceView(id: string, a: Hole, b: Hole) {
+  const group = new THREE.Group();
+  const y = a.y + 0.012;
+  const pa = new THREE.Vector3(a.x, y, a.z);
+  const pb = new THREE.Vector3(b.x, y, b.z);
+  const len = pa.distanceTo(pb);
+  const width = 0.3;
+  const strip = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, width), copperMaterial);
+  strip.position.copy(pa).add(pb).multiplyScalar(0.5);
+  strip.rotation.y = Math.atan2(-(pb.z - pa.z), pb.x - pa.x);
+  group.add(strip);
+  for (const p of [pa, pb]) {
+    const end = new THREE.Mesh(new THREE.CylinderGeometry(width / 2, width / 2, 0.02, 16), copperMaterial);
+    end.position.copy(p);
+    group.add(end);
+  }
+  group.traverse((o) => (o.userData.traceId = id));
+  const lift = new THREE.Vector3(0, 0.2, 0);
+  const curve = new THREE.LineCurve3(pa.clone().add(lift), pb.clone().add(lift));
+  return { mesh: group, curve, length: Math.max(len, 0.01) };
 }

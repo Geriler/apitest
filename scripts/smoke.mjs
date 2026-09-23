@@ -234,7 +234,14 @@ try {
       }
       check(seen.hl1Only && seen.hl2Only, `мигалка: светодиоды горят по очереди ${JSON.stringify(seen)}`);
       const vt1 = await page.evaluate(() => {
-        const s = window.maketka.world.toScreen(window.maketka.views.get("VT1").hotspot);
+        const a = window.maketka;
+        const s = a.world.toScreen(a.views.get("VT1").hotspot);
+        for (let dy = 0; dy <= 30; dy += 2) {
+          for (const dx of [0, -3, 3, -6, 6]) {
+            const p = { clientX: s.x + dx, clientY: s.y + dy };
+            if (a.world.pickObject(a.world.ndcFromEvent(p))?.componentId === "VT1") return { x: p.clientX, y: p.clientY };
+          }
+        }
         return { x: s.x, y: s.y + 6 };
       });
       await page.mouse.click(vt1.x, vt1.y);
@@ -301,6 +308,52 @@ try {
       await page.waitForTimeout(400);
       const mpanel = await page.textContent("#inspector");
       check(/2N7000/.test(mpanel ?? "") && /Ток затвора/.test(mpanel ?? ""), "щелчок по VT1: панель MOSFET");
+
+      // Пример 5: печатная плата и блок питания
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("1");
+      await page.selectOption("#demo-select", "pcb");
+      await page.waitForTimeout(1200);
+      await page.screenshot({ path: "screenshots/desktop-pcb.png" });
+      const pcbI = await page.evaluate(() => ["HL1", "HL2"].map((id) => window.maketka.sim.current(window.maketka.component(id))));
+      check(pcbI.every((i) => i > 0.013), `печатная плата: светодиоды ${pcbI.map((i) => (i * 1000).toFixed(1)).join(" и ")} мА`);
+
+      // Нарисовать дорожку мышью B2 → B6: четыре отрезка
+      await page.keyboard.press("t");
+      const padPts = await page.evaluate(() => ["pB2", "pB6"].map((id) => {
+        const s = window.maketka.world.toScreen(window.maketka.endpointPos({ hole: id }));
+        return { x: s.x, y: s.y };
+      }));
+      const tracesBefore = await page.evaluate(() => window.maketka.scene.traces.length);
+      for (const pt of padPts) {
+        await page.mouse.move(pt.x, pt.y);
+        await page.mouse.click(pt.x, pt.y);
+      }
+      await page.keyboard.press("Escape");
+      const added = await page.evaluate((n) => window.maketka.scene.traces.slice(n).map((t) => `${t.a}-${t.b}`), tracesBefore);
+      check(added.join() === "pB2-pB3,pB3-pB4,pB4-pB5,pB5-pB6", `мышью: дорожка B2 → B6 = ${added.join(", ")}`);
+
+      // Блок питания: выбрать и ползунком ограничить ток до 20 мА → CC
+      await page.keyboard.press("1");
+      await page.evaluate(() => {
+        const a = window.maketka;
+        a.selected = "G1";
+        a.renderInspector();
+      });
+      await page.waitForTimeout(300);
+      await page.$eval("#f-psuA", (el) => {
+        el.value = "0.02";
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await page.waitForTimeout(500);
+      const psu = await page.evaluate(() => {
+        const a = window.maketka;
+        return { mode: a.sim.psuMode.get("G1"), total: ["HL1", "HL2"].reduce((s, id) => s + a.sim.current(a.component(id)), 0) };
+      });
+      const psuPanel = await page.textContent("#inspector");
+      await page.screenshot({ path: "screenshots/desktop-psu.png" });
+      check(psu.mode === "CC" && Math.abs(psu.total - 0.02) < 1e-4 && /CC/.test(psuPanel ?? ""), `блок питания: ${psu.mode}, ${(psu.total * 1000).toFixed(1)} мА на оба светодиода`);
       await page.screenshot({ path: "screenshots/desktop-mosfet-panel.png" });
     }
 
