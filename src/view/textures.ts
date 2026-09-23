@@ -61,7 +61,7 @@ export function breadboardTexture(): THREE.CanvasTexture {
   // Отверстия: квадратные гнёзда с тенью
   const s = 0.42 * PX;
   for (const hole of HOLES) {
-    if (hole.board !== "breadboard") continue;
+    if (hole.board !== "breadboard" || hole.bb !== 0) continue; // текстура общая для всех макеток
     const cx = X(hole.x);
     const cz = Z(hole.z);
     g.fillStyle = "#c9c4b5";

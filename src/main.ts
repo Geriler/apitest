@@ -55,6 +55,17 @@ async function start(): Promise<void> {
     demoSelect.blur();
   });
   $("btn-repair").addEventListener("click", () => app.repairAll());
+  $("btn-boards").addEventListener("click", () => app.openBoardsPanel());
+  const currentBtn = $("btn-current");
+  const showCurrentState = () => {
+    currentBtn.setAttribute("aria-pressed", String(app.showCurrent));
+    currentBtn.textContent = app.showCurrent ? "Ток: вкл." : "Ток: выкл.";
+  };
+  currentBtn.addEventListener("click", () => {
+    app.setShowCurrent(!app.showCurrent);
+    showCurrentState();
+  });
+  showCurrentState();
 
   // Режим «реальные допуски»
   const tolBtn = $("btn-tol");

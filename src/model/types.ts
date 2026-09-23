@@ -1,5 +1,7 @@
 /** Модель песочницы: что стоит на столе и как соединено. Без Three.js. */
 
+import { holeExistsIn, type Layout } from "./breadboard";
+
 export type SmdSize = "1206" | "0805" | "0603" | "0402";
 
 /** Типовые размеры корпусов (длина × ширина, мм) и мощность, Вт. У конкретных серий могут отличаться. */
@@ -228,6 +230,8 @@ export const TRACE_OHM_PER_MM = 1.72e-8 / (0.6e-3 * 35e-6) / 1000;
 export interface Scene {
   components: Component[];
   wires: Wire[];
+  /** Раскладка плат (в старых сохранениях нет — значит, одна макетка и плата 24 × 14). */
+  layout?: Layout;
   /** Дорожки печатной платы (в старых сохранениях может не быть). */
   traces?: Trace[];
 }
@@ -291,4 +295,22 @@ export function canGoOnBoard(type: ComponentType, variant?: "tht" | "smd"): bool
   if (type === "battery" || type === "psu") return false;
   if (type === "resistor") return variant !== "smd";
   return true;
+}
+
+/**
+ * Что помешает перейти на раскладку: детали, провода и дорожки, стоящие в отверстиях,
+ * которых в новой раскладке не будет. Пустой список — можно менять.
+ */
+export function layoutConflicts(scene: Scene, layout: Layout): string[] {
+  const out = new Set<string>();
+  for (const c of scene.components) {
+    if (c.placement.mode === "board" && c.placement.holes.some((h) => !holeExistsIn(h, layout))) out.add(c.id);
+  }
+  for (const w of scene.wires) {
+    if ([w.a, w.b].some((e) => "hole" in e && !holeExistsIn(e.hole, layout))) out.add(w.id);
+  }
+  for (const t of scene.traces ?? []) {
+    if (!holeExistsIn(t.a, layout) || !holeExistsIn(t.b, layout)) out.add(t.id);
+  }
+  return [...out];
 }

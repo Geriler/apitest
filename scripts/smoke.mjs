@@ -354,6 +354,41 @@ try {
       const psuPanel = await page.textContent("#inspector");
       await page.screenshot({ path: "screenshots/desktop-psu.png" });
       check(psu.mode === "CC" && Math.abs(psu.total - 0.02) < 1e-4 && /CC/.test(psuPanel ?? ""), `блок питания: ${psu.mode}, ${(psu.total * 1000).toFixed(1)} мА на оба светодиода`);
+
+      // Ток: выключить точки — показания остаются
+      const dotsOn = await page.evaluate(() => window.maketka.world.dots.count);
+      await page.click("#btn-current");
+      await page.waitForTimeout(300);
+      const dotsOff = await page.evaluate(() => window.maketka.world.dots.count);
+      const stillCC = await page.evaluate(() => window.maketka.sim.psuMode.get("G1"));
+      check(dotsOn > 0 && dotsOff === 0 && stillCC === "CC", `кнопка «Ток»: точек ${dotsOn} → ${dotsOff}, расчёт идёт (${stillCC})`);
+      await page.click("#btn-current");
+
+      // Платы: две макетки и плата 36 × 20
+      await page.click("#btn-boards");
+      await page.selectOption("#f-bbCount", "2");
+      await page.selectOption("#f-pcbSize", "36x20");
+      await page.waitForTimeout(800);
+      const layout = await page.evaluate(() => ({
+        bb: window.maketka.scene.layout,
+        leds: ["HL1", "HL2"].map((id) => window.maketka.sim.current(window.maketka.component(id))),
+      }));
+      await page.screenshot({ path: "screenshots/desktop-boards.png" });
+      check(
+        layout.bb?.breadboards === 2 && layout.bb?.pcbCols === 36 && layout.leds.every((i) => i > 0.009),
+        `платы расширены: ${JSON.stringify(layout.bb)}, схема на месте (${layout.leds.map((i) => (i * 1000).toFixed(1)).join(" и ")} мА)`,
+      );
+      // Поставить резистор на вторую макетку и попробовать уменьшить — должно отказать
+      await page.evaluate(() => {
+        const a = window.maketka;
+        a.scene.components.push({ id: "R9", type: "resistor", variant: "tht", ohms: 1000, smdSize: "0805", placement: { mode: "board", holes: ["2:a1", "2:a5"] } });
+        a.changed();
+      });
+      await page.selectOption("#f-bbCount", "1");
+      await page.waitForTimeout(400);
+      const refused = await page.evaluate(() => window.maketka.scene.layout.breadboards);
+      const toastText = await page.textContent("#toasts");
+      check(refused === 2 && /R9/.test(toastText ?? ""), `уменьшение с деталью на второй макетке отклонено (${refused}), названа R9`);
       await page.screenshot({ path: "screenshots/desktop-mosfet-panel.png" });
     }
 

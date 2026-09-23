@@ -1,5 +1,19 @@
 import * as THREE from "three";
-import { HOLE_BY_ID, describeNode, holeAt, holeLabel, holesOnNode, padsAlong, type Hole } from "./model/breadboard";
+import {
+  DEFAULT_LAYOUT,
+  HOLE_BY_ID,
+  LAYOUT,
+  MAX_BREADBOARDS,
+  PCB_SIZES,
+  applyLayout,
+  describeNode,
+  holeAt,
+  holeLabel,
+  holesOnNode,
+  padsAlong,
+  type Hole,
+  type Layout,
+} from "./model/breadboard";
 import {
   BATTERIES,
   CERAMICS,
@@ -17,6 +31,7 @@ import {
   canGoOnBoard,
   formatFarads,
   isPolar,
+  layoutConflicts,
   pinCount,
   sameEndpoint,
   type BatteryKind,
@@ -75,6 +90,9 @@ export const WIRE_PALETTE: { hex: string; name: string }[] = [
 const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
 const TOLERANCE_KEY = "maketka.tolerance.v1";
+const CURRENT_KEY = "maketka.showCurrent.v1";
+/** Псевдо-выбор: панель настройки плат. */
+const BOARDS_PANEL = "__boards";
 
 interface Hover {
   hole?: Hole;
@@ -142,7 +160,15 @@ export class App {
     initial: Scene,
   ) {
     this.scene = initial;
+    applyLayout(initial.layout ?? DEFAULT_LAYOUT);
+    this.world.rebuildBoards();
+    this.updateBrand();
     this.sim = new Simulation(this.scene, App.loadTolerance());
+    try {
+      this.showCurrent = localStorage.getItem(CURRENT_KEY) !== "off";
+    } catch {
+      /* по умолчанию показываем */
+    }
     this.rebuild();
     this.bindInput();
     this.setTool("select");
@@ -199,6 +225,68 @@ export class App {
     } catch {
       /* хранилище недоступно — не страшно */
     }
+  }
+
+  // ─── Платы и отображение тока ──────────────────────────────────────────
+
+  /** Показывать бегущие точки тока (расчёт и показания в панелях не зависят от этого). */
+  showCurrent = true;
+
+  setShowCurrent(on: boolean): void {
+    this.showCurrent = on;
+    try {
+      localStorage.setItem(CURRENT_KEY, on ? "on" : "off");
+    } catch {
+      /* хранилище недоступно */
+    }
+    if (!on) this.world.setDots([]);
+  }
+
+  /** Надпись в шапке панели инструментов: сколько точек на всех макетках. */
+  private updateBrand(): void {
+    const el = this.ui.tools.querySelector(".brand span");
+    if (el) el.textContent = `${LAYOUT.breadboards * 400} точек`;
+  }
+
+  /** Открыть панель настройки плат справа. */
+  openBoardsPanel(): void {
+    this.setTool("select");
+    this.selected = BOARDS_PANEL;
+    this.inspectorHtml = "";
+    this.renderInspector();
+  }
+
+  /**
+   * Сменить раскладку плат. Если на отрезаемой части что-то стоит — ничего не меняем
+   * и говорим, что мешает.
+   */
+  setLayout(layout: Layout): boolean {
+    const conflicts = layoutConflicts(this.scene, layout);
+    if (conflicts.length) {
+      this.toast(
+        "Не помещается",
+        `На убираемой части стоят: ${conflicts.slice(0, 8).join(", ")}${conflicts.length > 8 ? " и др." : ""}. Уберите их или перенесите — потом уменьшайте.`,
+      );
+      this.inspectorHtml = "";
+      return false;
+    }
+    this.scene.layout = { ...layout };
+    applyLayout(layout);
+    this.world.rebuildBoards();
+    this.updateBrand();
+    this.selectedHole = undefined;
+    this.changed();
+    return true;
+  }
+
+  private boardsPanel(): [string, string] {
+    const l = LAYOUT;
+    const html = `<div class="eyebrow">стол</div><h2>Платы</h2>
+      ${this.selectField("bbCount", "Макетные платы (ставятся вплотную вправо)", Array.from({ length: MAX_BREADBOARDS }, (_, i) => [String(i + 1), `${i + 1} × 400 точек`]), String(l.breadboards))}
+      ${this.selectField("pcbSize", "Печатная плата", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), `${l.pcbCols}x${l.pcbRows}`)}
+      <p class="sub">Макетки между собой не соединены — как настоящие: шины соединяют проводами. Печатная плата растёт вправо и вниз, всё, что уже стоит, остаётся на месте. Уменьшить можно, только если на отрезаемой части ничего нет.</p>
+      <p class="sub">Размер плат сохраняется вместе со схемой.</p>`;
+    return ["boards", html];
   }
 
   // ─── Допуски ───────────────────────────────────────────────────────────
@@ -289,6 +377,9 @@ export class App {
 
   replaceScene(s: Scene): void {
     this.scene = s;
+    applyLayout(s.layout ?? DEFAULT_LAYOUT);
+    this.world.rebuildBoards();
+    this.updateBrand();
     this.sim = new Simulation(s, this.sim.tolerance);
     this.selected = undefined;
     this.selectedHole = undefined;
@@ -422,6 +513,7 @@ export class App {
   }
 
   private updateDots(dt: number): void {
+    if (!this.showCurrent) return;
     const items: { curve: THREE.Curve<THREE.Vector3>; phases: number[] }[] = [];
     for (const w of this.scene.wires) {
       const wv = this.wireViews.get(w.id);
@@ -1057,7 +1149,9 @@ export class App {
     const target = this.selected;
     let html: string;
     let key: string;
-    if (target && this.component(target)) {
+    if (target === BOARDS_PANEL) {
+      [key, html] = this.boardsPanel();
+    } else if (target && this.component(target)) {
       [key, html] = this.componentPanel(this.component(target)!, true);
     } else if (target && (this.scene.traces ?? []).some((t) => t.id === target)) {
       [key, html] = this.tracePanel(target);
@@ -1574,6 +1668,14 @@ export class App {
   }
 
   private applyField(field: string, value: string): void {
+    if (field === "bbCount" || field === "pcbSize") {
+      const [cols, rows] = field === "pcbSize" ? value.split("x").map(Number) : [LAYOUT.pcbCols, LAYOUT.pcbRows];
+      const breadboards = field === "bbCount" ? Number(value) : LAYOUT.breadboards;
+      this.setLayout({ breadboards, pcbCols: cols, pcbRows: rows });
+      this.inspectorHtml = "";
+      this.renderInspector();
+      return;
+    }
     const c = this.selected ? this.component(this.selected) : undefined;
     if (!c) {
       if (field === "ohms") this.defaults.ohms = Number(value);
