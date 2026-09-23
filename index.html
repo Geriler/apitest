@@ -144,6 +144,8 @@
   .btn:hover { border-color: var(--copper); }
   .btn.inline { box-shadow: none; padding: 5px 10px; }
   .btn.danger { color: var(--danger); }
+  .btn[aria-pressed="true"] { background: var(--copper-soft); border-color: var(--copper); }
+  .kv.actual span:last-child { color: var(--copper); }
   select.btn { width: auto; max-width: 170px; font: 500 13px var(--sans); background: var(--paper); }
   .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
   .swatch {
@@ -262,8 +264,9 @@
     }
     .brand, .tool-sep, .tool kbd { display: none; }
     .tool { grid-template-columns: 1fr; justify-items: center; gap: 2px; font-size: 11px; padding: 4px 6px; flex: 0 0 auto; }
-    #actions { left: 16px; right: 16px; top: 12px; }
-    #actions .btn { padding: 6px 10px; font-size: 12px; }
+    /* Одна строка с прокруткой: иначе кнопки переносятся и наезжают на уведомления */
+    #actions { left: 16px; right: 16px; top: 12px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+    #actions .btn { padding: 6px 10px; font-size: 12px; flex: 0 0 auto; box-shadow: none; }
     #inspector {
       top: auto;
       right: 16px;
@@ -334,6 +337,8 @@
       <option value="blinker">Мигалка на транзисторах</option>
       <option value="mosfet">MOSFET: ключ и память затвора</option>
     </select>
+    <button class="btn" id="btn-tol" aria-pressed="false" title="Разброс параметров, как у настоящих деталей">Допуски: выкл.</button>
+    <button class="btn" id="btn-reroll" hidden title="Те же номиналы, другие экземпляры деталей">Другие экземпляры</button>
     <button class="btn" id="btn-repair">Заменить сгоревшие</button>
     <button class="btn" id="btn-clear">Очистить</button>
   </div>

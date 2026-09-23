@@ -67,6 +67,24 @@ try {
     check(app.components === 7, `${viewport.name}: в примере 7 деталей`);
     check(app.hl1 > 0.9 && app.hl1 < 1.3, `${viewport.name}: HL1 горит (${app.hl1.toFixed(2)} от номинала)`);
     check(app.r1 < 1, `${viewport.name}: R1 не перегружен (${app.r1.toFixed(2)})`);
+    // Режим допусков: включить, другие экземпляры, выключить — номинал возвращается
+    const hlI = () => page.evaluate(() => window.maketka.sim.current(window.maketka.component("HL1")));
+    const nominalI = await hlI();
+    await page.click("#btn-tol");
+    const realI = await hlI();
+    const rerollShown = await page.isVisible("#btn-reroll");
+    await page.click("#btn-reroll");
+    const otherI = await hlI();
+    await page.screenshot({ path: `screenshots/${viewport.name}-tolerance.png` });
+    await page.click("#btn-tol");
+    const backI = await hlI();
+    check(
+      realI !== nominalI && otherI !== realI && backI === nominalI && rerollShown && !(await page.isVisible("#btn-reroll")),
+      `${viewport.name}: допуски ${(nominalI * 1000).toFixed(1)} → ${(realI * 1000).toFixed(1)} → ${(otherI * 1000).toFixed(1)} → ${(backI * 1000).toFixed(1)} мА`,
+    );
+    const actionsBottom = await page.evaluate(() => document.getElementById("actions").getBoundingClientRect().bottom);
+    const toastsTop = await page.evaluate(() => document.getElementById("toasts").getBoundingClientRect().top);
+    check(viewport.name === "desktop" || toastsTop >= actionsBottom, `${viewport.name}: уведомления не наезжают на кнопки (${Math.round(toastsTop)} ≥ ${Math.round(actionsBottom)})`);
     const hintVisible = await page.isVisible("#hint");
     check(!hintVisible, `${viewport.name}: в режиме выбора подсказки нет`);
     const horizontalScroll = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);

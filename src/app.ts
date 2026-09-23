@@ -32,7 +32,9 @@ import {
   type TransistorKind,
 } from "./model/types";
 import { colorBands, e12Values, formatOhms, formatSI, smdCode } from "./sim/resistorCodes";
-import { Simulation, heatThreshold, lampResistance } from "./sim/simulation";
+import { Simulation, VT, diodeParams, heatThreshold, lampResistance } from "./sim/simulation";
+import * as tolerance from "./sim/tolerance";
+import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildWireView, wireCurve, mm, type ComponentView, type WireView } from "./view/builders";
 import type { World } from "./view/world";
 
@@ -70,6 +72,7 @@ export const WIRE_PALETTE: { hex: string; name: string }[] = [
 /** Самые длинные выводы, которые можно согнуть между двумя отверстиями (в шагах). */
 const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
+const TOLERANCE_KEY = "maketka.tolerance.v1";
 
 interface Hover {
   hole?: Hole;
@@ -131,7 +134,7 @@ export class App {
     initial: Scene,
   ) {
     this.scene = initial;
-    this.sim = new Simulation(this.scene);
+    this.sim = new Simulation(this.scene, App.loadTolerance());
     this.rebuild();
     this.bindInput();
     this.setTool("select");
@@ -190,6 +193,81 @@ export class App {
     }
   }
 
+  // ─── Допуски ───────────────────────────────────────────────────────────
+
+  get tolerance(): Tolerance {
+    return this.sim.tolerance;
+  }
+
+  /** Включить или выключить «реальные допуски»; seed сохраняется, поэтому детали остаются теми же. */
+  setTolerance(t: Tolerance): void {
+    this.sim.tolerance = t;
+    this.sim.solve();
+    try {
+      localStorage.setItem(TOLERANCE_KEY, JSON.stringify(t));
+    } catch {
+      /* хранилище недоступно */
+    }
+    this.inspectorHtml = "";
+    this.renderInspector();
+  }
+
+  static loadTolerance(): Tolerance {
+    try {
+      const t = JSON.parse(localStorage.getItem(TOLERANCE_KEY) ?? "null") as Tolerance | null;
+      if (t && typeof t.enabled === "boolean" && typeof t.seed === "number") return t;
+    } catch {
+      /* нет сохранённого */
+    }
+    return { ...NO_TOLERANCE, seed: Math.floor(Math.random() * 1e9) };
+  }
+
+  /**
+   * Строки «Фактически» для панели детали: реальные параметры этого экземпляра.
+   * Пусто, если режим допусков выключен.
+   */
+  private actualRows(c: Component): string {
+    const t = this.sim.tolerance;
+    if (!t.enabled) return "";
+    const pct = (actual: number, nominal: number) => {
+      const d = (actual / nominal - 1) * 100;
+      return `${d >= 0 ? "+" : "−"}${Math.abs(d).toFixed(1).replace(".", ",")} %`;
+    };
+    const row = (name: string, value: string) => `<div class="kv actual"><span>${name}</span><span>${value}</span></div>`;
+    switch (c.type) {
+      case "resistor": {
+        const r = tolerance.resistance(c, t);
+        return row("Фактически", `${formatOhms(r)} (${pct(r, c.ohms)})`);
+      }
+      case "lamp": {
+        const r = lampResistance(c, t);
+        return row("Нить фактически", formatOhms(r));
+      }
+      case "battery": {
+        const b = tolerance.battery(c, t);
+        return row("ЭДС фактически", formatSI(b.emf, "В")) + row("Внутр. сопротивление", formatOhms(b.rInt));
+      }
+      case "capacitor": {
+        const f = tolerance.capacitance(c, t);
+        return row("Ёмкость фактически", `${formatFarads(f * 1e6)} (${pct(f * 1e6, c.uF)})`);
+      }
+      case "led":
+        return row("Прямое напряжение при 20 мА", formatSI(tolerance.ledVf(c, t), "В"));
+      case "diode": {
+        const p = diodeParams(c, t);
+        return row("Прямое напряжение при 10 мА", formatSI(p.n * VT * Math.log(0.01 / p.is), "В"));
+      }
+      case "transistor":
+        return row("β этого экземпляра", String(Math.round(tolerance.betaF(c, t))));
+      case "mosfet": {
+        const m = tolerance.mosfetParams(c, t);
+        return row("Порог этого экземпляра", `${MOSFETS[c.kind].channel === "p" ? "−" : ""}${formatSI(m.vth, "В")}`);
+      }
+      default:
+        return "";
+    }
+  }
+
   static load(): Scene | undefined {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -203,7 +281,7 @@ export class App {
 
   replaceScene(s: Scene): void {
     this.scene = s;
-    this.sim = new Simulation(s);
+    this.sim = new Simulation(s, this.sim.tolerance);
     this.selected = undefined;
     this.selectedHole = undefined;
     this.burnedAt.clear();
@@ -1085,6 +1163,7 @@ export class App {
       )}
       ${this.powerMeter(c)}
       <div class="kv"><span>Где</span><span>${where}</span></div>
+      ${this.actualRows(c)}
       ${body}
       ${pinned ? editor : ""}
       ${actions}`;
@@ -1215,6 +1294,13 @@ export class App {
       ${rows.length ? `<ul class="list">${rows.join("")}</ul>` : `<p>Начните с батареи (9), затем добавьте резистор (3) и светодиод (6). Или выберите пример вверху.</p>`}
       <div class="help">
         <b>Как устроена макетка.</b> Пять отверстий столбца (a–e или f–j) соединены внутри. Шины + и − вдоль краёв соединены по всей длине. Наведите курсор на отверстие — подсветятся все, что с ним соединены.
+      </div>
+      <div class="help">
+        <b>Допуски.</b> ${
+          this.sim.tolerance.enabled
+            ? "Включены: у каждой детали параметры немного отличаются от номинала, как у настоящих. Значения видны в панели детали."
+            : "Выключены: все детали точно по номиналу. Кнопка «Допуски» вверху включает разброс, как у настоящих деталей."
+        }
       </div>
       <div class="help">
         <b>Управление.</b> Нажмите на деталь, провод или отверстие — здесь появятся ток и напряжение. Детали на столе можно перетаскивать. Повторное нажатие на тумблер переключает его. Вращать вид — зажать и тянуть, приближать — колесом.

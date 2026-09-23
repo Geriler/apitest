@@ -51,6 +51,31 @@ async function start(): Promise<void> {
     demoSelect.blur();
   });
   $("btn-repair").addEventListener("click", () => app.repairAll());
+
+  // Режим «реальные допуски»
+  const tolBtn = $("btn-tol");
+  const reroll = $("btn-reroll");
+  const showTolerance = () => {
+    const on = app.tolerance.enabled;
+    tolBtn.setAttribute("aria-pressed", String(on));
+    tolBtn.textContent = on ? "Допуски: вкл." : "Допуски: выкл.";
+    reroll.hidden = !on;
+  };
+  tolBtn.addEventListener("click", () => {
+    const on = !app.tolerance.enabled;
+    app.setTolerance({ ...app.tolerance, enabled: on });
+    showTolerance();
+    if (on) {
+      app.toast(
+        "Допуски включены",
+        "Теперь у каждой детали параметры немного отличаются от номинала: резисторы ±5 %, электролиты ±20 %, β транзисторов 200–450, порог MOSFET по даташиту. «Другие экземпляры» — взять другие детали из той же коробки.",
+      );
+    }
+  });
+  reroll.addEventListener("click", () => {
+    app.setTolerance({ enabled: true, seed: Math.floor(Math.random() * 1e9) });
+  });
+  showTolerance();
   const clear = $("btn-clear");
   let armed: ReturnType<typeof setTimeout> | undefined;
   clear.addEventListener("click", () => {
