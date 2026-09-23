@@ -69,6 +69,7 @@ import * as tolerance from "./sim/tolerance";
 import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "./projects";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
+import { schematicSvg } from "./view/schematic";
 import type { World } from "./view/world";
 
 type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
@@ -201,7 +202,7 @@ export class App {
 
   constructor(
     private world: World,
-    private ui: { inspector: HTMLElement; hint: HTMLElement; toasts: HTMLElement; tools: HTMLElement },
+    private ui: { inspector: HTMLElement; hint: HTMLElement; toasts: HTMLElement; tools: HTMLElement; schematic?: HTMLElement },
     initial: Scene,
   ) {
     this.scene = initial;
@@ -216,6 +217,7 @@ export class App {
     this.rebuild();
     this.snapshot = JSON.stringify(this.scene);
     this.bindInput();
+    this.bindSchematic();
     this.setTool("select");
     // Если кадры редкие, физика догоняет сама
     setInterval(() => this.tick(), 50);
@@ -709,6 +711,7 @@ export class App {
     if (this.time - this.lastInspector > 0.2) {
       this.lastInspector = this.time;
       this.renderInspector();
+      this.renderSchematic();
     }
     this.world.render();
   }
@@ -773,6 +776,74 @@ export class App {
   onTool?: (tool: string) => void;
   /** Сводка по схеме и подсказки справа — только по кнопке «?». */
   showHelp = false;
+
+  // ─── Принципиальная схема ──────────────────────────────────────────────
+
+  /** Показана ли панель со схемой. */
+  showSchematic = false;
+  private schematicHtml = "";
+
+  setShowSchematic(on: boolean): void {
+    this.showSchematic = on;
+    const el = this.ui.schematic;
+    if (!el) return;
+    el.hidden = !on;
+    this.schematicHtml = "";
+    this.renderSchematic();
+  }
+
+  /** Перерисовать схему, если она видна и что-то поменялось (токи, выделение, сама сборка). */
+  renderSchematic(): void {
+    const el = this.ui.schematic;
+    if (!el || !this.showSchematic) return;
+    let svg: string;
+    try {
+      svg = schematicSvg(this.scene, this.sim, this.selected ?? this.picked);
+    } catch {
+      svg = ""; // сборка в промежуточном состоянии (например, пропало отверстие) — нарисуем в следующий раз
+    }
+    const html = svg || `<p class="sub">На столе нет деталей — схема появится, когда вы что-нибудь соберёте.</p>`;
+    if (html === this.schematicHtml) return;
+    const body = el.querySelector(".sch-body");
+    if (!body) return;
+    // Если поменялись только цифры (токи, напряжения), меняем текст подписей на месте: иначе
+    // элементы пересоздаются каждые 0,2 с и щелчок, начатый на старом элементе, теряется
+    const shape = (h: string) => h.replace(/>[^<]*<\/text>/g, "></text>");
+    if (this.schematicHtml && shape(html) === shape(this.schematicHtml)) {
+      const next = [...html.matchAll(/>([^<]*)<\/text>/g)].map((m) => m[1]);
+      body.querySelectorAll("text").forEach((t, i) => {
+        const v = next[i]?.replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+        if (v !== undefined && t.textContent !== v) t.textContent = v;
+      });
+    } else {
+      body.innerHTML = html;
+    }
+    this.schematicHtml = html;
+  }
+
+  /** Щелчок по детали на схеме: тумблер переключается, остальное — панель детали. */
+  private bindSchematic(): void {
+    this.ui.schematic?.addEventListener("click", (e) => {
+      const part = (e.target as Element).closest<SVGGElement>("[data-part]");
+      const c = part ? this.component(part.dataset.part!) : undefined;
+      if (!c) return;
+      this.setProjectsOpen(false);
+      if (this.tool !== "select") this.setTool("select");
+      if (c.type === "switch") {
+        c.closed = !c.closed;
+        this.changed();
+      } else {
+        this.selected = c.id;
+        this.picked = undefined;
+        this.selectedHole = undefined;
+        this.selectedBoard = undefined;
+        this.refreshMarks();
+        this.inspectorHtml = "";
+        this.renderInspector();
+      }
+      this.renderSchematic();
+    });
+  }
 
   // ─── Проекты ───────────────────────────────────────────────────────────
 

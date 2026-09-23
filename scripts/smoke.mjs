@@ -705,6 +705,25 @@ try {
       await page.setInputFiles("#f-proj-file", { name: "чужой.json", mimeType: "application/json", buffer: Buffer.from('{"hello":1}') });
       await page.waitForTimeout(300);
       check(/Не открылось/.test((await page.textContent("#toasts")) ?? ""), "чужой файл — понятная ошибка, схема на месте");
+
+      // Принципиальная схема: открыть, щелчок по резистору — его панель, по тумблеру — переключение
+      await page.selectOption("#demo-select", "lamps");
+      await page.waitForTimeout(400);
+      await page.click("#btn-schematic");
+      await page.waitForTimeout(500);
+      const schParts = await page.evaluate(() => [...document.querySelectorAll("#schematic [data-part]")].map((g) => g.dataset.part).sort().join());
+      const allParts = await page.evaluate(() => window.maketka.scene.components.map((c) => c.id).sort().join());
+      check(schParts === allParts, `на схеме все детали: ${schParts}`);
+      await page.click('#schematic [data-part="R1"]');
+      await page.waitForTimeout(300);
+      const schSel = await page.evaluate(() => ({ sel: window.maketka.selected, title: document.querySelector("#inspector h2")?.textContent }));
+      const sa1Before = await page.evaluate(() => window.maketka.component("SA1").closed);
+      await page.click('#schematic [data-part="SA1"]');
+      await page.waitForTimeout(300);
+      const sa1After = await page.evaluate(() => window.maketka.component("SA1").closed);
+      check(schSel.sel === "R1" && /Резистор/.test(schSel.title ?? "") && sa1After === !sa1Before, `щелчок по R1 на схеме — его панель, по SA1 — переключение (${sa1Before} → ${sa1After})`);
+      await page.screenshot({ path: "screenshots/desktop-schematic.png" });
+      await page.click("#btn-schematic");
       await page.keyboard.press("Escape");
     }
 

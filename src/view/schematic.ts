@@ -1,0 +1,323 @@
+/**
+ * Принципиальная схема, построенная по сборке. Без Three.js и DOM: на выходе строка SVG.
+ *
+ * Цепь — всё, что соединено между собой: полоса макетки, провода, дорожки. На чертеже цепь —
+ * горизонтальная линия; линии идут сверху вниз по убыванию потенциала (сверху плюс питания,
+ * снизу минус), детали стоят вертикально между линиями своих выводов. Обозначения — по ЕСКД
+ * (ГОСТ 2.728, 2.730): резистор — прямоугольник, лампа — круг с крестом и т. д.
+ * Пересечение линий без точки — не соединение, точка — соединение.
+ */
+
+import { HOLE_BY_ID } from "../model/breadboard";
+import {
+  BATTERIES,
+  LAMPS,
+  LEDS,
+  MOSFETS,
+  TRANSISTORS,
+  capacitorVolts,
+  diodeSpec,
+  formatFarads,
+  mosfetPin,
+  pinCount,
+  thtResistorSpec,
+  type Component,
+  type Mosfet,
+  type Pin,
+  type Scene,
+  type Transistor,
+} from "../model/types";
+import { formatOhms, formatSI } from "../sim/resistorCodes";
+import { endpointNode, pinNode, type Simulation } from "../sim/simulation";
+
+export interface Netlist {
+  /** Узлы расчёта в каждой цепи (только цепи, к которым подключены детали). */
+  nets: string[][];
+  /** Деталь → номер цепи для каждого вывода. */
+  pins: Map<string, number[]>;
+}
+
+/** Цепи сборки: узлы, соединённые проводами и дорожками, сливаются в одну цепь. */
+export function buildNetlist(scene: Scene): Netlist {
+  const parent = new Map<string, string>();
+  const find = (a: string): string => {
+    if (!parent.has(a)) parent.set(a, a);
+    let r = a;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    for (let x = a; x !== r; ) {
+      const next = parent.get(x)!;
+      parent.set(x, r);
+      x = next;
+    }
+    return r;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  const pinNodes = new Map<string, string[]>();
+  for (const c of scene.components) {
+    const nodes = Array.from({ length: pinCount(c) }, (_, p) => pinNode(c, p as Pin));
+    nodes.forEach(find);
+    pinNodes.set(c.id, nodes);
+  }
+  for (const w of scene.wires) union(endpointNode(scene, w.a), endpointNode(scene, w.b));
+  for (const t of scene.traces ?? []) {
+    const a = HOLE_BY_ID.get(t.a);
+    const b = HOLE_BY_ID.get(t.b);
+    if (a && b) union(a.node, b.node);
+  }
+  const index = new Map<string, number>();
+  const nets: string[][] = [];
+  const pins = new Map<string, number[]>();
+  for (const c of scene.components) {
+    pins.set(
+      c.id,
+      pinNodes.get(c.id)!.map((n) => {
+        const root = find(n);
+        if (!index.has(root)) {
+          index.set(root, nets.length);
+          nets.push([]);
+        }
+        return index.get(root)!;
+      }),
+    );
+  }
+  for (const n of parent.keys()) {
+    const i = index.get(find(n));
+    if (i !== undefined) nets[i].push(n);
+  }
+  return { nets, pins };
+}
+
+const ROW = 92;
+const COL = 112;
+const LEFT = 78;
+const TOP = 34;
+/** Половина длины обозначения двухвыводной детали. */
+const HALF = 20;
+
+const num = (v: number) => String(Math.round(v * 10) / 10);
+const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+/** Потенциал цепи: до сотых вольта, «−0,00» не бывает. */
+function formatVolts(v: number): string {
+  const t = (Math.abs(v) < 0.005 ? 0 : v).toFixed(2).replace(".", ",").replace("-", "−");
+  return `${t} В`;
+}
+
+/** Номинал для подписи. */
+function value(c: Component): string {
+  switch (c.type) {
+    case "resistor":
+      return `${formatOhms(c.ohms)}${c.variant === "smd" ? ` ${c.smdSize}` : `, ${String(thtResistorSpec(c).ratedW).replace(".", ",")} Вт`}`;
+    case "capacitor":
+      return `${formatFarads(c.uF)}, ${String(capacitorVolts(c)).replace(".", ",")} В`;
+    case "diode":
+      return diodeSpec(c).label;
+    case "led":
+      return `${LEDS[c.color].label}${c.size === "1W" ? ", 1 Вт" : ""}`;
+    case "lamp":
+      return LAMPS[c.kind].label;
+    case "battery":
+      return BATTERIES[c.kind].label;
+    case "psu":
+      return c.on ? `${formatSI(c.volts, "В")} / ${formatSI(c.amps, "А")}` : "выход выкл.";
+    case "switch":
+      return c.closed ? "замкнут" : "разомкнут";
+    case "transistor":
+      return TRANSISTORS[c.kind].label;
+    case "mosfet":
+      return MOSFETS[c.kind].label;
+  }
+}
+
+/** Обозначение двухвыводной детали в своей системе координат: вывод 0 вверху (y = −HALF), вывод 1 внизу. */
+function symbol2(c: Component): string {
+  switch (c.type) {
+    case "resistor":
+      return `<path d="M0 -20V-15M0 15V20"/><rect x="-5" y="-15" width="10" height="30"/>`;
+    case "lamp":
+      return `<path d="M0 -20V-11M0 11V20"/><circle r="11"/><path d="M-7.8 -7.8L7.8 7.8M7.8 -7.8L-7.8 7.8"/>`;
+    case "capacitor":
+      return `<path d="M0 -20V-4M0 4V20M-12 -4H12M-12 4H12"/>${c.variant === "electrolytic" ? `<path d="M9 -13H15M12 -16V-10" class="thin"/>` : ""}`;
+    case "diode":
+    case "led":
+      // Анод (вывод 0) сверху: треугольник остриём к катоду
+      return `<path d="M0 -20V-8M0 8V20M-9 8H9"/><path d="M-9 -8H9L0 8Z"/>${
+        c.type === "led" ? `<path d="M10 -6L17 -13M13 -1L20 -8M14 -13H17V-10M17 -8H20V-5" class="thin"/>` : ""
+      }`;
+    case "switch":
+      return c.closed
+        ? `<path d="M0 -20V-10M0 10V20M0 -10L0 10"/><circle cy="-10" r="1.8" class="dot"/><circle cy="10" r="1.8" class="dot"/>`
+        : `<path d="M0 -20V-10M0 10V20M0 10L11 -8"/><circle cy="-10" r="1.8" class="dot"/><circle cy="10" r="1.8" class="dot"/>`;
+    case "battery":
+      // Вывод 1 — плюс: длинная тонкая пластина со стороны вывода 1 (внизу), короткая толстая — минус
+      return `<path d="M0 -20V-4M0 4V20M-13 4H13"/><path d="M-7 -4H7" class="thick"/><path d="M9 11H15M12 8V14" class="thin"/>`;
+    case "psu":
+      return `<path d="M0 -20V-12M0 12V20"/><circle r="12"/><path d="M0 -6V6M-4 2L0 6L4 2" class="thin"/><path d="M8 17H14M11 14V20" class="thin"/>`;
+    default:
+      return "";
+  }
+}
+
+interface Placed {
+  c: Component;
+  x: number;
+  /** Точки подключения к цепям: [номер цепи, x]. */
+  attach: [number, number][];
+  svg: string;
+  /** Нижний край (для высоты чертежа). */
+  bottom: number;
+}
+
+/**
+ * Схема сборки строкой SVG. highlight — деталь, выделенная сейчас (обводится медным цветом).
+ * Пустая строка, если деталей нет.
+ */
+export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string): string {
+  if (!scene.components.length) return "";
+  const { nets, pins } = buildNetlist(scene);
+  // Потенциал цепи — первое известное значение среди её узлов
+  const volts = nets.map((nodes) => {
+    for (const n of nodes) {
+      const v = sim.solution?.voltage.get(n);
+      if (v !== undefined) return v;
+    }
+    return undefined;
+  });
+  const order = nets
+    .map((_, i) => i)
+    .sort((a, b) => {
+      const va = volts[a];
+      const vb = volts[b];
+      if (va === undefined || vb === undefined) return (va === undefined ? 1 : 0) - (vb === undefined ? 1 : 0) || a - b;
+      return vb - va || a - b;
+    });
+  const row = new Map(order.map((net, r) => [net, r]));
+  const Y = (net: number) => TOP + row.get(net)! * ROW;
+
+  // Сначала источники, потом остальное — по верхней и нижней цепи
+  const rank = (c: Component) => (c.type === "battery" || c.type === "psu" ? 0 : 1);
+  const span = (c: Component) => pins.get(c.id)!.map((n) => row.get(n)!);
+  const parts = [...scene.components].sort(
+    (a, b) => rank(a) - rank(b) || Math.min(...span(a)) - Math.min(...span(b)) || Math.max(...span(a)) - Math.max(...span(b)),
+  );
+
+  const placed: Placed[] = [];
+  let x = LEFT;
+  for (const c of parts) {
+    const netOf = pins.get(c.id)!;
+    const current = Math.abs(c.type === "transistor" ? sim.transistor(c).ic : c.type === "mosfet" ? sim.mosfet(c).id : sim.current(c));
+    const label = (lx: number, ly: number) =>
+      `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(value(c))}</text>` +
+      `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`;
+    if (pinCount(c) === 2) {
+      const [ya, yb] = [Y(netOf[0]), Y(netOf[1])];
+      let top = Math.min(ya, yb);
+      let bottom = Math.max(ya, yb);
+      let extra = "";
+      const attach: [number, number][] = [
+        [netOf[0], x],
+        [netOf[1], x],
+      ];
+      if (ya === yb) {
+        // Оба вывода в одной цепи: деталь висит петлёй под линией
+        bottom = top + ROW * 0.7;
+        extra = `<path d="M${x} ${num(bottom)}H${x + 24}V${top}"/>`;
+        attach[1] = [netOf[1], x + 24];
+      }
+      const yc = (top + bottom) / 2;
+      const flip = ya > yb ? -1 : 1; // вывод 0 внизу — переворачиваем обозначение
+      const svg =
+        // Невидимая область щелчка: обозначение и подпись
+        `<rect class="hit" x="${x - 16}" y="${num(yc - 26)}" width="96" height="52"/>` +
+        `<path d="M${x} ${top}V${num(yc - HALF)}M${x} ${num(yc + HALF)}V${num(bottom)}"/>${extra}` +
+        `<g transform="translate(${x} ${num(yc)}) scale(1 ${flip})">${symbol2(c)}</g>` +
+        label(x + 18, yc);
+      placed.push({ c, x, attach, svg, bottom });
+      x += COL;
+    } else {
+      // Транзистор: основной путь (К–Э или С–И) вертикально, управляющий вывод — слева
+      const t = c as Transistor | Mosfet;
+      x += COL * 0.4;
+      const roles =
+        t.type === "transistor"
+          ? { up: 0 as Pin, ctrl: 1 as Pin, down: 2 as Pin }
+          : { up: mosfetPin(t.kind, "D"), ctrl: mosfetPin(t.kind, "G"), down: mosfetPin(t.kind, "S") };
+      const yUp = Y(netOf[roles.up]);
+      const yDown = Y(netOf[roles.down]);
+      const swap = yUp > yDown; // коллектор (сток) ниже эмиттера (истока) — рисуем перевёрнутым
+      let top = Math.min(yUp, yDown);
+      let bottom = Math.max(yUp, yDown);
+      let extra = "";
+      const lx = x + 8;
+      const attach: [number, number][] = [
+        [netOf[roles.up], lx],
+        [netOf[roles.down], lx],
+        [netOf[roles.ctrl], x - 30],
+      ];
+      if (yUp === yDown) {
+        bottom = top + ROW * 0.8;
+        extra = `<path d="M${lx} ${num(bottom)}H${lx + 22}V${top}"/>`;
+        attach[1] = [netOf[roles.down], lx + 22];
+      }
+      const yc = (top + bottom) / 2;
+      const yCtrl = Y(netOf[roles.ctrl]);
+      let body: string;
+      if (t.type === "transistor") {
+        const npn = TRANSISTORS[t.kind].polarity === "npn";
+        // Эмиттер внизу (в своей системе); стрелка у n-p-n — от базы, у p-n-p — к базе
+        const arrow = npn ? `<path d="M8 13L1.2 11.8L4.2 7.6Z" class="fill"/>` : `<path d="M-6 6L0.4 5.6L-2.6 10.4Z" class="fill"/>`;
+        body = `<circle r="17"/><path d="M-6 -11V11" class="thick"/><path d="M-6 -5L8 -13V-17M-6 5L8 13V17"/>${arrow}`;
+      } else {
+        const n = MOSFETS[t.kind].channel === "n";
+        const arrow = n ? `<path d="M-4 0L2 -3V3Z" class="fill"/>` : `<path d="M8 0L2 -3V3Z" class="fill"/>`;
+        body =
+          `<circle r="17"/><path d="M-9 -10V10" /><path d="M-4 -11V-5M-4 -3V3M-4 5V11" class="thick"/>` +
+          `<path d="M-4 -8H8V-17M-4 8H8V17M-4 0H8V8"/>${arrow}`;
+      }
+      // Управляющий вывод: от затвора / базы влево и к своей цепи
+      const gx = t.type === "transistor" ? -6 : -9;
+      const svg =
+        `<rect class="hit" x="${x - 22}" y="${num(yc - 34)}" width="110" height="56"/>` +
+        `<path d="M${lx} ${top}V${num(yc - 17)}M${lx} ${num(yc + 17)}V${num(bottom)}"/>${extra}` +
+        `<path d="M${num(x + gx)} ${num(yc)}H${x - 30}V${num(yCtrl)}"/>` +
+        `<g transform="translate(${x} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${body}</g>` +
+        label(x + 24, yc - 20);
+      placed.push({ c, x, attach, svg, bottom: Math.max(bottom, yCtrl) });
+      x += COL * 1.1;
+    }
+  }
+
+  // Линии цепей: от крайней левой до крайней правой точки подключения; точки — в T-соединениях
+  const netsSvg: string[] = [];
+  for (const [net] of row) {
+    const xs = placed.flatMap((p) => p.attach.filter(([n]) => n === net).map(([, ax]) => ax));
+    if (!xs.length) continue;
+    const y = Y(net);
+    const min = Math.min(...xs);
+    const max = Math.max(...xs);
+    const [a, b] = min === max ? [min - 10, max + 10] : [min, max];
+    const dots = [...new Set(xs)]
+      .filter((ax) => ax > min && ax < max)
+      .map((ax) => `<circle cx="${num(ax)}" cy="${y}" r="2.6" class="dot"/>`)
+      .join("");
+    const v = volts[net];
+    netsSvg.push(
+      `<path d="M${num(a)} ${y}H${num(b)}"/>${dots}` +
+        `<text x="${num(a - 6)}" y="${y + 4}" class="volt" text-anchor="end">${v === undefined ? "—" : formatVolts(v)}</text>`,
+    );
+  }
+
+  const width = x + 70;
+  const height = Math.max(...placed.map((p) => p.bottom), TOP + (order.length - 1) * ROW) + 40;
+  const partsSvg = placed
+    .map((p) => `<g class="part${p.c.id === highlight ? " sel" : ""}" data-part="${esc(p.c.id)}">${p.svg}</g>`)
+    .join("");
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" class="sch" viewBox="0 0 ${num(width)} ${num(height)}" width="${num(width)}" height="${num(height)}" role="img" aria-label="Принципиальная схема">` +
+    `<g class="nets">${netsSvg.join("")}</g>${partsSvg}</svg>`
+  );
+}

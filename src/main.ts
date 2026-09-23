@@ -17,7 +17,7 @@ async function start(): Promise<void> {
   setInsets();
   window.addEventListener("resize", setInsets);
   const saved = App.load();
-  const app = new App(world, { inspector: $("inspector"), hint: $("hint"), toasts: $("toasts"), tools: $("tools") }, saved ?? demoScene());
+  const app = new App(world, { inspector: $("inspector"), hint: $("hint"), toasts: $("toasts"), tools: $("tools"), schematic: $("schematic") }, saved ?? demoScene());
   if (!saved) {
     app.toast("Это пример", "Замкните тумблер SA2 (нажмите на него): резистор R2 22 Ом не выдержит мощности и сгорит. Потом выберите R2 и поставьте номинал побольше.");
   }
@@ -82,6 +82,20 @@ async function start(): Promise<void> {
     }
   };
   app.onTool(app.tool);
+
+  // «Схема» — принципиальная схема сборки
+  const schBtn = $("btn-schematic");
+  const setSchematic = (on: boolean) => {
+    app.setShowSchematic(on);
+    schBtn.setAttribute("aria-pressed", String(on));
+  };
+  schBtn.addEventListener("click", () => setSchematic(!app.showSchematic));
+  $("btn-sch-close").addEventListener("click", () => setSchematic(false));
+  const zoomBtn = $("btn-sch-zoom");
+  zoomBtn.addEventListener("click", () => {
+    const actual = $("schematic").classList.toggle("actual");
+    zoomBtn.setAttribute("aria-pressed", String(actual));
+  });
 
   // «Проекты» — панель справа
   const projBtn = $("btn-projects");

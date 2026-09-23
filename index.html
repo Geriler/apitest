@@ -165,6 +165,40 @@
   .btn.danger { color: var(--danger); }
   .btn[aria-pressed="true"] { background: var(--copper-soft); border-color: var(--copper); }
   .btn:disabled { opacity: 0.45; cursor: default; }
+  /* ── Принципиальная схема ── */
+  #schematic {
+    position: absolute;
+    left: 228px;
+    bottom: 16px;
+    width: min(640px, calc(100% - 228px - 348px));
+    min-width: 280px;
+    height: 44%;
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px 10px 12px;
+    resize: both;
+    overflow: hidden;
+  }
+  #schematic[hidden] { display: none; }
+  .sch-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .sch-head small { color: var(--muted); font-size: 11px; }
+  .sch-body { flex: 1; overflow: auto; }
+  .sch { display: block; }
+  /* По размеру панели (не крупнее натуральной величины); кнопка «100 %» — в натуральную с прокруткой */
+  #schematic:not(.actual) .sch { max-width: 100%; max-height: 100%; width: auto; height: auto; }
+  #schematic:not(.actual) .sch-body { overflow: hidden; }
+  .sch path, .sch rect, .sch circle { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: round; }
+  .sch .dot, .sch .fill { fill: var(--ink); stroke: none; }
+  .sch .thin { stroke-width: 1.1; }
+  .sch .thick { stroke-width: 3; }
+  .sch text { fill: var(--ink); stroke: none; font: 500 10.5px var(--mono); }
+  .sch text.ref { fill: var(--copper); font-weight: 600; }
+  .sch text.sub, .sch text.volt { fill: var(--muted); }
+  .sch .part { cursor: pointer; }
+  .sch .hit { fill: transparent; stroke: none; pointer-events: all; }
+  .sch .part:hover :is(path, rect:not(.hit), circle:not(.dot, .fill)), .sch .part.sel :is(path, rect:not(.hit), circle:not(.dot, .fill)) { stroke: var(--copper); }
+  .sch .part:hover :is(.dot, .fill), .sch .part.sel :is(.dot, .fill) { fill: var(--copper); }
+  .sch .part.sel path { stroke-width: 2; }
   /* Меню «Настройки» */
   .menu { position: relative; }
   .menu > summary { display: block; }
@@ -318,6 +352,8 @@
       padding: 6px;
     }
     .menu-body { position: fixed; top: 56px; left: auto; right: 16px; }
+    #schematic { left: 16px; right: 16px; width: auto; min-width: 0; bottom: calc(86px + env(safe-area-inset-bottom, 0px)); height: 40%; resize: none; }
+    .sch-head small { display: none; }
     .tool { grid-template-columns: 1fr; justify-items: center; gap: 2px; font-size: 11px; padding: 4px 6px; flex: 0 0 auto; }
     /* Одна строка с прокруткой: иначе кнопки переносятся и наезжают на уведомления */
     #actions { left: 16px; right: 16px; top: 12px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
@@ -436,6 +472,7 @@
     <button class="btn" id="btn-undo" title="Отменить (Ctrl+Z)" aria-label="Отменить" disabled>↶</button>
     <button class="btn" id="btn-redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть" disabled>↷</button>
     <button class="btn" id="btn-clear">Очистить</button>
+    <button class="btn" id="btn-schematic" aria-pressed="false" title="Принципиальная схема сборки">Схема</button>
     <button class="btn" id="btn-projects" aria-pressed="false" title="Сохранить, открыть, скачать файлом">Проекты</button>
     <details class="menu" id="settings-menu">
       <summary class="btn" title="Допуски, ток, замена сгоревших">Настройки</summary>
@@ -450,6 +487,17 @@
   </div>
 
   <aside id="inspector" class="panel" aria-live="polite"></aside>
+
+  <section id="schematic" class="panel" hidden aria-label="Принципиальная схема">
+    <div class="sch-head">
+      <span><span class="eyebrow">схема</span> <small>цепи сверху вниз — от плюса к минусу; щелчок по детали — её панель</small></span>
+      <span class="row" style="margin: 0; flex-wrap: nowrap;">
+        <button class="btn inline" id="btn-sch-zoom" aria-pressed="false" title="Натуральная величина с прокруткой или по размеру панели">100 %</button>
+        <button class="btn inline" id="btn-sch-close" aria-label="Закрыть схему" title="Закрыть">×</button>
+      </span>
+    </div>
+    <div class="sch-body"></div>
+  </section>
   <div id="hint" class="panel" hidden></div>
   <div id="toasts"></div>
 </div>
