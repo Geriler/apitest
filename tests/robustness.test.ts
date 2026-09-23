@@ -78,7 +78,7 @@ describe("устойчивость расчёта", () => {
       for (let i = 0; i < n; i++) {
         const k = r();
         const id = `X${i}`;
-        if (k < 0.25) comps.push({ id, type: "mosfet", kind: pick(["IRF9540N", "IRLZ44N", "2N7000"] as const), placement: free });
+        if (k < 0.25) comps.push({ id, type: "mosfet", kind: pick(["IRF9540N", "IRLZ44N", "2N7000", "BS250"] as const), placement: free });
         else if (k < 0.4) comps.push({ id, type: "led", color: pick(["red", "white"] as const), size: pick(["5mm", "1W"] as const), placement: free });
         else if (k < 0.6) comps.push({ id, type: "switch", closed: r() < 0.5, placement: free });
         else if (k < 0.8) comps.push({ id, type: "resistor", variant: "tht", ohms: pick([10, 100, 1000, 10000, 100000]), smdSize: "0805", placement: free });

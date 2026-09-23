@@ -156,6 +156,12 @@ export const MOSFETS = {
     label: "2N7000", channel: "n" as const, pkg: "TO-92" as const, pins: ["S", "G", "D"] as const,
     vth: 2.1, k: 0.065, maxId: 0.2, maxP: 0.4, rdsNote: "≈ 2 Ом при Uзи = 10 В",
   },
+  // P-канальная пара к 2N7000. Паспорт BS250P: −45 В, −230 мА, 0,7 Вт, порог −1…−3,5 В,
+  // Rси не больше 14 Ом при Uзи = −10 В; k подобран на типичные ≈ 5–6 Ом.
+  BS250: {
+    label: "BS250", channel: "p" as const, pkg: "TO-92" as const, pins: ["D", "G", "S"] as const,
+    vth: 2.2, k: 0.026, maxId: 0.23, maxP: 0.7, rdsNote: "≈ 5–6 Ом при Uзи = −10 В, по паспорту до 14 Ом",
+  },
   IRLZ44N: {
     label: "IRLZ44N", channel: "n" as const, pkg: "TO-220" as const, pins: ["G", "D", "S"] as const,
     vth: 1.5, k: 13, maxId: 47, maxP: 2, rdsNote: "≈ 0,02 Ом при Uзи = 5 В",

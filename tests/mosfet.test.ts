@@ -182,34 +182,58 @@ describe("2N7000 (N-канал)", () => {
   });
 });
 
-describe("IRF9540N (P-канал)", () => {
-  function highSide(gateToPlus: boolean) {
-    const q = M("VT1", "IRF9540N");
+for (const kind of ["IRF9540N", "BS250"] as const) {
+  describe(`${kind} (P-канал)`, () => {
+    function highSide(gateToPlus: boolean) {
+      const q = M("VT1", kind);
+      const scene = circuit(
+        [q, R("Rload", 1000), R("Rg", 10_000)],
+        [
+          [PLUS, fet(q, "S")],
+          [fet(q, "D"), pin("Rload", 0)],
+          [pin("Rload", 1), MINUS],
+          [fet(q, "G"), pin("Rg", 0)],
+          [pin("Rg", 1), gateToPlus ? PLUS : MINUS],
+        ],
+      );
+      return { q, scene, sim: settled(scene) };
+    }
+
+    it("затвор ниже истока — открыт, ток нагрузки ≈ 9 мА", () => {
+      const { q, scene, sim } = highSide(false);
+      const f = sim.mosfet(q);
+      expect(f.mode).toBe("открыт");
+      expect(f.vgs).toBeCloseTo(terminal(sim, scene), 3);
+      // У BS250 на канале падает несколько десятков милливольт (Rси ≈ 5–6 Ом)
+      expect(f.id).toBeCloseTo(9 / (1000 + 1.5), kind === "BS250" ? 3 : 4);
+    });
+
+    it("затвор на плюсе — закрыт", () => {
+      const { q, sim } = highSide(true);
+      expect(sim.mosfet(q).mode).toBe("закрыт");
+      expect(Math.abs(sim.mosfet(q).id)).toBeLessThan(1e-9);
+    });
+  });
+}
+
+describe("BS250: P-канал в TO-92", () => {
+  it("ножки С-З-И (у 2N7000 наоборот: И-З-С), сопротивление открытого канала ≈ 5–6 Ом при Uзи ≈ −9 В", () => {
+    expect([mosfetPin("BS250", "D"), mosfetPin("BS250", "G"), mosfetPin("BS250", "S")]).toEqual([0, 1, 2]);
+    const q = M("VT1", "BS250");
     const scene = circuit(
-      [q, R("Rload", 1000), R("Rg", 10_000)],
+      [q, R("Rload", 1000)],
       [
         [PLUS, fet(q, "S")],
         [fet(q, "D"), pin("Rload", 0)],
         [pin("Rload", 1), MINUS],
-        [fet(q, "G"), pin("Rg", 0)],
-        [pin("Rg", 1), gateToPlus ? PLUS : MINUS],
+        [fet(q, "G"), MINUS],
       ],
     );
-    return { q, scene, sim: settled(scene) };
-  }
-
-  it("затвор ниже истока — открыт, ток нагрузки ≈ 9 мА", () => {
-    const { q, scene, sim } = highSide(false);
+    const sim = settled(scene);
     const f = sim.mosfet(q);
-    expect(f.mode).toBe("открыт");
-    expect(f.vgs).toBeCloseTo(terminal(sim, scene), 3);
-    expect(f.id).toBeCloseTo(9 / (1000 + 1.5), 4);
-  });
-
-  it("затвор на плюсе — закрыт", () => {
-    const { q, sim } = highSide(true);
-    expect(sim.mosfet(q).mode).toBe("закрыт");
-    expect(Math.abs(sim.mosfet(q).id)).toBeLessThan(1e-9);
+    const rds = Math.abs(f.vds / f.id);
+    expect(rds).toBeGreaterThan(4);
+    expect(rds).toBeLessThan(7);
   });
 });
 
