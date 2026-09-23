@@ -130,7 +130,7 @@ try {
       check(placed.count === before + 1 && placed.holes?.join() === "f12,f16", `мышью: резистор встал в ${placed.holes?.join(" и ")}`);
 
       // Батарея на плату не ставится
-      await page.keyboard.press("6");
+      await page.keyboard.press("9");
       const h = await page.evaluate(() => {
         const s = window.maketka.world.toScreen(window.maketka.endpointPos({ hole: "h5" }));
         return { x: s.x, y: s.y };
@@ -142,6 +142,59 @@ try {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       await page.screenshot({ path: "screenshots/desktop-final.png" });
+
+      // Пример 2: конденсатор и светодиоды
+      await page.selectOption("#demo-select", "leds");
+      await page.waitForTimeout(2500);
+      await page.screenshot({ path: "screenshots/desktop-leds.png" });
+      const leds = await page.evaluate(() => {
+        const a = window.maketka;
+        const i = (id) => a.sim.current(a.component(id));
+        return { hl1: i("HL1"), hl2: i("HL2"), hl3: i("HL3") };
+      });
+      check(leds.hl1 > 0.005 && leds.hl2 > 0.01, `светодиоды HL1, HL2 горят (${(leds.hl1 * 1000).toFixed(1)} и ${(leds.hl2 * 1000).toFixed(1)} мА)`);
+      check(Math.abs(leds.hl3) < 1e-6, "перевёрнутый HL3 не горит");
+      const hl3 = await page.evaluate(() => {
+        const s = window.maketka.world.toScreen(window.maketka.views.get("HL3").hotspot);
+        return { x: s.x, y: s.y + 4 };
+      });
+      await page.mouse.click(hl3.x, hl3.y);
+      await page.waitForTimeout(300);
+      const selected = await page.evaluate(() => window.maketka.selected);
+      await page.keyboard.press("f");
+      await page.waitForTimeout(400);
+      const hl3After = await page.evaluate(() => window.maketka.sim.current(window.maketka.component("HL3")));
+      check(selected === "HL3" && hl3After > 0.01, `мышью: HL3 выбран (${selected}) и после F горит (${(hl3After * 1000).toFixed(1)} мА)`);
+
+      // Разомкнуть SA1: HL1 гаснет не сразу
+      await page.evaluate(() => {
+        const a = window.maketka;
+        a.component("SA1").closed = false;
+        a.changed();
+      });
+      await page.waitForTimeout(1000);
+      const fading = await page.evaluate(() => window.maketka.sim.current(window.maketka.component("HL1")));
+      check(fading > 0.003, `после размыкания SA1 HL1 ещё светится через 1 с (${(fading * 1000).toFixed(1)} мА)`);
+      await page.screenshot({ path: "screenshots/desktop-fading.png" });
+
+      // Цвет провода: выбрать синий и проложить провод
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("2");
+      await page.click('#inspector .swatch[data-color="#2f6fd1"]');
+      const ends = await page.evaluate(() => {
+        const a = window.maketka;
+        return ["f2", "f6"].map((id) => {
+          const s = a.world.toScreen(a.endpointPos({ hole: id }));
+          return { x: s.x, y: s.y };
+        });
+      });
+      for (const e of ends) {
+        await page.mouse.move(e.x, e.y);
+        await page.mouse.click(e.x, e.y);
+      }
+      await page.waitForTimeout(300);
+      const wire = await page.evaluate(() => window.maketka.scene.wires.at(-1));
+      check(wire.color === "#2f6fd1" && "hole" in wire.a && wire.a.hole === "f2", `провод выбранного цвета: ${wire.color} ${JSON.stringify(wire.a)}`);
     }
 
     check(errors.length === 0, `${viewport.name}: нет ошибок в консоли${errors.length ? ": " + errors.join(" | ") : ""}`);

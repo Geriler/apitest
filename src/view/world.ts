@@ -163,21 +163,36 @@ export class World {
     this.composer.setSize(w, h);
     this.bloom.setSize(w, h);
     this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
     if (!this.userMovedCamera) this.frameView();
+    else {
+      const shift = (this.insets.right - this.insets.left) / 2;
+      if (shift) this.camera.setViewOffset(w, h, shift, 0, w, h);
+      else this.camera.clearViewOffset();
+    }
+    this.camera.updateProjectionMatrix();
   }
 
+  /** Сколько пикселей слева и справа закрыто панелями интерфейса. */
+  insets = { left: 0, right: 0 };
+
   /**
-   * Начальный ракурс под пропорции экрана: на широком видно батарею и плату,
-   * на узком (телефон) — плату целиком.
+   * Начальный ракурс под пропорции экрана и панели: сцена вписывается в видимую область
+   * между панелью инструментов и панелью справа. На узком экране (телефон) — плата целиком.
    */
   frameView(): void {
-    const aspect = this.camera.aspect;
+    const w = Math.max(1, this.container.clientWidth);
+    const h = Math.max(1, this.container.clientHeight);
+    const aspect = w / h;
     const narrow = aspect < 1;
+    const usable = Math.max(0.3, (w - this.insets.left - this.insets.right) / w);
+    // Сдвиг центра проекции к середине видимой области
+    const shift = (this.insets.right - this.insets.left) / 2;
+    if (shift) this.camera.setViewOffset(w, h, shift, 0, w, h);
+    else this.camera.clearViewOffset();
     const halfWidth = narrow ? 17 : 30;
-    const tanH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * aspect;
-    const dist = THREE.MathUtils.clamp(halfWidth / tanH, 60, 125);
-    const target = narrow ? new THREE.Vector3(0, 0, 3) : new THREE.Vector3(-9, 0, -3);
+    const tanH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * aspect * usable;
+    const dist = THREE.MathUtils.clamp(halfWidth / tanH, 60, 140);
+    const target = narrow ? new THREE.Vector3(0, 0, 3) : new THREE.Vector3(-9, 0, -1);
     const dir = new THREE.Vector3(0.04, 0.7, 0.71).normalize();
     this.controls.target.copy(target);
     this.camera.position.copy(target).addScaledVector(dir, dist);

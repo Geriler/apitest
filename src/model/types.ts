@@ -30,6 +30,50 @@ export const LAMPS = {
 } as const;
 export type LampKind = keyof typeof LAMPS;
 
+/**
+ * Электролитические конденсаторы 16 В. Размеры (Ø × высота, мм) типовые для этих номиналов,
+ * у разных серий отличаются. Электролит полярный: обратное напряжение больше ~1 В его портит.
+ */
+export const ELECTROLYTICS = [
+  { uF: 10, diaMm: 5, heightMm: 11 },
+  { uF: 100, diaMm: 6.3, heightMm: 11 },
+  { uF: 470, diaMm: 8, heightMm: 12 },
+  { uF: 1000, diaMm: 10, heightMm: 16 },
+  { uF: 2200, diaMm: 13, heightMm: 21 },
+  { uF: 4700, diaMm: 16, heightMm: 26 },
+] as const;
+export const ELECTROLYTIC_RATED_V = 16;
+/** Допустимое обратное напряжение электролита, В (ориентир, не паспортное значение). */
+export const ELECTROLYTIC_REVERSE_V = 1;
+
+/** Керамические конденсаторы 50 В, неполярные. */
+export const CERAMICS = [
+  { uF: 0.01, code: "103" },
+  { uF: 0.1, code: "104" },
+  { uF: 1, code: "105" },
+] as const;
+export const CERAMIC_RATED_V = 50;
+
+/**
+ * Параметры диодов для уравнения Шокли I = Is·(e^(V/(n·Vt)) − 1) с последовательным Rs.
+ * 1N4007 — из распространённой SPICE-модели. Светодиоды подобраны так, чтобы
+ * при 20 мА падение было около vf (типовое значение, у конкретных светодиодов разброс).
+ */
+export const DIODE_1N4007 = { label: "1N4007", is: 7.03e-9, n: 1.808, rs: 0.034, maxA: 1 };
+
+export const LEDS = {
+  red: { label: "красный", vf: 2.0, hex: "#ff2a1a", glass: "#b8221a" },
+  yellow: { label: "жёлтый", vf: 2.1, hex: "#ffc21a", glass: "#c9971a" },
+  green: { label: "зелёный", vf: 2.2, hex: "#3dff5a", glass: "#2a9a3a" },
+  blue: { label: "синий", vf: 3.0, hex: "#3a7bff", glass: "#2a4fb8" },
+  white: { label: "белый", vf: 3.1, hex: "#f4f6ff", glass: "#d8dde8" },
+} as const;
+export type LedColor = keyof typeof LEDS;
+/** Номинальный ток светодиода 5 мм, А. */
+export const LED_RATED_A = 0.02;
+export const LED_N = 2;
+export const LED_RS = 8;
+
 /** Сопротивление провода-перемычки, Ом (≈ 10 см медного провода 22 AWG). */
 export const WIRE_RESISTANCE = 0.005;
 /** Сопротивление замкнутого выключателя, Ом. */
@@ -66,7 +110,23 @@ export interface Switch extends Base {
   closed: boolean;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch;
+/** Выводы полярных деталей: 0 — анод / плюс, 1 — катод / минус. */
+export interface Capacitor extends Base {
+  type: "capacitor";
+  variant: "electrolytic" | "ceramic";
+  uF: number;
+}
+
+export interface Diode extends Base {
+  type: "diode";
+}
+
+export interface Led extends Base {
+  type: "led";
+  color: LedColor;
+}
+
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */
@@ -94,6 +154,21 @@ export interface ComponentState {
 export function sameEndpoint(p: Endpoint, q: Endpoint): boolean {
   if ("hole" in p) return "hole" in q && q.hole === p.hole;
   return "comp" in q && q.comp === p.comp && q.pin === p.pin;
+}
+
+/** Полярная ли деталь: важно, какой вывод куда. */
+export function isPolar(c: Component): boolean {
+  return c.type === "diode" || c.type === "led" || c.type === "battery" || (c.type === "capacitor" && c.variant === "electrolytic");
+}
+
+export function electrolyticSize(uF: number) {
+  return ELECTROLYTICS.find((e) => e.uF === uF) ?? ELECTROLYTICS[ELECTROLYTICS.length - 1];
+}
+
+/** «4700 мкФ», «100 нФ». */
+export function formatFarads(uF: number): string {
+  if (uF >= 1) return `${String(uF).replace(".", ",")} мкФ`;
+  return `${String(Math.round(uF * 1000)).replace(".", ",")} нФ`;
 }
 
 /** Номинальная мощность детали, Вт (для перегрева). У батареи и выключателя нет. */

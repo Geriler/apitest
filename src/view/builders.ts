@@ -2,11 +2,17 @@ import * as THREE from "three";
 import { BOARD, HOLE_BY_ID } from "../model/breadboard";
 import {
   BATTERIES,
+  CERAMICS,
+  LEDS,
   SMD_SIZES,
   THT_RESISTOR,
+  electrolyticSize,
   type Battery,
+  type Capacitor,
   type Component,
+  type Diode,
   type Lamp,
+  type Led,
   type Resistor,
   type Switch,
 } from "../model/types";
@@ -19,7 +25,7 @@ const H = BOARD.height;
 const Y = new THREE.Vector3(0, 1, 0);
 
 export interface Visual {
-  /** Яркость лампы, доля номинальной мощности. */
+  /** Яркость лампы или светодиода: доля номинальной мощности (лампа) или тока (светодиод). */
   brightness: number;
   /** Накопленный перегрев 0…1. */
   heat: number;
@@ -99,6 +105,90 @@ function boardFrame(holes: [string, string]) {
   return { p0, p1, mid, dir, dist, angle };
 }
 
+
+/**
+ * Раскладка детали с выводами по оси (резистор, диод). Корпус t.body построен вдоль локальной +X
+ * от вывода 0 к выводу 1. На столе лежит; на плате лежит над отверстиями, а если они слишком близко — стоит.
+ */
+function axialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, L: number, r: number) {
+  let pins: [THREE.Vector3, THREE.Vector3];
+  let hotspot: THREE.Vector3;
+  if (c.placement.mode === "free") {
+    const lift = r;
+    body.position.y = lift;
+    group.add(body);
+    const reach = L / 2 + 1.4;
+    group.add(lead([new THREE.Vector3(-L / 2 + 0.1, lift, 0), new THREE.Vector3(-reach, mm(0.3), 0)]));
+    group.add(lead([new THREE.Vector3(L / 2 - 0.1, lift, 0), new THREE.Vector3(reach, mm(0.3), 0)]));
+    group.position.set(c.placement.x, 0, c.placement.z);
+    group.rotation.y = c.placement.rot;
+    pins = [freeTransform(c, new THREE.Vector3(-reach, mm(0.3), 0)), freeTransform(c, new THREE.Vector3(reach, mm(0.3), 0))];
+    hotspot = freeTransform(c, new THREE.Vector3(0, lift * 2, 0));
+    return { pins, hotspot };
+  }
+  const f = boardFrame(c.placement.holes);
+  pins = [f.p0, f.p1];
+  if (f.dist >= L + 0.8) {
+    // Лёжа над платой
+    const y = H + 0.9;
+    body.position.set(f.mid.x, y, f.mid.z);
+    body.rotation.y = f.angle;
+    group.add(body);
+    const e0 = f.mid.clone().addScaledVector(f.dir, -L / 2 + 0.1).setY(y);
+    const e1 = f.mid.clone().addScaledVector(f.dir, L / 2 - 0.1).setY(y);
+    group.add(lead([f.p0.clone().setY(H - 0.2), f.p0.clone().setY(y - 0.25), f.p0.clone().setY(y), e0]));
+    group.add(lead([f.p1.clone().setY(H - 0.2), f.p1.clone().setY(y - 0.25), f.p1.clone().setY(y), e1]));
+    hotspot = f.mid.clone().setY(y + r);
+  } else {
+    // Стоя: корпус над первым отверстием, второй вывод загнут сверху
+    const bottom = H + 0.4;
+    body.position.set(f.p0.x, bottom + L / 2, f.p0.z);
+    body.rotation.z = Math.PI / 2;
+    body.rotation.y = f.angle;
+    group.add(body);
+    const top = bottom + L + 0.35;
+    group.add(lead([f.p0.clone().setY(H - 0.2), f.p0.clone().setY(bottom + 0.1)]));
+    group.add(lead([f.p0.clone().setY(bottom + L - 0.1), f.p0.clone().setY(top), f.p1.clone().setY(top), f.p1.clone().setY(H - 0.2)]));
+    hotspot = f.p0.clone().setY(bottom + L);
+  }
+  return { pins, hotspot };
+}
+
+/**
+ * Раскладка радиальной детали (конденсатор, светодиод): корпус стоит вертикально,
+ * оба вывода выходят снизу. Корпус построен так, что локальная +X смотрит на вывод 1.
+ * spacing — расстояние между выводами у корпуса, bottom — высота низа корпуса над платой/столом.
+ */
+function radialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, spacing: number, bottom: number, height: number) {
+  let pins: [THREE.Vector3, THREE.Vector3];
+  let hotspot: THREE.Vector3;
+  if (c.placement.mode === "free") {
+    body.position.y = bottom;
+    group.add(body);
+    for (const sx of [-1, 1]) {
+      group.add(lead([new THREE.Vector3((sx * spacing) / 2, bottom + 0.1, 0), new THREE.Vector3((sx * spacing) / 2, 0.4, 0), new THREE.Vector3(sx * (spacing / 2 + 1.2), mm(0.3), 0)]));
+    }
+    group.position.set(c.placement.x, 0, c.placement.z);
+    group.rotation.y = c.placement.rot;
+    const reach = spacing / 2 + 1.2;
+    pins = [freeTransform(c, new THREE.Vector3(-reach, mm(0.3), 0)), freeTransform(c, new THREE.Vector3(reach, mm(0.3), 0))];
+    hotspot = freeTransform(c, new THREE.Vector3(0, bottom + height, 0));
+    return { pins, hotspot };
+  }
+  const f = boardFrame(c.placement.holes);
+  pins = [f.p0, f.p1];
+  const y = H + bottom;
+  body.position.set(f.mid.x, y, f.mid.z);
+  body.rotation.y = f.angle;
+  group.add(body);
+  const a0 = f.mid.clone().addScaledVector(f.dir, -spacing / 2);
+  const a1 = f.mid.clone().addScaledVector(f.dir, spacing / 2);
+  group.add(lead([f.p0.clone().setY(H - 0.2), f.p0.clone().setY(H + 0.3), a0.clone().setY(H + 0.6), a0.clone().setY(y + 0.1)]));
+  group.add(lead([f.p1.clone().setY(H - 0.2), f.p1.clone().setY(H + 0.3), a1.clone().setY(H + 0.6), a1.clone().setY(y + 0.1)]));
+  hotspot = f.mid.clone().setY(y + height);
+  return { pins, hotspot };
+}
+
 // ─── Резисторы ─────────────────────────────────────────────────────────────
 
 function thtBody(c: Resistor) {
@@ -174,51 +264,7 @@ function resistorView(c: Resistor): ComponentView {
     bodyMat = t.bodyMat;
     extraMats = t.bandMats;
     baseColor = new THREE.Color(0xd8c496);
-    if (c.placement.mode === "free") {
-      const lift = t.r;
-      t.body.position.y = lift;
-      group.add(t.body);
-      const reach = t.L / 2 + 1.4;
-      group.add(lead([new THREE.Vector3(-t.L / 2 + 0.1, lift, 0), new THREE.Vector3(-reach, mm(0.3), 0)]));
-      group.add(lead([new THREE.Vector3(t.L / 2 - 0.1, lift, 0), new THREE.Vector3(reach, mm(0.3), 0)]));
-      group.position.set(c.placement.x, 0, c.placement.z);
-      group.rotation.y = c.placement.rot;
-      pins = [freeTransform(c, new THREE.Vector3(-reach, mm(0.3), 0)), freeTransform(c, new THREE.Vector3(reach, mm(0.3), 0))];
-      hotspot = freeTransform(c, new THREE.Vector3(0, lift * 2, 0));
-    } else {
-      const f = boardFrame(c.placement.holes);
-      pins = [f.p0, f.p1];
-      if (f.dist >= t.L + 0.8) {
-        // Лёжа над платой
-        const y = H + 0.9;
-        t.body.position.set(f.mid.x, y, f.mid.z);
-        t.body.rotation.y = f.angle;
-        group.add(t.body);
-        const e0 = f.mid.clone().addScaledVector(f.dir, -t.L / 2 + 0.1).setY(y);
-        const e1 = f.mid.clone().addScaledVector(f.dir, t.L / 2 - 0.1).setY(y);
-        group.add(lead([f.p0.clone().setY(H - 0.2), f.p0.clone().setY(y - 0.25), f.p0.clone().setY(y), e0]));
-        group.add(lead([f.p1.clone().setY(H - 0.2), f.p1.clone().setY(y - 0.25), f.p1.clone().setY(y), e1]));
-        hotspot = f.mid.clone().setY(y + t.r);
-      } else {
-        // Стоя: корпус над первым отверстием, второй вывод загнут сверху
-        const bottom = H + 0.4;
-        t.body.position.set(f.p0.x, bottom + t.L / 2, f.p0.z);
-        t.body.rotation.z = Math.PI / 2;
-        t.body.rotation.y = f.angle;
-        group.add(t.body);
-        const top = bottom + t.L + 0.35;
-        group.add(lead([f.p0.clone().setY(H - 0.2), f.p0.clone().setY(bottom + 0.1)]));
-        group.add(
-          lead([
-            f.p0.clone().setY(bottom + t.L - 0.1),
-            f.p0.clone().setY(top),
-            f.p1.clone().setY(top),
-            f.p1.clone().setY(H - 0.2),
-          ]),
-        );
-        hotspot = f.p0.clone().setY(bottom + t.L);
-      }
-    }
+    ({ pins, hotspot } = axialLayout(c, group, t.body, t.L, t.r));
   }
 
   tagPickable(group, c.id);
@@ -492,6 +538,221 @@ function batteryView(c: Battery): ComponentView {
   };
 }
 
+
+// ─── Конденсаторы ──────────────────────────────────────────────────────────
+
+/** Оболочка электролита: тёмно-синяя, со светлой полосой «−» по центру развёртки (u = 0,25 → +X). */
+function sleeveTexture(uF: number): THREE.CanvasTexture {
+  const w = 512, h = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = "#1c3a6b";
+  g.fillRect(0, 0, w, h);
+  // Полоса минуса смотрит на вывод 1 (локальная +X ↔ u = 0,25)
+  const cx = w * 0.25;
+  g.fillStyle = "#c9d3e0";
+  g.fillRect(cx - w * 0.07, 0, w * 0.14, h);
+  g.fillStyle = "#1c3a6b";
+  g.font = `700 ${h * 0.2}px "IBM Plex Sans", system-ui, sans-serif`;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  for (let i = 0; i < 4; i++) g.fillText("−", cx, h * (0.14 + i * 0.24));
+  // Номинал — с противоположной стороны
+  g.fillStyle = "#e9eef5";
+  g.font = `600 ${h * 0.16}px "IBM Plex Mono", ui-monospace, monospace`;
+  g.fillText(`${uF}µF`, w * 0.75, h * 0.38);
+  g.fillText("16V", w * 0.75, h * 0.62);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function ventTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 128;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = "#b9bec6";
+  g.fillRect(0, 0, 128, 128);
+  g.strokeStyle = "#6c727b";
+  g.lineWidth = 6;
+  g.beginPath();
+  g.moveTo(64, 14);
+  g.lineTo(64, 114);
+  g.moveTo(14, 64);
+  g.lineTo(114, 64);
+  g.stroke();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function capacitorView(c: Capacitor): ComponentView {
+  const group = new THREE.Group();
+  const body = new THREE.Group();
+  let bodyMat: THREE.MeshStandardMaterial;
+  let top: THREE.Mesh | undefined;
+  let layout: { pins: [THREE.Vector3, THREE.Vector3]; hotspot: THREE.Vector3 };
+
+  if (c.variant === "electrolytic") {
+    const size = electrolyticSize(c.uF);
+    const r = mm(size.diaMm) / 2;
+    const h = mm(size.heightMm);
+    bodyMat = new THREE.MeshStandardMaterial({ map: sleeveTexture(c.uF), roughness: 0.45 });
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 40, 1, true), bodyMat);
+    can.position.y = h / 2;
+    body.add(can);
+    top = new THREE.Mesh(new THREE.CircleGeometry(r * 0.96, 40), new THREE.MeshStandardMaterial({ map: ventTexture(), metalness: 0.6, roughness: 0.4 }));
+    top.rotation.x = -Math.PI / 2;
+    top.position.y = h;
+    body.add(top);
+    const bottomDisc = new THREE.Mesh(new THREE.CircleGeometry(r, 32), blackPlastic);
+    bottomDisc.rotation.x = Math.PI / 2;
+    body.add(bottomDisc);
+    // Шаг выводов: 2,5 мм у маленьких, 5 мм у средних, 7,5 мм у больших
+    const spacing = mm(size.diaMm <= 6.3 ? 2.5 : size.diaMm <= 10 ? 5 : 7.5);
+    layout = radialLayout(c, group, body, spacing, 0.3, h);
+  } else {
+    // Керамический дисковый: Ø 5 мм, код на лицевой стороне
+    const r = mm(2.6);
+    bodyMat = new THREE.MeshStandardMaterial({ color: 0xd98a3b, roughness: 0.6 });
+    const code = CERAMICS.find((x) => x.uF === c.uF)?.code ?? "";
+    const faceMat = new THREE.MeshStandardMaterial({ map: labelTexture([code], "#d98a3b", "#5a2e0e", 256, 256), roughness: 0.6 });
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(r, r, mm(1.6), 32), [bodyMat, faceMat, faceMat]);
+    disc.rotation.x = Math.PI / 2; // плоскостью к зрителю, выводы снизу
+    disc.position.y = r;
+    body.add(disc);
+    layout = radialLayout(c, group, body, mm(2.5), 0.6, 2 * r);
+  }
+
+  tagPickable(group, c.id);
+  const baseScale = body.scale.clone();
+  return {
+    group,
+    pins: layout.pins,
+    hotspot: layout.hotspot,
+    update(v) {
+      if (v.burned) {
+        // Вздувшийся электролит: крышка выгнута, корпус потемнел
+        bodyMat.color.set(0x55504a);
+        if (top) top.scale.setScalar(1.08);
+        body.scale.set(baseScale.x * 1.06, baseScale.y * 1.04, baseScale.z * 1.06);
+        return;
+      }
+      bodyMat.emissive.setRGB(1, 0.3, 0.05).multiplyScalar(v.heat > 0.3 ? (v.heat - 0.3) * 0.8 : 0);
+    },
+    dispose: () => disposeGroup(group),
+  };
+}
+
+// ─── Диод 1N4007 ───────────────────────────────────────────────────────────
+
+function diodeView(c: Diode): ComponentView {
+  const group = new THREE.Group();
+  const L = mm(5.2);
+  const r = mm(2.7) / 2;
+  const body = new THREE.Group();
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.35 });
+  const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(r, L - 2 * r, 6, 20), bodyMat);
+  capsule.rotation.z = Math.PI / 2;
+  body.add(capsule);
+  // Серебристое кольцо — катод (вывод 1, локальная +X)
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.03, r * 1.03, L * 0.14, 20), new THREE.MeshStandardMaterial({ color: 0xc8ccd2, metalness: 0.6, roughness: 0.35 }));
+  band.rotation.z = Math.PI / 2;
+  band.position.x = L * 0.3;
+  body.add(band);
+  const { pins, hotspot } = axialLayout(c, group, body, L, r);
+  tagPickable(group, c.id);
+  return {
+    group,
+    pins,
+    hotspot,
+    update(v) {
+      bodyMat.color.set(v.burned ? 0x0c0b0a : 0x1b1c1f);
+      bodyMat.emissive.setRGB(1, 0.3, 0.05).multiplyScalar(!v.burned && v.heat > 0.3 ? (v.heat - 0.3) * 1.2 : 0);
+    },
+    dispose: () => disposeGroup(group),
+  };
+}
+
+// ─── Светодиод 5 мм ────────────────────────────────────────────────────────
+
+function ledView(c: Led): ComponentView {
+  const group = new THREE.Group();
+  const spec = LEDS[c.color];
+  const r = mm(2.5);
+  const h = mm(5.8);
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: spec.glass,
+    roughness: 0.15,
+    transmission: 0.35,
+    transparent: true,
+    opacity: 0.8,
+    emissive: new THREE.Color(spec.hex),
+    emissiveIntensity: 0,
+  });
+  const body = new THREE.Group();
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(mm(2.9), mm(2.9), mm(1), 32), glassMat);
+  rim.position.y = mm(0.5);
+  body.add(rim);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h - r, 32), glassMat);
+  barrel.position.y = (h - r) / 2;
+  body.add(barrel);
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), glassMat);
+  dome.position.y = h - r;
+  body.add(dome);
+  // Кристалл внутри
+  const chipMat = new THREE.MeshStandardMaterial({ color: 0x777066, emissive: new THREE.Color(spec.hex), emissiveIntensity: 0 });
+  const chip = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.12, 0.22), chipMat);
+  chip.position.y = h * 0.45;
+  body.add(chip);
+  const light = new THREE.PointLight(spec.hex, 0, 10, 2);
+  light.position.y = h * 0.6;
+  body.add(light);
+
+  let layout: { pins: [THREE.Vector3, THREE.Vector3]; hotspot: THREE.Vector3 };
+  if (c.placement.mode === "free") {
+    // На столе видно, что анод (вывод 0) длиннее катода
+    body.position.y = 1.4;
+    group.add(body);
+    const s = mm(1.27);
+    group.add(lead([new THREE.Vector3(-s, 1.5, 0), new THREE.Vector3(-s, 0.4, 0), new THREE.Vector3(-s - 2.2, mm(0.3), 0)], mm(0.25)));
+    group.add(lead([new THREE.Vector3(s, 1.5, 0), new THREE.Vector3(s, 0.4, 0), new THREE.Vector3(s + 1.4, mm(0.3), 0)], mm(0.25)));
+    group.position.set(c.placement.x, 0, c.placement.z);
+    group.rotation.y = c.placement.rot;
+    layout = {
+      pins: [freeTransform(c, new THREE.Vector3(-s - 2.2, mm(0.3), 0)), freeTransform(c, new THREE.Vector3(s + 1.4, mm(0.3), 0))],
+      hotspot: freeTransform(c, new THREE.Vector3(0, 1.4 + h, 0)),
+    };
+  } else {
+    layout = radialLayout(c, group, body, mm(2.54), 1.2, h);
+  }
+
+  tagPickable(group, c.id);
+  return {
+    group,
+    pins: layout.pins,
+    hotspot: layout.hotspot,
+    update(v) {
+      if (v.burned) {
+        glassMat.emissiveIntensity = 0;
+        chipMat.emissiveIntensity = 0;
+        chipMat.color.set(0x111111);
+        light.intensity = 0;
+        return;
+      }
+      // Яркость ≈ пропорциональна току; 20 мА — полная
+      const b = Math.min(Math.max(v.brightness, 0), 1.6);
+      const glow = b < 0.005 ? 0 : 0.25 + b;
+      glassMat.emissiveIntensity = glow * 1.6;
+      chipMat.emissiveIntensity = glow * 9;
+      light.intensity = glow * 6;
+    },
+    dispose: () => disposeGroup(group),
+  };
+}
+
 export function buildComponentView(c: Component): ComponentView {
   switch (c.type) {
     case "resistor":
@@ -502,6 +763,12 @@ export function buildComponentView(c: Component): ComponentView {
       return switchView(c);
     case "battery":
       return batteryView(c);
+    case "capacitor":
+      return capacitorView(c);
+    case "diode":
+      return diodeView(c);
+    case "led":
+      return ledView(c);
   }
 }
 

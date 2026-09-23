@@ -1,5 +1,5 @@
 import { App } from "./app";
-import { demoScene } from "./demo";
+import { demoScene, ledDemoScene } from "./demo";
 import { World } from "./view/world";
 
 async function start(): Promise<void> {
@@ -8,13 +8,40 @@ async function start(): Promise<void> {
 
   const $ = (id: string) => document.getElementById(id)!;
   const world = new World($("stage"));
+  // Панели на широком экране закрывают края сцены — камера это учитывает
+  const setInsets = () => {
+    const wide = window.innerWidth > 760;
+    world.insets = wide ? { left: $("tools").getBoundingClientRect().right + 8, right: 300 + 32 } : { left: 0, right: 0 };
+    world.resize();
+  };
+  setInsets();
+  window.addEventListener("resize", setInsets);
   const saved = App.load();
   const app = new App(world, { inspector: $("inspector"), hint: $("hint"), toasts: $("toasts"), tools: $("tools") }, saved ?? demoScene());
   if (!saved) {
     app.toast("Это пример", "Замкните тумблер SA2 (нажмите на него дважды): резистор R2 22 Ом не выдержит мощности и сгорит. Потом выберите R2 и поставьте номинал побольше.");
   }
 
-  $("btn-demo").addEventListener("click", () => app.replaceScene(demoScene()));
+  const demos = {
+    lamps: {
+      scene: demoScene,
+      tip: "Замкните тумблер SA2 (нажмите на него дважды): резистор R2 22 Ом не выдержит мощности и сгорит.",
+    },
+    leds: {
+      scene: ledDemoScene,
+      tip: "Разомкните SA1 — светодиод HL1 будет гаснуть несколько секунд: его питает конденсатор C1. Внизу HL3 вставлен наоборот и не горит: нажмите на него и затем F.",
+    },
+  };
+  const demoSelect = $("demo-select") as HTMLSelectElement;
+  demoSelect.addEventListener("change", () => {
+    const d = demos[demoSelect.value as keyof typeof demos];
+    if (d) {
+      app.replaceScene(d.scene());
+      app.toast("Пример загружен", d.tip);
+    }
+    demoSelect.value = "";
+    demoSelect.blur();
+  });
   $("btn-repair").addEventListener("click", () => app.repairAll());
   const clear = $("btn-clear");
   let armed: ReturnType<typeof setTimeout> | undefined;

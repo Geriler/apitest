@@ -2,16 +2,24 @@ import * as THREE from "three";
 import { BOARD, HOLE_BY_ID, describeNode, holeLabel, holesOnNode, type Hole } from "./model/breadboard";
 import {
   BATTERIES,
+  CERAMICS,
+  CERAMIC_RATED_V,
+  DIODE_1N4007,
+  ELECTROLYTICS,
+  ELECTROLYTIC_RATED_V,
   LAMPS,
+  LEDS,
   SMD_SIZES,
   THT_RESISTOR,
   canGoOnBoard,
-  ratedPower,
+  formatFarads,
+  isPolar,
   sameEndpoint,
   type BatteryKind,
   type Component,
   type Endpoint,
   type LampKind,
+  type LedColor,
   type Scene,
   type SmdSize,
 } from "./model/types";
@@ -20,15 +28,35 @@ import { Simulation, heatThreshold, lampResistance } from "./sim/simulation";
 import { buildComponentView, buildWireView, wireCurve, mm, type ComponentView, type WireView } from "./view/builders";
 import type { World } from "./view/world";
 
-type Tool = "select" | "wire" | "tht" | "smd" | "lamp" | "switch" | "battery" | "delete";
-type PlaceTool = "tht" | "smd" | "lamp" | "switch" | "battery";
+type Tool = "select" | "wire" | "tht" | "smd" | "cap" | "diode" | "led" | "lamp" | "switch" | "battery" | "delete";
+type PlaceTool = "tht" | "smd" | "cap" | "diode" | "led" | "lamp" | "switch" | "battery";
 
 // SMD пока скрыт из интерфейса (вернётся вместе с печатной платой), но сохранённые схемы с ним открываются.
-const PLACE_TOOLS: PlaceTool[] = ["tht", "lamp", "switch", "battery"];
-const TOOL_KEYS: Record<string, Tool> = { "1": "select", "2": "wire", "3": "tht", "4": "lamp", "5": "switch", "6": "battery" };
-/** Обозначения по ЕСКД: R — резистор, HL — лампа, SA — выключатель, GB — батарея. */
-const PREFIX: Record<Component["type"], string> = { resistor: "R", lamp: "HL", switch: "SA", battery: "GB" };
+const PLACE_TOOLS: PlaceTool[] = ["tht", "cap", "diode", "led", "lamp", "switch", "battery"];
+const TOOL_KEYS: Record<string, Tool> = {
+  "1": "select", "2": "wire", "3": "tht", "4": "cap", "5": "diode", "6": "led", "7": "lamp", "8": "switch", "9": "battery",
+};
+/** Инструмент → тип детали. */
+const TOOL_TYPE: Record<PlaceTool, Component["type"]> = {
+  tht: "resistor", smd: "resistor", cap: "capacitor", diode: "diode", led: "led", lamp: "lamp", switch: "switch", battery: "battery",
+};
+/**
+ * Обозначения по ЕСКД: R — резистор, C — конденсатор, VD — диод, HL — лампа и светодиод
+ * (приборы световой индикации), SA — выключатель, GB — батарея.
+ */
+const PREFIX: Record<Component["type"], string> = { resistor: "R", lamp: "HL", led: "HL", switch: "SA", battery: "GB", capacitor: "C", diode: "VD" };
 const WIRE_COLORS = ["#e3b21c", "#2f9e5a", "#2f6fd1", "#e2762a", "#8e4cc9", "#e9e9e4"];
+/** Палитра проводов для ручного выбора. */
+export const WIRE_PALETTE: { hex: string; name: string }[] = [
+  { hex: "#c8261f", name: "красный" },
+  { hex: "#1b1d20", name: "чёрный" },
+  { hex: "#2f6fd1", name: "синий" },
+  { hex: "#e3b21c", name: "жёлтый" },
+  { hex: "#2f9e5a", name: "зелёный" },
+  { hex: "#e2762a", name: "оранжевый" },
+  { hex: "#8e4cc9", name: "фиолетовый" },
+  { hex: "#e9e9e4", name: "белый" },
+];
 /** Самые длинные выводы, которые можно согнуть между двумя отверстиями (в шагах). */
 const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
@@ -77,6 +105,12 @@ export class App {
     smdSize: "0805" as SmdSize,
     lamp: "3.5V" as LampKind,
     battery: "9V" as BatteryKind,
+    capVariant: "electrolytic" as "electrolytic" | "ceramic",
+    electrolyticUF: 1000,
+    ceramicUF: 0.1,
+    led: "red" as LedColor,
+    /** "auto" — красный к плюсу, чёрный к минусу, остальные по кругу; иначе цвет из палитры. */
+    wireColor: "auto",
   };
 
   constructor(
@@ -202,9 +236,8 @@ export class App {
 
   private visual(c: Component) {
     const s = this.sim.state(c.id);
-    const rated = ratedPower(c);
     return {
-      brightness: rated ? this.sim.branch(c.id).power / rated : 0,
+      brightness: c.type === "lamp" || c.type === "led" ? this.sim.overload(c) : 0,
       heat: s.heat,
       burned: s.burned,
       shorted: this.sim.isShorted(c),
@@ -240,9 +273,9 @@ export class App {
       const vis = this.visual(c);
       v.update(vis);
       if (vis.shorted) anyShort = true;
-      if (c.type === "resistor" || c.type === "lamp") {
+      const threshold = heatThreshold(c);
+      if (threshold) {
         const k = this.sim.overload(c);
-        const threshold = heatThreshold(c);
         if (!vis.burned && k > threshold && Math.random() < Math.min(0.9, (k - threshold) * 0.6 + 0.15)) {
           this.world.emitSmoke(v.hotspot, 1);
         }
@@ -296,17 +329,7 @@ export class App {
     const v = this.views.get(c.id)!;
     this.world.emitSparks(v.hotspot, 18);
     this.world.emitSmoke(v.hotspot, 10);
-    const rated = ratedPower(c)!;
-    const what =
-      c.type === "lamp"
-        ? `Лампа ${c.id} перегорела`
-        : `Резистор ${c.id} сгорел`;
-    const note =
-      c.type === "resistor" && c.variant === "smd"
-        ? `Корпус ${c.smdSize} рассеивает не больше ${formatSI(rated, "Вт")}. Возьмите корпус крупнее или резистор с бо́льшим сопротивлением.`
-        : c.type === "lamp"
-          ? `Номинал ${LAMPS[c.kind].label}. Добавьте последовательно резистор или возьмите батарею слабее.`
-          : `Номинал ${formatSI(rated, "Вт")}. Увеличьте сопротивление или понизьте напряжение.`;
+    const [what, note] = burnMessage(c);
     this.toast(what, note);
   }
 
@@ -391,7 +414,36 @@ export class App {
         return { id: this.nextId("switch"), type: "switch", closed: true, placement };
       case "battery":
         return { id: this.nextId("battery"), type: "battery", kind: this.defaults.battery, placement };
+      case "cap": {
+        const variant = this.defaults.capVariant;
+        const uF = variant === "electrolytic" ? this.defaults.electrolyticUF : this.defaults.ceramicUF;
+        return { id: this.nextId("capacitor"), type: "capacitor", variant, uF, placement };
+      }
+      case "diode":
+        return { id: this.nextId("diode"), type: "diode", placement };
+      case "led":
+        return { id: this.nextId("led"), type: "led", color: this.defaults.led, placement };
     }
+  }
+
+  /**
+   * Перевернуть полярную деталь: на плате выводы меняются отверстиями,
+   * на столе провода перецепляются на другой вывод.
+   */
+  flip(id?: string): void {
+    const c = id ? this.component(id) : undefined;
+    if (!c || c.type === "battery") return;
+    if (c.placement.mode === "board") {
+      c.placement.holes = [c.placement.holes[1], c.placement.holes[0]];
+    } else {
+      for (const w of this.scene.wires) {
+        for (const k of ["a", "b"] as const) {
+          const e = w[k];
+          if ("comp" in e && e.comp === c.id) w[k] = { comp: c.id, pin: (1 - e.pin) as 0 | 1 };
+        }
+      }
+    }
+    this.changed();
   }
 
   private isPlaceTool(t: Tool): t is PlaceTool {
@@ -426,6 +478,8 @@ export class App {
         else this.setTool("delete");
       } else if (e.key === "r" || e.key === "R" || e.key === "к" || e.key === "К") {
         this.rotate();
+      } else if (e.key === "f" || e.key === "F" || e.key === "а" || e.key === "А") {
+        this.flip(this.selected);
       } else if (TOOL_KEYS[e.key]) {
         this.setTool(TOOL_KEYS[e.key]);
       }
@@ -591,8 +645,9 @@ export class App {
     this.updateHint();
   }
 
-  /** Красный к плюсу батареи, чёрный к минусу, остальные по кругу. */
+  /** Выбранный цвет или «авто»: красный к плюсу батареи, чёрный к минусу, остальные по кругу. */
   private pickWireColor(a: Endpoint, b: Endpoint): string {
+    if (this.defaults.wireColor !== "auto") return this.defaults.wireColor;
     for (const e of [a, b]) {
       if ("comp" in e && this.component(e.comp)?.type === "battery") return e.pin === 1 ? "#c8261f" : "#1b1d20";
       if ("hole" in e) {
@@ -605,7 +660,7 @@ export class App {
 
   private clickPlace(tool: PlaceTool): void {
     const h = this.hover;
-    const boardOk = canGoOnBoard(tool === "battery" ? "battery" : tool === "tht" || tool === "smd" ? "resistor" : tool, tool === "smd" ? "smd" : "tht");
+    const boardOk = canGoOnBoard(TOOL_TYPE[tool], tool === "smd" ? "smd" : "tht");
 
     if (h.hole && boardOk) {
       const owner = this.occupied().get(h.hole.id);
@@ -730,9 +785,17 @@ export class App {
     if (t === "wire") s = this.pendingEnd ? "Второй конец: <b>отверстие</b> или <b>вывод</b> детали. Esc — отмена." : "Первый конец провода: <b>отверстие</b> или <b>вывод</b> детали на столе.";
     else if (t === "smd") s = "SMD кладётся <b>на стол</b>, провода паяются к торцам. R — повернуть.";
     else if (t === "battery") s = "Нажмите на стол рядом с платой. R — повернуть.";
-    else if (t !== "select" && t !== "delete") s = this.pendingHole
-      ? `Первый вывод в <b>${holeLabel(this.pendingHole.id)}</b>, теперь второе отверстие. Esc — отмена.`
-      : "Нажмите на <b>два отверстия</b> — деталь встанет между ними. Или на <b>стол</b>, чтобы положить рядом.";
+    else if (t !== "select" && t !== "delete") {
+      // Для полярных деталей первым ставится анод / плюс
+      const polar = t === "diode" || t === "led" || (t === "cap" && this.defaults.capVariant === "electrolytic");
+      const first = t === "cap" ? "плюса (+)" : "анода (+)";
+      const second = t === "cap" ? "минуса (−)" : "катода (−)";
+      s = this.pendingHole
+        ? `${polar ? (t === "cap" ? "Плюс" : "Анод") : "Первый вывод"} в <b>${holeLabel(this.pendingHole.id)}</b>, теперь отверстие для ${polar ? second : "второго"}. Esc — отмена.`
+        : polar
+          ? `Сначала отверстие для <b>${first}</b>, потом для <b>${second}</b>. Не той стороной — выберите деталь и нажмите F.`
+          : "Нажмите на <b>два отверстия</b> — деталь встанет между ними. Или на <b>стол</b>, чтобы положить рядом.";
+    }
     this.showHint(s);
   }
 
@@ -750,6 +813,8 @@ export class App {
       [key, html] = this.holePanel(this.selectedHole);
     } else if (this.isPlaceTool(this.tool)) {
       [key, html] = this.newPartPanel(this.tool);
+    } else if (this.tool === "wire") {
+      [key, html] = this.wireToolPanel();
     } else {
       [key, html] = this.overviewPanel();
     }
@@ -765,42 +830,55 @@ export class App {
     this.bindInspector();
   }
 
-  private readout(u: number, i: number, p: number): string {
+  private readout(u: number, i: number, p: number, third: [string, string] = ["P", formatSI(p, "Вт")]): string {
     return `<dl class="readout">
-      <div><dt>U</dt><dd>${formatSI(Math.abs(u), "В")}</dd></div>
-      <div><dt>I</dt><dd>${formatSI(Math.abs(i), "А")}</dd></div>
-      <div><dt>P</dt><dd>${formatSI(p, "Вт")}</dd></div>
+      <div><dt>U</dt><dd>${formatSI(u, "В")}</dd></div>
+      <div><dt>I</dt><dd>${formatSI(i, "А")}</dd></div>
+      <div><dt>${third[0]}</dt><dd>${third[1]}</dd></div>
     </dl>`;
   }
 
   private statusPill(c: Component): string {
     const s = this.sim.state(c.id);
-    if (s.burned) return `<span class="pill bad">${c.type === "lamp" ? "ПЕРЕГОРЕЛА" : "СГОРЕЛ"}</span>`;
+    if (s.burned) return `<span class="pill bad">${c.type === "lamp" ? "ПЕРЕГОРЕЛА" : c.type === "capacitor" ? "ВЗДУЛСЯ" : "СГОРЕЛ"}</span>`;
     if (this.sim.isShorted(c)) return `<span class="pill bad">КОРОТКОЕ ЗАМЫКАНИЕ</span>`;
+    if (c.type === "capacitor" && this.sim.isReversed(c)) return `<span class="pill bad">ОБРАТНАЯ ПОЛЯРНОСТЬ</span>`;
+    if ((c.type === "diode" || c.type === "led") && this.sim.isReversed(c)) return `<span class="pill warn">ОБРАТНОЕ ВКЛЮЧЕНИЕ — ТОК НЕ ИДЁТ</span>`;
     const k = this.sim.overload(c);
     const t = heatThreshold(c);
     if (t && k > t) return `<span class="pill bad">ПЕРЕГРУЗКА ×${k.toFixed(1).replace(".", ",")}</span>`;
     if (t && k > t * 0.7) return `<span class="pill warn">${c.type === "lamp" && k <= 1.05 ? "ПОЛНЫЙ НАКАЛ" : "ГРЕЕТСЯ"}</span>`;
     if (c.type === "switch") return c.closed ? `<span class="pill ok">ЗАМКНУТ</span>` : `<span class="pill warn">РАЗОМКНУТ</span>`;
+    if (c.type === "led") return this.sim.current(c) > 0.0005 ? `<span class="pill ok">ГОРИТ</span>` : `<span class="pill warn">НЕ ГОРИТ</span>`;
+    if (c.type === "capacitor") {
+      const v = this.sim.voltage(c);
+      const i = this.sim.current(c);
+      if (Math.abs(i) < 1e-5) return Math.abs(v) > 0.05 ? `<span class="pill ok">ЗАРЯЖЕН</span>` : `<span class="pill ok">РАЗРЯЖЕН</span>`;
+      return i * v > 0 || Math.abs(v) < 0.05 ? `<span class="pill ok">ЗАРЯЖАЕТСЯ</span>` : `<span class="pill warn">РАЗРЯЖАЕТСЯ</span>`;
+    }
     return `<span class="pill ok">НОРМА</span>`;
   }
 
   private powerMeter(c: Component): string {
-    const rated = ratedPower(c);
-    if (!rated) return "";
-    const k = this.sim.overload(c);
+    const load = this.sim.load(c);
+    if (!load) return "";
+    const k = load.ratio;
     const t = heatThreshold(c);
-    const cls = k > t ? "bad" : k > t * 0.7 && c.type !== "lamp" ? "warn" : "";
-    return `<div class="kv"><span>Мощность / номинал</span><span>${Math.round(k * 100)} %</span></div>
+    const cls = k > t ? "bad" : k > t * 0.7 && c.type !== "lamp" && c.type !== "led" ? "warn" : "";
+    const what = load.what[0].toUpperCase() + load.what.slice(1);
+    return `<div class="kv"><span>${what} / предел ${load.limit}</span><span>${Math.round(k * 100)} %</span></div>
       <div class="meter ${cls}"><i style="width:${Math.min(100, k * 100)}%"></i></div>`;
   }
 
   private componentPanel(c: Component, pinned: boolean): [string, string] {
-    const b = this.sim.branch(c.id);
     const s = this.sim.state(c.id);
+    const polar = isPolar(c) && c.type !== "battery";
+    const pinName = c.type === "capacitor" ? ["+", "−"] : ["анод", "катод"];
     const where =
       c.placement.mode === "board"
-        ? c.placement.holes.map(holeLabel).join(" ↔ ")
+        ? polar
+          ? `${pinName[0]} ${holeLabel(c.placement.holes[0])}, ${pinName[1]} ${holeLabel(c.placement.holes[1])}`
+          : c.placement.holes.map(holeLabel).join(" ↔ ")
         : "на столе, на проводах";
     let title = "";
     let body = "";
@@ -839,10 +917,40 @@ export class App {
         editor = this.selectField("battery", "Батарея", Object.entries(BATTERIES).map(([k, v]) => [k, v.label]), c.kind);
         break;
       }
+      case "capacitor": {
+        const v = this.sim.voltage(c);
+        if (c.variant === "electrolytic") {
+          title = `Конденсатор ${formatFarads(c.uF)}, ${ELECTROLYTIC_RATED_V} В`;
+          body = `<p class="sub">Электролитический, <b>полярный</b>: на плюсе должен быть бо́льший потенциал. Полоса с «−» на корпусе — со стороны минуса. Заряд хранится, даже если отключить батарею.</p>`;
+          editor = this.selectField("uF", "Ёмкость", ELECTROLYTICS.map((e) => [String(e.uF), formatFarads(e.uF)]), String(c.uF));
+        } else {
+          const code = CERAMICS.find((x) => x.uF === c.uF)?.code ?? "";
+          title = `Конденсатор ${formatFarads(c.uF)}`;
+          body = `<p class="sub">Керамический, неполярный, до ${CERAMIC_RATED_V} В. Код <b>${code}</b>: ${code.slice(0, 2)} × 10${superscript(Number(code[2]))} пФ.</p>`;
+          editor = this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(c.uF));
+        }
+        if (Math.abs(v) > 0.05) {
+          editor += `<div class="row"><button class="btn inline" data-act="discharge" id="btn-discharge">Разрядить</button></div>`;
+        }
+        break;
+      }
+      case "diode":
+        title = `Диод ${DIODE_1N4007.label}`;
+        body = `<p class="sub">Пропускает ток только от анода к катоду, падение ≈ 0,6–0,8 В. Кольцо на корпусе — катод. До ${formatSI(DIODE_1N4007.maxA, "А")}.</p>`;
+        break;
+      case "led": {
+        const spec = LEDS[c.color];
+        const vf = String(spec.vf).replace(".", ",");
+        title = `Светодиод ${spec.label}`;
+        body = `<p class="sub">Прямое падение ≈ ${vf} В, номинальный ток 20 мА. <b>Без резистора сгорает.</b> Длинная ножка — анод (+). Резистор: R = (U<sub>бат</sub> − ${vf}) / 0,02.</p>`;
+        editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), c.color);
+        break;
+      }
     }
     const actions = pinned
       ? `<div class="row">
           ${s.burned ? `<button class="btn inline" data-act="repair" id="btn-repair-one">Заменить новой</button>` : ""}
+          ${polar ? `<button class="btn inline" data-act="flip" id="btn-flip">Перевернуть (F)</button>` : ""}
           ${c.placement.mode === "free" ? `<button class="btn inline" data-act="rotate" id="btn-rotate">Повернуть (R)</button>` : ""}
           <button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button>
         </div>`
@@ -850,7 +958,12 @@ export class App {
     const html = `<div class="eyebrow"><span class="ref">${c.id}</span></div>
       <h2>${title}</h2>
       ${this.statusPill(c)}
-      ${this.readout(b.voltage, b.current, c.type === "battery" ? Math.abs(b.current * BATTERIES[c.kind].emf) : b.power)}
+      ${this.readout(
+        c.type === "battery" ? -this.sim.voltage(c) : this.sim.voltage(c),
+        c.type === "battery" ? Math.abs(this.sim.current(c)) : this.sim.current(c),
+        this.sim.power(c),
+        c.type === "capacitor" ? ["W", formatSI(this.sim.energy(c), "Дж")] : undefined,
+      )}
       ${this.powerMeter(c)}
       <div class="kv"><span>Где</span><span>${where}</span></div>
       ${body}
@@ -865,12 +978,35 @@ export class App {
     const name = (e: Endpoint) => ("hole" in e ? holeLabel(e.hole) : `вывод ${e.pin + 1} детали ${e.comp}`);
     const html = `<div class="eyebrow"><span class="ref">${id}</span> · провод</div>
       <h2>Перемычка</h2>
-      ${this.readout(b.voltage, b.current, b.power)}
+      ${this.readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
       <div class="kv"><span>От</span><span>${name(w.a)}</span></div>
       <div class="kv"><span>До</span><span>${name(w.b)}</span></div>
-      <p class="sub">Сопротивление провода ≈ 5 мОм. Жёлтые точки показывают направление тока (от плюса к минусу), скорость — его силу.</p>
+      <div class="field"><label>Цвет</label>${this.swatches(w.color, false)}</div>
+      <p class="sub">Сопротивление провода ≈ 5 мОм. Светлые точки показывают направление тока (от плюса к минусу), скорость — его силу.</p>
       ${this.selected === id ? `<div class="row"><button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button></div>` : ""}`;
     return [`w:${id}`, html];
+  }
+
+  /** Кружки цветов; auto — с вариантом «Авто». */
+  private swatches(current: string, auto: boolean): string {
+    const items = [...(auto ? [{ hex: "auto", name: "авто: красный к плюсу, чёрный к минусу" }] : []), ...WIRE_PALETTE];
+    return `<div class="swatches" role="group" aria-label="Цвет провода">${items
+      .map(
+        (c) =>
+          `<button class="swatch${c.hex === "auto" ? " auto" : ""}" data-color="${c.hex}" title="${c.name}" aria-label="${c.name}" aria-pressed="${c.hex === current}"${
+            c.hex === "auto" ? "" : ` style="background:${c.hex}"`
+          }>${c.hex === "auto" ? "A" : ""}</button>`,
+      )
+      .join("")}</div>`;
+  }
+
+  private wireToolPanel(): [string, string] {
+    const cur = this.defaults.wireColor;
+    const name = cur === "auto" ? "авто" : (WIRE_PALETTE.find((x) => x.hex === cur)?.name ?? "");
+    const html = `<div class="eyebrow">новый провод</div><h2>Провод</h2>
+      <div class="field"><label>Цвет: ${name}</label>${this.swatches(cur, true)}</div>
+      <p class="sub">Принято: <b>красный — плюс</b>, <b>чёрный или синий — минус</b>. «Авто» красит так сам, если провод идёт к батарее или шине, остальные — по очереди. Цвет готового провода меняется, если нажать на него в режиме «Выбор».</p>`;
+    return [`wt`, html];
   }
 
   private holePanel(h: Hole): [string, string] {
@@ -886,13 +1022,31 @@ export class App {
   }
 
   private newPartPanel(tool: PlaceTool): [string, string] {
-    const names: Record<PlaceTool, string> = { tht: "Резистор", smd: "SMD-резистор", lamp: "Лампа", switch: "Тумблер", battery: "Батарея" };
+    const names: Record<PlaceTool, string> = {
+      tht: "Резистор", smd: "SMD-резистор", cap: "Конденсатор", diode: "Диод 1N4007", led: "Светодиод", lamp: "Лампа", switch: "Тумблер", battery: "Батарея",
+    };
     let editor = "";
     if (tool === "tht" || tool === "smd") editor = this.ohmsSelect(this.defaults.ohms) + (tool === "smd" ? this.smdSelect(this.defaults.smdSize) : "");
     if (tool === "lamp") editor = this.selectField("lamp", "Лампа", Object.entries(LAMPS).map(([k, v]) => [k, v.label]), this.defaults.lamp);
     if (tool === "battery") editor = this.selectField("battery", "Батарея", Object.entries(BATTERIES).map(([k, v]) => [k, v.label]), this.defaults.battery);
+    if (tool === "cap") {
+      const el = this.defaults.capVariant === "electrolytic";
+      editor =
+        this.selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"]], this.defaults.capVariant) +
+        (el
+          ? this.selectField("uF", "Ёмкость", ELECTROLYTICS.map((e) => [String(e.uF), formatFarads(e.uF)]), String(this.defaults.electrolyticUF))
+          : this.selectField("uF", "Ёмкость", CERAMICS.map((e) => [String(e.uF), `${formatFarads(e.uF)} (${e.code})`]), String(this.defaults.ceramicUF)));
+    }
+    if (tool === "led") editor = this.selectField("led", "Цвет", Object.entries(LEDS).map(([k, v]) => [k, v.label]), this.defaults.led);
+    const polarNote = `<p class="sub"><b>Полярная деталь.</b> Первое отверстие — ${tool === "cap" ? "плюс" : "анод (+)"}, второе — ${tool === "cap" ? "минус" : "катод (−)"}.</p>`;
     const note =
-      tool === "smd"
+      tool === "cap"
+        ? `<p class="sub">Копит заряд: заряжается через резистор, потом отдаёт энергию. Чем больше ёмкость и сопротивление, тем медленнее (τ = R·C).</p>${this.defaults.capVariant === "electrolytic" ? polarNote : ""}`
+        : tool === "diode"
+          ? `<p class="sub">Пропускает ток в одну сторону.</p>${polarNote}`
+          : tool === "led"
+            ? `<p class="sub">Ставьте последовательно с резистором: от 9 В для красного ≈ 330–470 Ом.</p>${polarNote}`
+            : tool === "smd"
         ? `<p class="sub">Электрически это тот же резистор, но корпус меньше — и рассеять он может меньше: 1206 до 0,25 Вт, 0402 всего до 0,063 Вт.</p>`
         : tool === "tht"
           ? `<p class="sub">Выводной резистор 0,25 Вт, маркировка — цветные полосы. Мощность больше номинала — перегреется и сгорит.</p>`
@@ -904,15 +1058,22 @@ export class App {
   private overviewPanel(): [string, string] {
     const rows: string[] = [];
     for (const c of this.scene.components) {
-      const b = this.sim.branch(c.id);
       const s = this.sim.state(c.id);
       const t = heatThreshold(c);
-      const flag = s.burned ? " — сгорел" : this.sim.isShorted(c) ? " — КЗ" : t && this.sim.overload(c) > t ? " — перегрузка" : "";
-      rows.push(`<li><span><span class="ref">${c.id}</span> ${label(c)}${flag}</span><span>${formatSI(Math.abs(b.current), "А")}</span></li>`);
+      const flag = s.burned
+        ? " — вышел из строя"
+        : this.sim.isShorted(c)
+          ? " — КЗ"
+          : this.sim.isReversed(c)
+            ? " — наоборот"
+            : t && this.sim.overload(c) > t
+              ? " — перегрузка"
+              : "";
+      rows.push(`<li><span><span class="ref">${c.id}</span> ${label(c)}${flag}</span><span>${formatSI(Math.abs(this.sim.current(c)), "А")}</span></li>`);
     }
     const html = `<div class="eyebrow">схема</div>
       <h2>${this.scene.components.length ? "Токи через детали" : "Стол пуст"}</h2>
-      ${rows.length ? `<ul class="list">${rows.join("")}</ul>` : `<p>Начните с батареи (6), затем добавьте резистор (3) и лампу (4). Или нажмите «Пример схемы».</p>`}
+      ${rows.length ? `<ul class="list">${rows.join("")}</ul>` : `<p>Начните с батареи (9), затем добавьте резистор (3) и светодиод (6). Или выберите пример вверху.</p>`}
       <div class="help">
         <b>Как устроена макетка.</b> Пять отверстий столбца (a–e или f–j) соединены внутри. Шины + и − вдоль краёв соединены по всей длине. Наведите курсор на отверстие — подсветятся все, что с ним соединены.
       </div>
@@ -945,6 +1106,20 @@ export class App {
     root.querySelectorAll<HTMLSelectElement>("select[data-field]").forEach((sel) => {
       sel.addEventListener("change", () => this.applyField(sel.dataset.field!, sel.value));
     });
+    root.querySelectorAll<HTMLButtonElement>("[data-color]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const color = btn.dataset.color!;
+        const w = this.selected ? this.scene.wires.find((x) => x.id === this.selected) : undefined;
+        if (w) {
+          w.color = color;
+          this.changed();
+        } else {
+          this.defaults.wireColor = color;
+          this.inspectorHtml = "";
+        }
+        this.renderInspector();
+      });
+    });
     root.querySelectorAll<HTMLButtonElement>("[data-act]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = this.selected;
@@ -952,6 +1127,13 @@ export class App {
         if (!id) return;
         if (act === "delete") this.remove(id);
         if (act === "rotate") this.rotate();
+        if (act === "flip") this.flip(id);
+        if (act === "discharge") {
+          const v = Math.abs(this.sim.voltage(this.component(id)!));
+          if (v > 3) this.world.emitSparks(this.views.get(id)!.hotspot, Math.min(30, Math.round(v * 2)));
+          this.sim.discharge(id);
+          this.inspectorHtml = "";
+        }
         if (act === "repair") {
           this.sim.repair(id);
           this.burnedAt.delete(id);
@@ -975,7 +1157,14 @@ export class App {
       if (field === "smd") this.defaults.smdSize = value as SmdSize;
       if (field === "lamp") this.defaults.lamp = value as LampKind;
       if (field === "battery") this.defaults.battery = value as BatteryKind;
+      if (field === "capVariant") this.defaults.capVariant = value as "electrolytic" | "ceramic";
+      if (field === "uF") {
+        if (this.defaults.capVariant === "electrolytic") this.defaults.electrolyticUF = Number(value);
+        else this.defaults.ceramicUF = Number(value);
+      }
+      if (field === "led") this.defaults.led = value as LedColor;
       this.inspectorHtml = "";
+      this.updateHint();
       this.updateGhost();
       return;
     }
@@ -983,6 +1172,8 @@ export class App {
     if (c.type === "resistor" && field === "smd") c.smdSize = value as SmdSize;
     if (c.type === "lamp" && field === "lamp") c.kind = value as LampKind;
     if (c.type === "battery" && field === "battery") c.kind = value as BatteryKind;
+    if (c.type === "capacitor" && field === "uF") c.uF = Number(value);
+    if (c.type === "led" && field === "led") c.color = value as LedColor;
     // Поменяли номинал — значит, поставили новую деталь
     this.sim.repair(c.id);
     this.burnedAt.delete(c.id);
@@ -1006,6 +1197,34 @@ function label(c: Component): string {
       return c.closed ? "тумблер, вкл." : "тумблер, выкл.";
     case "battery":
       return BATTERIES[c.kind].label;
+    case "capacitor":
+      return `${formatFarads(c.uF)}${c.variant === "electrolytic" ? "" : " керамический"}`;
+    case "diode":
+      return DIODE_1N4007.label;
+    case "led":
+      return `светодиод ${LEDS[c.color].label}`;
+  }
+}
+
+/** Заголовок и пояснение для уведомления о выходе детали из строя. */
+function burnMessage(c: Component): [string, string] {
+  switch (c.type) {
+    case "lamp":
+      return [`Лампа ${c.id} перегорела`, `Номинал ${LAMPS[c.kind].label}. Добавьте последовательно резистор или возьмите батарею слабее.`];
+    case "resistor":
+      return c.variant === "smd"
+        ? [`Резистор ${c.id} сгорел`, `Корпус ${c.smdSize} рассеивает не больше ${formatSI(SMD_SIZES[c.smdSize].ratedW, "Вт")}. Возьмите корпус крупнее или резистор с бо́льшим сопротивлением.`]
+        : [`Резистор ${c.id} сгорел`, `Номинал ${formatSI(THT_RESISTOR.ratedW, "Вт")}. Увеличьте сопротивление или понизьте напряжение.`];
+    case "led":
+      return [`Светодиод ${c.id} сгорел`, `Ток больше 30 мА. Поставьте последовательно резистор: R = (U − ${String(LEDS[c.color].vf).replace(".", ",")} В) / 0,02 А.`];
+    case "diode":
+      return [`Диод ${c.id} сгорел`, "Ток больше 1 А. Ограничьте ток резистором."];
+    case "capacitor":
+      return c.variant === "electrolytic"
+        ? [`Конденсатор ${c.id} вздулся`, `Электролит не терпит обратной полярности и напряжения выше ${ELECTROLYTIC_RATED_V} В. Проверьте, где плюс (F — перевернуть).`]
+        : [`Конденсатор ${c.id} пробит`, `Напряжение выше ${CERAMIC_RATED_V} В.`];
+    default:
+      return [`${c.id} вышел из строя`, ""];
   }
 }
 
