@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Макетка</title>
+<link rel="icon" href="data:," />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" />
+<style>
+  :root {
+    --paper: #f5f6f3;
+    --paper-2: #eaece7;
+    --ink: #1d2426;
+    --muted: #5b686b;
+    --line: #d3d9d6;
+    --copper: #b0612a;
+    --copper-soft: #f3e2d4;
+    --ok: #2c8a57;
+    --warn: #b87708;
+    --danger: #c0392b;
+    --danger-soft: #f8dcd7;
+    --shadow: 0 1px 2px rgba(20, 30, 32, 0.12), 0 8px 24px rgba(20, 30, 32, 0.16);
+    --stage: #2b3a3e;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --paper: #1b2123;
+      --paper-2: #242c2f;
+      --ink: #e5eae8;
+      --muted: #97a4a6;
+      --line: #334044;
+      --copper: #e0955c;
+      --copper-soft: #3b2a1f;
+      --ok: #52b97f;
+      --warn: #e0a53a;
+      --danger: #ef6b5b;
+      --danger-soft: #45231f;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px rgba(0, 0, 0, 0.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #1b2123;
+    --paper-2: #242c2f;
+    --ink: #e5eae8;
+    --muted: #97a4a6;
+    --line: #334044;
+    --copper: #e0955c;
+    --copper-soft: #3b2a1f;
+    --ok: #52b97f;
+    --warn: #e0a53a;
+    --danger: #ef6b5b;
+    --danger-soft: #45231f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px rgba(0, 0, 0, 0.45);
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--stage);
+    color: var(--ink);
+    font: 14px/1.45 var(--sans);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app { position: relative; height: 100%; }
+  #stage { position: absolute; inset: 0; }
+  #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+  .panel {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+  }
+
+  /* ── Инструменты ─────────────────────────────── */
+  #tools {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    width: 172px;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 2px 6px 8px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 4px;
+  }
+  .brand b { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+  .brand span { font: 500 11px var(--mono); color: var(--muted); }
+  .tool {
+    display: grid;
+    grid-template-columns: 30px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: none;
+    color: inherit;
+    font: 500 13px var(--sans);
+    text-align: left;
+    cursor: pointer;
+  }
+  .tool svg { width: 30px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+  .tool kbd { font: 500 11px var(--mono); color: var(--muted); }
+  .tool:hover { background: var(--paper-2); }
+  .tool[aria-pressed="true"] { background: var(--copper-soft); border-color: var(--copper); color: var(--ink); }
+  .tool[aria-pressed="true"] svg { stroke: var(--copper); }
+  .tool:focus-visible, .btn:focus-visible, select:focus-visible { outline: 2px solid var(--copper); outline-offset: 1px; }
+  .tool-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+
+  /* ── Действия ────────────────────────────────── */
+  #actions {
+    position: absolute;
+    top: 16px;
+    left: 204px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    padding: 7px 12px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--paper);
+    color: var(--ink);
+    font: 500 13px var(--sans);
+    cursor: pointer;
+    box-shadow: var(--shadow);
+  }
+  .btn:hover { border-color: var(--copper); }
+  .btn.inline { box-shadow: none; padding: 5px 10px; }
+  .btn.danger { color: var(--danger); }
+
+  /* ── Инспектор ───────────────────────────────── */
+  #inspector {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 300px;
+    max-height: calc(100% - 96px);
+    overflow: auto;
+    padding: 14px 16px 16px;
+  }
+  .eyebrow { font: 600 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .ref { font: 600 13px var(--mono); color: var(--copper); }
+  #inspector h2 { margin: 2px 0 2px; font-size: 18px; font-weight: 600; text-wrap: balance; }
+  #inspector p { margin: 6px 0; color: var(--muted); }
+  #inspector .sub { color: var(--muted); font-size: 13px; }
+  .readout {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    margin: 12px 0;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    overflow: hidden;
+  }
+  .readout div { background: var(--paper-2); padding: 7px 8px; }
+  .readout dt { font: 600 10px var(--mono); letter-spacing: 0.08em; color: var(--muted); }
+  .readout dd { margin: 2px 0 0; font: 500 14px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .meter { height: 6px; border-radius: 3px; background: var(--paper-2); border: 1px solid var(--line); overflow: hidden; margin: 6px 0 2px; }
+  .meter i { display: block; height: 100%; background: var(--ok); }
+  .meter.warn i { background: var(--warn); }
+  .meter.bad i { background: var(--danger); }
+  .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 3px 0; }
+  .kv span:first-child { color: var(--muted); }
+  .kv span:last-child { font-family: var(--mono); text-align: right; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font: 600 11px var(--mono); letter-spacing: 0.04em; border: 1px solid; }
+  .pill.ok { color: var(--ok); }
+  .pill.warn { color: var(--warn); }
+  .pill.bad { color: var(--danger); background: var(--danger-soft); }
+  .bands { display: flex; gap: 3px; align-items: center; margin: 8px 0 4px; }
+  .bands i { width: 14px; height: 22px; border-radius: 2px; border: 1px solid rgba(0,0,0,0.25); }
+  .bands .body { width: auto; height: 22px; padding: 0 6px; display: flex; align-items: center; gap: 4px; background: #d8c496; border-radius: 11px; border: 1px solid rgba(0,0,0,0.2); }
+  .smd-chip { display: inline-block; margin: 8px 0 4px; padding: 3px 12px; background: #15171a; color: #e9e6dc; font: 600 16px var(--mono); border-left: 6px solid #b8bcc2; border-right: 6px solid #b8bcc2; }
+  .field { display: grid; gap: 4px; margin: 10px 0; }
+  .field label { font-size: 12px; color: var(--muted); }
+  select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--paper-2);
+    color: var(--ink);
+    font: 500 13px var(--mono);
+  }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .list { margin: 8px 0 0; padding: 0; list-style: none; }
+  .list li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .list li span:last-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .help { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .help b { color: var(--ink); font-weight: 600; }
+
+  /* ── Подсказка и уведомления ─────────────────── */
+  #hint {
+    position: absolute;
+    left: 50%;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%);
+    max-width: min(640px, calc(100% - 32px));
+    padding: 8px 14px;
+    font-size: 13px;
+    text-align: center;
+  }
+  #hint b { color: var(--copper); font-weight: 600; }
+  #toasts {
+    position: absolute;
+    left: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: min(320px, calc(100% - 32px));
+    pointer-events: none;
+  }
+  .toast { padding: 10px 12px; border-left: 4px solid var(--danger); font-size: 13px; animation: in 0.2s ease-out; }
+  .toast b { display: block; }
+  @keyframes in { from { transform: translateY(6px); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+
+  /* ── Телефон ─────────────────────────────────── */
+  @media (max-width: 760px) {
+    #tools {
+      top: auto;
+      bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+      left: 16px;
+      right: 16px;
+      width: auto;
+      flex-direction: row;
+      overflow-x: auto;
+      padding: 6px;
+    }
+    .brand, .tool-sep, .tool kbd { display: none; }
+    .tool { grid-template-columns: 1fr; justify-items: center; gap: 2px; font-size: 11px; padding: 4px 6px; flex: 0 0 auto; }
+    #actions { left: 16px; right: 16px; top: 12px; }
+    #actions .btn { padding: 6px 10px; font-size: 12px; }
+    #inspector {
+      top: auto;
+      right: 16px;
+      left: 16px;
+      width: auto;
+      bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+      max-height: 34%;
+      padding: 10px 12px;
+    }
+    #inspector .help { display: none; }
+    #hint { top: 56px; bottom: auto; font-size: 12px; }
+    #toasts { bottom: auto; top: 56px; left: 16px; }
+    #app:has(#toasts .toast) #hint { visibility: hidden; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage"></div>
+
+  <nav id="tools" class="panel" aria-label="Инструменты">
+    <div class="brand"><b>Макетка</b><span>400 точек</span></div>
+    <button class="tool" data-tool="select" aria-pressed="true" title="Выбор, перемещение, тумблеры">
+      <svg viewBox="0 0 30 18"><path d="M11 3l9 6-4 1 3 5-2 1-3-5-3 3z" /></svg>Выбор<kbd>1</kbd>
+    </button>
+    <button class="tool" data-tool="wire" aria-pressed="false" title="Провод между отверстиями и выводами">
+      <svg viewBox="0 0 30 18"><circle cx="4" cy="9" r="2" /><path d="M6 9h18" /><circle cx="26" cy="9" r="2" /></svg>Провод<kbd>2</kbd>
+    </button>
+    <div class="tool-sep"></div>
+    <button class="tool" data-tool="tht" aria-pressed="false" title="Резистор 0,25 Вт">
+      <svg viewBox="0 0 30 18"><path d="M1 9h7M22 9h7" /><rect x="8" y="5" width="14" height="8" /></svg>Резистор<kbd>3</kbd>
+    </button>
+    <button class="tool" data-tool="lamp" aria-pressed="false" title="Лампа накаливания">
+      <svg viewBox="0 0 30 18"><path d="M1 9h8M21 9h8" /><circle cx="15" cy="9" r="6" /><path d="M11 5l8 8M19 5l-8 8" /></svg>Лампа<kbd>4</kbd>
+    </button>
+    <button class="tool" data-tool="switch" aria-pressed="false" title="Тумблер">
+      <svg viewBox="0 0 30 18"><path d="M1 12h8l12-7M21 12h8" /></svg>Тумблер<kbd>5</kbd>
+    </button>
+    <button class="tool" data-tool="battery" aria-pressed="false" title="Батарея (ставится на стол)">
+      <svg viewBox="0 0 30 18"><path d="M1 9h11M18 9h11M12 3v12M18 6v6" /></svg>Батарея<kbd>6</kbd>
+    </button>
+    <div class="tool-sep"></div>
+    <button class="tool" data-tool="delete" aria-pressed="false" title="Удалить деталь или провод">
+      <svg viewBox="0 0 30 18"><path d="M10 4l10 10M20 4L10 14" /></svg>Удалить<kbd>Del</kbd>
+    </button>
+  </nav>
+
+  <div id="actions">
+    <button class="btn" id="btn-demo">Пример схемы</button>
+    <button class="btn" id="btn-repair">Заменить сгоревшие</button>
+    <button class="btn" id="btn-clear">Очистить</button>
+  </div>
+
+  <aside id="inspector" class="panel" aria-live="polite"></aside>
+  <div id="hint" class="panel"></div>
+  <div id="toasts"></div>
+</div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

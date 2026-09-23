@@ -80,6 +80,11 @@ const THERMAL = {
   lamp: { threshold: 1.3, rate: 1.2, cooling: 1 },
 };
 
+/** С какой доли номинальной мощности деталь начинает перегреваться (0 — не греется). */
+export function heatThreshold(c: Component): number {
+  return c.type === "resistor" || c.type === "lamp" ? THERMAL[c.type].threshold : 0;
+}
+
 /** Батарея считается замкнутой накоротко, если ток больше половины тока КЗ. */
 export const SHORT_CIRCUIT_FRACTION = 0.5;
 

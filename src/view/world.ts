@@ -1,0 +1,354 @@
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { BOARD, HOLES, type Hole } from "../model/breadboard";
+import { breadboardTexture, matTexture, puffTexture } from "./textures";
+
+const MAX_DOTS = 3000;
+const MAX_PUFFS = 240;
+
+/** Частица дыма или искра. */
+interface Puff {
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  age: number;
+  life: number;
+  size: number;
+  kind: "smoke" | "spark";
+}
+
+/** Three.js-часть: рендер, плата, стол, частицы, анимация тока, пересечения с курсором. */
+export class World {
+  readonly scene = new THREE.Scene();
+  readonly camera: THREE.PerspectiveCamera;
+  readonly renderer: THREE.WebGLRenderer;
+  readonly controls: OrbitControls;
+  readonly componentLayer = new THREE.Group();
+  readonly wireLayer = new THREE.Group();
+  readonly overlay = new THREE.Group();
+
+  private composer: EffectComposer;
+  private bloom: UnrealBloomPass;
+  private boardTop: THREE.Mesh;
+  private table: THREE.Mesh;
+  private holeMarks: THREE.InstancedMesh;
+  private dots: THREE.InstancedMesh;
+  private puffs: Puff[] = [];
+  private puffSprites: THREE.Sprite[] = [];
+  private raycaster = new THREE.Raycaster();
+  private userMovedCamera = false;
+
+  constructor(private container: HTMLElement) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
+    container.appendChild(this.renderer.domElement);
+
+    this.scene.background = new THREE.Color(0x2b3a3e);
+    this.scene.fog = new THREE.Fog(0x2b3a3e, 140, 260);
+
+    this.camera = new THREE.PerspectiveCamera(40, 1, 0.1, 600);
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.addEventListener("start", () => (this.userMovedCamera = true));
+    this.controls.enableDamping = true;
+    this.controls.maxPolarAngle = Math.PI * 0.47;
+    this.controls.minDistance = 3;
+    this.controls.maxDistance = 160;
+    this.controls.update();
+
+    // Свет: мягкий небесный + направленный с тенями + контровой
+    this.scene.add(new THREE.HemisphereLight(0xf1f4ef, 0x3a4a4c, 0.65));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.35);
+    sun.position.set(-30, 60, 25);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    const sc = sun.shadow.camera;
+    sc.left = -60;
+    sc.right = 60;
+    sc.top = 50;
+    sc.bottom = -50;
+    sc.near = 1;
+    sc.far = 200;
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.02;
+    this.scene.add(sun);
+    const rim = new THREE.DirectionalLight(0xcfe3ff, 0.35);
+    rim.position.set(40, 30, -40);
+    this.scene.add(rim);
+
+    // Стол — антистатический коврик
+    const mat = matTexture();
+    mat.repeat.set(24, 24);
+    this.table = new THREE.Mesh(
+      new THREE.PlaneGeometry(400, 400),
+      new THREE.MeshStandardMaterial({ map: mat, roughness: 0.95 }),
+    );
+    this.table.rotation.x = -Math.PI / 2;
+    this.table.receiveShadow = true;
+    this.scene.add(this.table);
+
+    // Макетная плата
+    const board = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xece9e0, roughness: 0.7 });
+    const topMat = new THREE.MeshStandardMaterial({ map: breadboardTexture(), roughness: 0.75 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(BOARD.width, BOARD.height, BOARD.depth), [
+      bodyMat,
+      bodyMat,
+      topMat,
+      bodyMat,
+      bodyMat,
+      bodyMat,
+    ]);
+    body.position.y = BOARD.height / 2;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    board.add(body);
+    this.boardTop = body;
+    this.scene.add(board);
+
+    // Подсветка отверстий: квадраты над гнёздами, по умолчанию скрыты
+    this.holeMarks = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(0.62, 0.62).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false }),
+      HOLES.length,
+    );
+    this.holeMarks.renderOrder = 2;
+    this.clearHoleMarks();
+    this.scene.add(this.holeMarks);
+
+    // Бегущие точки тока
+    this.dots = new THREE.InstancedMesh(
+      // Радиус больше, чем у провода (≈ 0,3), иначе точки прячутся внутри изоляции
+      new THREE.SphereGeometry(0.36, 12, 8),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0xfff1a8).multiplyScalar(2.6) }),
+      MAX_DOTS,
+    );
+    this.dots.count = 0;
+    this.dots.frustumCulled = false;
+    this.scene.add(this.dots);
+
+    // Частицы
+    const puffTex = puffTexture();
+    for (let i = 0; i < MAX_PUFFS; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: puffTex, transparent: true, depthWrite: false }));
+      s.visible = false;
+      this.puffSprites.push(s);
+      this.scene.add(s);
+    }
+
+    this.scene.add(this.componentLayer, this.wireLayer, this.overlay);
+
+    // Постобработка: свечение ламп и искр
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // Порог выше яркости освещённой белой платы: светятся только нити ламп и искры.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.4, 2.2);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
+
+    new ResizeObserver(() => this.resize()).observe(container);
+    this.resize();
+  }
+
+  resize(): void {
+    const w = Math.max(1, this.container.clientWidth);
+    const h = Math.max(1, this.container.clientHeight);
+    this.renderer.setSize(w, h, false);
+    this.composer.setSize(w, h);
+    this.bloom.setSize(w, h);
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    if (!this.userMovedCamera) this.frameView();
+  }
+
+  /**
+   * Начальный ракурс под пропорции экрана: на широком видно батарею и плату,
+   * на узком (телефон) — плату целиком.
+   */
+  frameView(): void {
+    const aspect = this.camera.aspect;
+    const narrow = aspect < 1;
+    const halfWidth = narrow ? 17 : 30;
+    const tanH = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * aspect;
+    const dist = THREE.MathUtils.clamp(halfWidth / tanH, 60, 125);
+    const target = narrow ? new THREE.Vector3(0, 0, 3) : new THREE.Vector3(-9, 0, -3);
+    const dir = new THREE.Vector3(0.04, 0.7, 0.71).normalize();
+    this.controls.target.copy(target);
+    this.camera.position.copy(target).addScaledVector(dir, dist);
+    this.controls.update();
+  }
+
+  render(): void {
+    this.controls.update();
+    this.composer.render();
+  }
+
+  // ─── Отверстия ─────────────────────────────────────────────────────────
+
+  clearHoleMarks(): void {
+    const m = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let i = 0; i < HOLES.length; i++) this.holeMarks.setMatrixAt(i, m);
+    this.holeMarks.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Подсветить отверстия: hole → цвет. */
+  markHoles(marks: Map<string, THREE.ColorRepresentation>): void {
+    const m = new THREE.Matrix4();
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    const color = new THREE.Color();
+    HOLES.forEach((h, i) => {
+      const c = marks.get(h.id);
+      if (c === undefined) {
+        this.holeMarks.setMatrixAt(i, zero);
+        return;
+      }
+      m.makeTranslation(h.x, BOARD.height + 0.01, h.z);
+      this.holeMarks.setMatrixAt(i, m);
+      this.holeMarks.setColorAt(i, color.set(c));
+    });
+    this.holeMarks.instanceMatrix.needsUpdate = true;
+    if (this.holeMarks.instanceColor) this.holeMarks.instanceColor.needsUpdate = true;
+  }
+
+  // ─── Курсор ────────────────────────────────────────────────────────────
+
+  private setRay(ndc: THREE.Vector2): void {
+    this.raycaster.setFromCamera(ndc, this.camera);
+  }
+
+  ndcFromEvent(ev: { clientX: number; clientY: number }): THREE.Vector2 {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return new THREE.Vector2(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  }
+
+  /** Экранные координаты (px) точки сцены. */
+  toScreen(p: THREE.Vector3): THREE.Vector2 {
+    const v = p.clone().project(this.camera);
+    const r = this.renderer.domElement.getBoundingClientRect();
+    return new THREE.Vector2(((v.x + 1) / 2) * r.width + r.left, ((1 - v.y) / 2) * r.height + r.top);
+  }
+
+  /** Ближайшее отверстие под курсором (если курсор над платой). */
+  pickHole(ndc: THREE.Vector2): Hole | undefined {
+    this.setRay(ndc);
+    const hit = this.raycaster.intersectObject(this.boardTop, false)[0];
+    if (!hit || hit.point.y < BOARD.height - 0.01) return undefined;
+    let best: Hole | undefined;
+    let bestD = 0.6;
+    for (const h of HOLES) {
+      const d = Math.hypot(h.x - hit.point.x, h.z - hit.point.z);
+      if (d < bestD) {
+        bestD = d;
+        best = h;
+      }
+    }
+    return best;
+  }
+
+  /** Попадает ли курсор на плату (даже мимо отверстия). */
+  overBoard(ndc: THREE.Vector2): boolean {
+    this.setRay(ndc);
+    const hit = this.raycaster.intersectObject(this.boardTop, false)[0];
+    return !!hit && hit.point.y > BOARD.height - 0.01;
+  }
+
+  /** Точка на столе под курсором (мимо платы). */
+  pickTable(ndc: THREE.Vector2): THREE.Vector3 | undefined {
+    this.setRay(ndc);
+    const hits = this.raycaster.intersectObjects([this.boardTop, this.table], false);
+    return hits[0]?.object === this.table ? hits[0].point.clone() : undefined;
+  }
+
+  /** Ближайшая деталь или провод под курсором. */
+  pickObject(ndc: THREE.Vector2): { componentId?: string; wireId?: string } | undefined {
+    this.setRay(ndc);
+    const hit = this.raycaster.intersectObjects([this.componentLayer, this.wireLayer], true)[0];
+    if (!hit) return undefined;
+    return { componentId: hit.object.userData.componentId, wireId: hit.object.userData.wireId };
+  }
+
+  // ─── Ток ───────────────────────────────────────────────────────────────
+
+  private dotMatrix = new THREE.Matrix4();
+
+  /** Расставить точки тока. paths: кривая и фаза каждой точки 0…1. */
+  setDots(items: { curve: THREE.Curve<THREE.Vector3>; phases: number[] }[]): void {
+    let n = 0;
+    for (const it of items) {
+      for (const t of it.phases) {
+        if (n >= MAX_DOTS) break;
+        const p = it.curve.getPointAt(t);
+        this.dotMatrix.makeTranslation(p.x, p.y, p.z);
+        this.dots.setMatrixAt(n++, this.dotMatrix);
+      }
+    }
+    this.dots.count = n;
+    this.dots.instanceMatrix.needsUpdate = true;
+  }
+
+  // ─── Частицы ───────────────────────────────────────────────────────────
+
+  emitSmoke(at: THREE.Vector3, amount: number): void {
+    for (let i = 0; i < amount; i++) {
+      this.puffs.push({
+        pos: at.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.4, 0, (Math.random() - 0.5) * 0.4)),
+        vel: new THREE.Vector3((Math.random() - 0.5) * 0.6, 2.2 + Math.random() * 1.4, (Math.random() - 0.5) * 0.6),
+        age: 0,
+        life: 1.6 + Math.random() * 1.2,
+        size: 0.6 + Math.random() * 0.5,
+        kind: "smoke",
+      });
+    }
+  }
+
+  emitSparks(at: THREE.Vector3, amount: number): void {
+    for (let i = 0; i < amount; i++) {
+      const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.9 + 0.3, Math.random() - 0.5).normalize();
+      this.puffs.push({
+        pos: at.clone(),
+        vel: dir.multiplyScalar(6 + Math.random() * 8),
+        age: 0,
+        life: 0.25 + Math.random() * 0.35,
+        size: 0.25 + Math.random() * 0.2,
+        kind: "spark",
+      });
+    }
+  }
+
+  stepParticles(dt: number): void {
+    this.puffs = this.puffs.filter((p) => (p.age += dt) < p.life).slice(-MAX_PUFFS);
+    for (const p of this.puffs) {
+      if (p.kind === "spark") p.vel.y -= 25 * dt;
+      else p.vel.multiplyScalar(1 - 0.6 * dt);
+      p.pos.addScaledVector(p.vel, dt);
+    }
+    this.puffSprites.forEach((s, i) => {
+      const p = this.puffs[i];
+      if (!p) {
+        s.visible = false;
+        return;
+      }
+      const k = p.age / p.life;
+      const mat = s.material;
+      s.visible = true;
+      s.position.copy(p.pos);
+      if (p.kind === "smoke") {
+        s.scale.setScalar(p.size * (1 + k * 3));
+        mat.color.setRGB(0.62, 0.62, 0.6);
+        mat.opacity = 0.55 * (1 - k);
+        mat.blending = THREE.NormalBlending;
+      } else {
+        s.scale.setScalar(p.size);
+        mat.color.setRGB(4, 2.6, 1.1); // яркие — попадают в свечение
+        mat.opacity = 1 - k;
+        mat.blending = THREE.AdditiveBlending;
+      }
+    });
+  }
+}

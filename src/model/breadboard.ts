@@ -85,3 +85,11 @@ export function describeNode(node: string): string {
   if (kind === "rail") return `шина ${a.endsWith("+") ? "+" : "−"} ${a.startsWith("top") ? "сверху" : "снизу"}`;
   return node;
 }
+
+/** Подпись отверстия для людей: «c7», «шина + сверху, 16». */
+export function holeLabel(id: string): string {
+  const h = HOLE_BY_ID.get(id);
+  if (!h || h.kind === "main") return id;
+  const m = id.match(/^(top|bot)([+-])(\d+)$/)!;
+  return `шина ${m[2] === "+" ? "+" : "−"} ${m[1] === "top" ? "сверху" : "снизу"}, ${m[3]}`;
+}
