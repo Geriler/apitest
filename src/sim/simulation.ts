@@ -90,6 +90,10 @@ export class Simulation {
   /** Напряжение на переходе диода с прошлого решения — начальное приближение для Ньютона. */
   junction = new Map<string, number>();
   solution: Solution = { nodeOf: new Map(), voltage: new Map(), branches: new Map() };
+  /** Время расчёта, с: растёт с каждым шагом (замедленное, если расчёт не успевает). */
+  time = 0;
+  /** Своя память деталей между шагами (запись осциллографа): ключ — обозначение детали. */
+  readonly memory = new Map<string, unknown>();
   /** Сколько итераций Ньютона потребовало последнее решение (для тестов и отладки). */
   lastIterations = 0;
 
@@ -184,7 +188,7 @@ export class Simulation {
   solve(): void {
     for (const c of this.scene.components) this.state(c.id);
     const alive = new Set(this.scene.components.map((c) => c.id));
-    for (const m of [this.states, this.capVoltage, this.junction, this.psuMode]) {
+    for (const m of [this.states, this.capVoltage, this.junction, this.psuMode, this.memory]) {
       for (const key of [...m.keys()]) if (!alive.has(key.split(":")[0])) m.delete(key);
     }
     this.solveAt(SUBSTEP);
@@ -245,6 +249,7 @@ export class Simulation {
     for (let i = 0; i < n; i++) {
       if (transient) failed.push(...this.advance(h, 0));
       else {
+        this.time += h;
         failed.push(...this.heat(h));
         if (failed.length) this.solve();
       }
@@ -272,6 +277,7 @@ export class Simulation {
       // Не сошлось совсем — оставляем переходы как до шага, а не последнюю (возможно, негодную) итерацию
       this.junction = saved;
     }
+    this.time += h;
     for (const c of this.scene.components) {
       if (!this.state(c.id).burned) part(c).remember?.(c, this);
     }

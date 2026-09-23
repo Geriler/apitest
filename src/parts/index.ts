@@ -10,8 +10,10 @@ import { diode } from "./diode";
 import { lamp } from "./lamp";
 import { led } from "./led";
 import { mosfet } from "./mosfet";
+import { multimeter } from "./multimeter";
 import { psu } from "./psu";
 import { resistor } from "./resistor";
+import { scope } from "./scope";
 import { switchPart } from "./switch";
 import { transistor } from "./transistor";
 import type { PartDef } from "./types";
@@ -29,6 +31,8 @@ export const PARTS: { [K in Component["type"]]: PartDef<ComponentOf<K>> } = {
   led,
   transistor,
   mosfet,
+  meter: multimeter,
+  scope,
 };
 
 /** Описание типа этой детали. */

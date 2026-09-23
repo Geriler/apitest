@@ -21,7 +21,6 @@ export const led: PartDef<Led> = {
       icon: `<path d="M1 11h8M17 11h12M9 6l8 5-8 5zM17 6v10M18 4l4-3M20 6l4-3" />`,
       label: "Светодиод",
       title: "Светодиод 5 мм или мощный 1 Вт",
-      keys: ["6"],
       settings: { color: "red" as LedColor, size: "5mm" as LedSize },
       name: () => "Светодиод",
       note: (s) =>

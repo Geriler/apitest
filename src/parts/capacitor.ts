@@ -21,7 +21,6 @@ export const capacitor: PartDef<Capacitor> = {
       icon: `<path d="M1 9h11M18 9h11M12 3v12M18 3v12" />`,
       label: "Конденсатор",
       title: "Конденсатор: электролитический или керамический",
-      keys: ["4"],
       settings: { variant: "electrolytic" as Capacitor["variant"], electrolyticUF: 1000, ceramicUF: 0.1, electrolyticV: 16, ceramicV: 50 },
       name: () => "Конденсатор",
       note: (s) =>

@@ -21,7 +21,6 @@ export const lamp: PartDef<Lamp> = {
       icon: `<path d="M1 9h8M21 9h8" /><circle cx="15" cy="9" r="6" /><path d="M11 5l8 8M19 5l-8 8" />`,
       label: "Лампа",
       title: "Лампа накаливания",
-      keys: ["7"],
       settings: { kind: "3.5V" as LampKind },
       name: () => "Лампа",
       note: () => "",

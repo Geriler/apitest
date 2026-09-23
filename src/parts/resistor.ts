@@ -29,7 +29,6 @@ export const resistor: PartDef<Resistor> = {
       icon: `<path d="M1 9h7M22 9h7" /><rect x="8" y="5" width="14" height="8" />`,
       label: "Резистор",
       title: "Выводной резистор 0,125–2 Вт",
-      keys: ["3"],
       settings: { ohms: 220, smdSize: "0805" as SmdSize, watts: 0.25 },
       name: () => "Резистор",
       note: () =>
@@ -48,7 +47,6 @@ export const resistor: PartDef<Resistor> = {
       icon: "",
       label: "SMD-резистор",
       title: "",
-      keys: [],
       settings: { ohms: 220, smdSize: "0805" as SmdSize },
       name: () => "SMD-резистор",
       note: () =>

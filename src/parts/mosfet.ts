@@ -134,8 +134,6 @@ export const mosfet: PartDef<Mosfet> = {
       icon: `<circle cx="16" cy="9" r="7.5" /><path d="M4 13h7M11 4v10M13.5 4v2.5M13.5 7.8v2.4M13.5 11.5v2.5M13.5 5.2h5V2M13.5 12.8h5V16M13.5 9h5v3.8M15 9l2-1.2v2.4z" />`,
       label: "MOSFET",
       title: "Полевой транзистор (MOSFET): 2N7000, BS250, IRLZ44N, IRF9540N",
-      keys: ["m", "M", "ь", "Ь"],
-      kbd: "M",
       settings: { kind: "2N7000" as MosfetKind },
       name: () => "MOSFET",
       note: (s) =>

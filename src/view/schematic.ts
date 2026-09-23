@@ -207,6 +207,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
         `<rect class="hit" x="${num(px - 16)}" y="${num(yc - 26)}" width="96" height="52"/>` +
         `<path d="M${num(px)} ${num(top)}V${num(yc - HALF)}M${num(px)} ${num(yc + HALF)}V${num(bottom)}"/>${extra}` +
         `<g transform="translate(${num(px)} ${num(yc)}) scale(1 ${flip})">${part(c).symbol?.(c) ?? ""}</g>` +
+        (part(c).symbolText ? `<text x="${num(px)}" y="${num(yc + 4)}" class="sym">${esc(part(c).symbolText!(c))}</text>` : "") +
         label(px + 18, yc);
       placed.push({ c, x: px, attach, svg, bottom });
       x += COL;

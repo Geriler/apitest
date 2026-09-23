@@ -22,7 +22,6 @@ export const battery: PartDef<Battery> = {
       icon: `<path d="M1 9h11M18 9h11M12 3v12M18 6v6" />`,
       label: "Батарея",
       title: "Батарея (ставится на стол)",
-      keys: ["9"],
       settings: { kind: "9V" as BatteryKind },
       name: () => "Батарея",
       note: () => "",
@@ -72,6 +71,7 @@ export const battery: PartDef<Battery> = {
     return actualRow("ЭДС фактически", formatSI(b.emf, "В")) + actualRow("Внутр. сопротивление", formatOhms(b.rInt));
   },
   source: true,
+  leadColors: ["#1b1d20", "#c8261f"],
   view: batteryView,
 };
 

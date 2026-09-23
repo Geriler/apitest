@@ -17,7 +17,6 @@ export const switchPart: PartDef<Switch> = {
       icon: `<path d="M1 12h8l12-7M21 12h8" />`,
       label: "Тумблер",
       title: "Тумблер",
-      keys: ["8"],
       settings: {},
       name: () => "Тумблер",
       note: () => "",

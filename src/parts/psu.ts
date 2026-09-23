@@ -23,8 +23,6 @@ export const psu: PartDef<PowerSupply> = {
       icon: `<rect x="5" y="2" width="20" height="14" rx="1.5" /><path d="M8 5h9v4H8zM20 12.5h1M23 12.5h0" /><circle cx="10" cy="12.5" r="1.5" />`,
       label: "Блок питания",
       title: "Лабораторный блок питания 0–30 В, 0–3 А",
-      keys: ["p", "P", "з", "З"],
-      kbd: "P",
       settings: { volts: 5, amps: 0.5 },
       name: () => "Блок питания",
       note: () => "",
@@ -76,6 +74,7 @@ export const psu: PartDef<PowerSupply> = {
   },
   noFlip: true,
   source: true,
+  leadColors: ["#1b1d20", "#c8261f"],
   visual: (c, sim) => ({
     display: {
       volts: Math.abs(sim.branch(c.id).voltage),

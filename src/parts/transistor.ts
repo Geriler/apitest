@@ -117,7 +117,6 @@ export const transistor: PartDef<Transistor> = {
       icon: `<circle cx="16" cy="9" r="7.5" /><path d="M4 9h8M12 4.5v9M12 7l6-4.5M12 11l6 4.5M16.5 14.5l1.8 1 -0.4-2" />`,
       label: "Транзистор",
       title: "Транзистор BC547 / BC557: встаёт в три соседних столбца",
-      keys: ["0"],
       settings: { kind: "BC547" as TransistorKind },
       name: () => "Транзистор",
       note: () =>

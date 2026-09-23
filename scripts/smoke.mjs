@@ -40,6 +40,15 @@ const failures = [];
 async function openTools(page) {
   if (!(await page.evaluate(() => document.getElementById("tools").classList.contains("open")))) await page.click("#tools-toggle");
 }
+/** Выбрать деталь для установки: горячих клавиш у деталей нет, только кнопка в группе списка слева. */
+async function pickPart(page, tool) {
+  await openTools(page);
+  await page.evaluate((t) => {
+    const d = document.querySelector(`[data-tool="${t}"]`).closest("details");
+    if (!d.open) d.querySelector("summary").click();
+  }, tool);
+  await page.click(`[data-tool="${tool}"]`);
+}
 /** Открыть панель «Проекты», если она закрыта. */
 async function openProjects(page) {
   if (!(await page.evaluate(() => window.maketka.projectsOpen))) await page.click("#btn-projects");
@@ -212,7 +221,7 @@ try {
       await page.screenshot({ path: "screenshots/desktop-burned.png" });
 
       // Поставить выводной резистор мышью между f12 и f16
-      await page.keyboard.press("3");
+      await pickPart(page, "tht");
       const holes = await page.evaluate(() => {
         const a = window.maketka;
         return ["f12", "f16"].map((id) => {
@@ -234,7 +243,7 @@ try {
       check(placed.count === before + 1 && placed.holes?.join() === "f12,f16", `мышью: резистор встал в ${placed.holes?.join(" и ")}`);
 
       // Батарея на плату не ставится
-      await page.keyboard.press("9");
+      await pickPart(page, "battery");
       const h = await page.evaluate(() => {
         const s = window.maketka.world.toScreen(window.maketka.endpointPos({ hole: "h5" }));
         return { x: s.x, y: s.y };
@@ -244,6 +253,31 @@ try {
       const hint = await page.textContent("#hint");
       check(/ставится на стол/.test(hint ?? ""), "батарея на макетку: показана подсказка");
       await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+
+      // Мультиметр: только кнопкой (горячих клавиш у деталей нет), в плату не ставится, на стол — да
+      await page.keyboard.press("3");
+      check((await page.evaluate(() => window.maketka.tool)) !== "tht", "клавиша 3 больше не выбирает резистор");
+      await pickPart(page, "meter");
+      await page.mouse.move(h.x, h.y);
+      await page.mouse.click(h.x, h.y);
+      check(/лежит на столе/.test((await page.textContent("#hint")) ?? ""), "мультиметр на макетку: показана подсказка");
+      const table = await page.evaluate(() => {
+        // Свободное место стола рядом с батареей (Vector3 берём у вывода батареи)
+        const p = window.maketka.endpointPos({ comp: "GB1", pin: 0 });
+        p.set(p.x - 4, 0, p.z + 10);
+        const s = window.maketka.world.toScreen(p);
+        return { x: s.x, y: s.y };
+      });
+      const nBefore = await page.evaluate(() => window.maketka.scene.components.length);
+      await page.mouse.move(table.x, table.y);
+      await page.mouse.click(table.x, table.y);
+      await page.waitForTimeout(200);
+      const meterPlaced = await page.evaluate(() => {
+        const c = window.maketka.scene.components.at(-1);
+        return { n: window.maketka.scene.components.length, type: c.type, mode: c.mode };
+      });
+      check(meterPlaced.n === nBefore + 1 && meterPlaced.type === "meter" && meterPlaced.mode === "V", `мультиметр встал на стол (${meterPlaced.type}, ${meterPlaced.mode})`);
       await page.keyboard.press("Escape");
       await page.screenshot({ path: "screenshots/desktop-final.png" });
 
@@ -374,7 +408,7 @@ try {
 
       // Поставить транзистор мышью: одно нажатие → три соседних отверстия
       await page.keyboard.press("Escape");
-      await page.keyboard.press("0");
+      await pickPart(page, "bjt");
       const f3 = await page.evaluate(() => {
         const s = window.maketka.world.toScreen(window.maketka.endpointPos({ hole: "f3" }));
         return { x: s.x, y: s.y };

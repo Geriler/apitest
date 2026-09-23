@@ -19,6 +19,8 @@ export interface Visual {
   burned: boolean;
   shorted: boolean;
   time: number;
+  /** Картинка для экрана прибора (осциллограф, мультиметр): считается, только когда её рисуют. */
+  screen?: () => unknown;
   /** Показания лабораторного блока (для его дисплея). */
   display?: { volts: number; amps: number; mode: "CV" | "CC"; on: boolean };
 }

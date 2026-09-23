@@ -1254,12 +1254,13 @@ export class App {
     return [...seen].map((id) => HOLE_BY_ID.get(id)!);
   }
 
-  /** Выбранный цвет или «авто»: красный к плюсу батареи, чёрный к минусу, остальные по кругу. */
+  /** Выбранный цвет или «авто»: цвет гнезда прибора или клеммы источника (красный к плюсу, чёрный к минусу), остальные по кругу. */
   private pickWireColor(a: Endpoint, b: Endpoint): string {
     if (this.defaults.wireColor !== "auto") return this.defaults.wireColor;
     for (const e of [a, b]) {
       const c = "comp" in e ? this.component(e.comp) : undefined;
-      if ("comp" in e && c && part(c).source) return e.pin === 1 ? "#c8261f" : "#1b1d20";
+      const lead = "comp" in e && c ? part(c).leadColors?.[e.pin] : undefined;
+      if (lead) return lead;
       if ("hole" in e) {
         const pol = HOLE_BY_ID.get(e.hole)!.polarity;
         if (pol) return pol === "+" ? "#c8261f" : "#1b1d20";

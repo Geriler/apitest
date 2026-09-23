@@ -211,6 +211,10 @@
   .sch .part { cursor: ew-resize; }
   .sch text.ref { fill: var(--copper); font-weight: 600; }
   .sch text.sub, .sch text.volt { fill: var(--muted); }
+  .sch text.sym { fill: var(--ink); font: 600 11px var(--mono); text-anchor: middle; }
+  .lcd { margin: 10px 0 6px; padding: 10px 14px; border-radius: 6px; background: #b9c4a5; color: #1c2415; font: 600 26px var(--mono); text-align: right; letter-spacing: 0.02em; }
+  .scope-screen { display: block; width: 100%; height: auto; margin: 10px 0 6px; border-radius: 6px; }
+  i.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: 0; }
   .sch .hit { fill: transparent; stroke: none; pointer-events: all; }
   .sch .part:hover :is(path, rect:not(.hit), circle:not(.dot, .fill)), .sch .part.sel :is(path, rect:not(.hit), circle:not(.dot, .fill)) { stroke: var(--copper); }
   .sch .part:hover :is(.dot, .fill), .sch .part.sel :is(.dot, .fill) { fill: var(--copper); }
@@ -446,6 +450,11 @@
     </details>
     <details class="group" data-group="power">
       <summary class="tool group-head" title="Питание"><svg viewBox="0 0 30 18"><path d="M1 9h11M18 9h11M12 3v12M18 6v6" /></svg><span class="gname">Питание</span><span class="chev" aria-hidden="true">›</span></summary>
+      <div class="group-body panel">
+      </div>
+    </details>
+    <details class="group" data-group="instruments">
+      <summary class="tool group-head" title="Приборы"><svg viewBox="0 0 30 18"><rect x="8" y="1.5" width="14" height="15" rx="2" /><path d="M11 4h8v4h-8z" /><circle cx="15" cy="12" r="2" /></svg><span class="gname">Приборы</span><span class="chev" aria-hidden="true">›</span></summary>
       <div class="group-body panel">
       </div>
     </details>

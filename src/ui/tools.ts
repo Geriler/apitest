@@ -1,4 +1,4 @@
-/** Инструменты: встроенные и установки деталей (из реестра src/parts), горячие клавиши, кнопки. */
+/** Инструменты: встроенные и установки деталей (из реестра src/parts), горячие клавиши встроенных, кнопки. */
 
 import type { Component } from "../model/types";
 import { PARTS, type ToolDef } from "../parts";
@@ -11,11 +11,11 @@ export type PlaceTool = string;
 export const PLACE_TOOLS = new Map<PlaceTool, { type: Component["type"]; def: ToolDef }>(
   Object.values(PARTS).flatMap((p) => p.tools.map((t) => [t.id, { type: p.type, def: t as ToolDef }] as const)),
 );
+/** Горячие клавиши инструментов (в латинской и в русской раскладке). Детали выбираются только кнопками. */
 export const TOOL_KEYS: Record<string, Tool> = {
   "1": "select", "2": "wire",
   t: "trace", T: "trace", "е": "trace", "Е": "trace",
   b: "bb", B: "bb", "и": "bb", "И": "bb", v: "pcb", V: "pcb", "м": "pcb", "М": "pcb",
-  ...Object.fromEntries([...PLACE_TOOLS.values()].flatMap(({ def }) => def.keys.map((k) => [k, def.id]))),
 };
 
 /** Кнопки инструментов деталей — в группы на панели слева, в порядке реестра. */
@@ -26,7 +26,7 @@ export function renderToolButtons(tools: HTMLElement): void {
     body?.insertAdjacentHTML(
       "beforeend",
       `<button class="tool" data-tool="${def.id}" aria-pressed="false" title="${def.title}">
-        <svg viewBox="0 0 30 18">${def.icon}</svg>${def.label}<kbd>${def.kbd ?? def.keys[0]}</kbd>
+        <svg viewBox="0 0 30 18">${def.icon}</svg>${def.label}
       </button>`,
     );
   }

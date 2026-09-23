@@ -272,7 +272,27 @@ export interface PowerSupply extends Base {
 
 export const PSU_LIMITS = { maxV: 30, maxA: 3 };
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply;
+/** Режим мультиметра: вольтметр, миллиамперметр, амперметр, омметр. */
+export type MeterMode = "V" | "mA" | "A" | "ohm";
+
+/** Мультиметр на столе. Вывод 0 — гнездо COM (чёрный щуп), вывод 1 — гнездо V/Ω/A (красный). */
+export interface Multimeter extends Base {
+  type: "meter";
+  mode: MeterMode;
+}
+
+/** Осциллограф на столе. Вывод 0 — общий провод щупов, 1 — канал 1, 2 — канал 2. */
+export interface Oscilloscope extends Base {
+  type: "scope";
+  /** Развёртка, секунд на деление (по горизонтали 10 делений). */
+  timeDiv: number;
+  /** Вольт на деление по каналам; 0 — подбирать самому. */
+  voltsDiv: [number, number];
+  /** «Стоп»: запись остановлена, на экране последняя картинка. */
+  hold?: boolean;
+}
+
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */

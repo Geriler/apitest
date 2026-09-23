@@ -25,7 +25,6 @@ export const diode: PartDef<Diode> = {
       icon: `<path d="M1 9h10M19 9h10M11 4l8 5-8 5zM19 4v10" />`,
       label: "Диод",
       title: "Диод 1N4148 / 1N4007 / 1N5408",
-      keys: ["5"],
       settings: { kind: "1N4007" as DiodeKind },
       name: (s) => `Диод ${DIODES[s.kind].label}`,
       note: () => `<p class="sub">Пропускает ток в одну сторону.</p>${polarNote("anode")}`,
