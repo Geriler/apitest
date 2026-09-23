@@ -257,6 +257,11 @@
   .list { margin: 8px 0 0; padding: 0; list-style: none; }
   .list li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); font-size: 13px; }
   .list li span:last-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .list.projects li { align-items: center; }
+  .list.projects .row { margin-top: 0; flex-wrap: nowrap; }
+  .list.projects li span:last-child { font-family: inherit; flex: 0 0 auto; }
+  .list.projects small { color: var(--muted); font-size: 12px; }
+  #inspector input[type="text"] { width: 100%; box-sizing: border-box; font: 500 13px var(--sans); cursor: text; text-align: left; box-shadow: none; }
   .help { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
   .help b { color: var(--ink); font-weight: 600; }
 
@@ -431,6 +436,7 @@
     <button class="btn" id="btn-undo" title="Отменить (Ctrl+Z)" aria-label="Отменить" disabled>↶</button>
     <button class="btn" id="btn-redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть" disabled>↷</button>
     <button class="btn" id="btn-clear">Очистить</button>
+    <button class="btn" id="btn-projects" aria-pressed="false" title="Сохранить, открыть, скачать файлом">Проекты</button>
     <details class="menu" id="settings-menu">
       <summary class="btn" title="Допуски, ток, замена сгоревших">Настройки</summary>
       <div class="menu-body panel">

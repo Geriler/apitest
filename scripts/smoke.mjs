@@ -32,8 +32,14 @@ const stopServer = () => {
 const browser = await chromium.launch({
   executablePath: chromePath,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
+  // Кодировка UTF-8: при системной POSIX браузер заменяет кириллические имена скачанных файлов на «download»
+  env: { ...process.env, LC_ALL: "C.UTF-8", LANG: "C.UTF-8" },
 });
 const failures = [];
+/** Открыть панель «Проекты», если она закрыта. */
+async function openProjects(page) {
+  if (!(await page.evaluate(() => window.maketka.projectsOpen))) await page.click("#btn-projects");
+}
 /** Кнопки допусков, тока и замены — в меню «Настройки»: открыть его, если закрыто, и нажать. */
 async function settingsClick(page, selector) {
   if (!(await page.evaluate(() => document.getElementById("settings-menu").open))) await page.click("#settings-menu > summary");
@@ -667,6 +673,39 @@ try {
       await page.waitForTimeout(200);
       const backHoles = await page.evaluate((id) => window.maketka.component(id).placement.holes.join(), plan.id);
       check(backHoles === plan.from, `перенос отменяется Ctrl+Z (${backHoles})`);
+
+      // Проекты: сохранить, очистить, открыть; скачать файл и открыть его обратно
+      await page.selectOption("#demo-select", "blinker");
+      await page.waitForTimeout(400);
+      const blinkerIds = await page.evaluate(() => window.maketka.scene.components.map((c) => c.id).join());
+      await openProjects(page);
+      await page.fill("#f-proj-name", "Моя мигалка");
+      await page.click('[data-proj-act="save"]');
+      await page.waitForTimeout(200);
+      const listed = await page.textContent("#inspector .list.projects");
+      await page.click("#btn-clear");
+      await page.click("#btn-clear");
+      await page.waitForTimeout(300);
+      await openProjects(page);
+      await page.click('[data-proj-act="open"][data-name="Моя мигалка"]');
+      await page.waitForTimeout(400);
+      const reopened = await page.evaluate(() => ({ ids: window.maketka.scene.components.map((c) => c.id).join(), name: window.maketka.projectName }));
+      check(/Моя мигалка/.test(listed ?? "") && reopened.ids === blinkerIds && reopened.name === "Моя мигалка", `проект сохранён и открыт после «Очистить»: ${reopened.ids}`);
+      const [download] = await Promise.all([page.waitForEvent("download"), page.click('[data-proj-act="export"]')]);
+      const fileText = await (await import("node:fs/promises")).readFile(await download.path(), "utf8");
+      const file = JSON.parse(fileText);
+      check(download.suggestedFilename() === "Моя мигалка.json" && file.app === "maketka" && file.scene.components.length > 0, `скачан файл ${download.suggestedFilename()}`);
+      await page.selectOption("#demo-select", "lamps");
+      await page.waitForTimeout(300);
+      await openProjects(page);
+      await page.setInputFiles("#f-proj-file", { name: "Моя мигалка.json", mimeType: "application/json", buffer: Buffer.from(fileText) });
+      await page.waitForTimeout(500);
+      const imported = await page.evaluate(() => ({ ids: window.maketka.scene.components.map((c) => c.id).join(), name: window.maketka.projectName }));
+      check(imported.ids === blinkerIds && imported.name === "Моя мигалка", `файл проекта открыт: «${imported.name}»`);
+      await page.setInputFiles("#f-proj-file", { name: "чужой.json", mimeType: "application/json", buffer: Buffer.from('{"hello":1}') });
+      await page.waitForTimeout(300);
+      check(/Не открылось/.test((await page.textContent("#toasts")) ?? ""), "чужой файл — понятная ошибка, схема на месте");
+      await page.keyboard.press("Escape");
     }
 
     check(errors.length === 0, `${viewport.name}: нет ошибок в консоли${errors.length ? ": " + errors.join(" | ") : ""}`);

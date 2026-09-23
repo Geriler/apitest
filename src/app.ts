@@ -66,6 +66,7 @@ import {
 import { colorBands, e12Values, formatOhms, formatSI, smdCode } from "./sim/resistorCodes";
 import { Simulation, VT, diodeParams, heatThreshold, lampResistance, traceResistance, wireResistance } from "./sim/simulation";
 import * as tolerance from "./sim/tolerance";
+import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "./projects";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
 import type { World } from "./view/world";
@@ -569,6 +570,8 @@ export class App {
   }
 
   replaceScene(s: Scene): void {
+    // Другая схема — уже не тот проект (открытие проекта задаёт имя после загрузки)
+    this.projectName = "";
     this.scene = s;
     this.adoptBoards();
     this.world.rebuildBoards(true);
@@ -771,9 +774,169 @@ export class App {
   /** Сводка по схеме и подсказки справа — только по кнопке «?». */
   showHelp = false;
 
+  // ─── Проекты ───────────────────────────────────────────────────────────
+
+  /** Открыта ли панель «Проекты». */
+  projectsOpen = false;
+  /** Вызывается, когда панель проектов открывается или закрывается (для кнопки). */
+  onProjects?: () => void;
+  /** Имя текущего проекта (под ним он сохранён или открыт). */
+  projectName = "";
+  /** Имя в поле ввода, пока его набирают. */
+  private projectDraft?: string;
+  /** Проект, который попросили удалить: второе нажатие удаляет. */
+  private confirmDelete?: string;
+
+  setProjectsOpen(open: boolean): void {
+    if (this.projectsOpen === open) return;
+    this.projectsOpen = open;
+    this.confirmDelete = undefined;
+    this.projectDraft = undefined;
+    if (open) this.setTool("select");
+    this.inspectorHtml = "";
+    this.renderInspector();
+    this.onProjects?.();
+  }
+
+  private projectsPanel(): [string, string] {
+    const name = this.projectDraft ?? this.projectName;
+    const list = listProjects();
+    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+    const date = (ms: number) => new Date(ms).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const exists = list.some((p) => p.name === name.trim());
+    const rows = list
+      .map(
+        (p) => `<li><span><b>${esc(p.name)}</b><br /><small>${date(p.savedAt)} · ${plural(p.scene.components.length, "деталь", "детали", "деталей")}</small></span>
+          <span class="row"><button class="btn inline" data-proj-act="open" data-name="${esc(p.name)}">Открыть</button>
+          <button class="btn inline danger" data-proj-act="delete" data-name="${esc(p.name)}">${this.confirmDelete === p.name ? "Точно?" : "Удалить"}</button></span></li>`,
+      )
+      .join("");
+    const html = `<div class="eyebrow">проекты</div><h2>${this.projectName ? esc(this.projectName) : "Новая схема"}</h2>
+      <div class="field"><label for="f-proj-name">Имя</label>
+        <input id="f-proj-name" class="btn" type="text" maxlength="60" placeholder="Например, мигалка" value="${esc(name)}" /></div>
+      <div class="row"><button class="btn inline" data-proj-act="save" ${name.trim() ? "" : "disabled"}>${exists ? "Перезаписать" : "Сохранить"}</button></div>
+      ${rows ? `<ul class="list projects">${rows}</ul>` : `<p class="sub">Сохранённых проектов пока нет. Они хранятся в этом браузере.</p>`}
+      <div class="field"><label>Файл</label>
+        <div class="row"><button class="btn inline" data-proj-act="export">Скачать файл</button>
+        <button class="btn inline" data-proj-act="import">Открыть файл</button></div>
+        <input type="file" id="f-proj-file" accept=".json,application/json" hidden /></div>
+      <p class="sub">Файл .json можно передать другому человеку или открыть в другом браузере. Открыть проект — как загрузить пример: Ctrl+Z вернёт прежнюю схему.</p>`;
+    return ["p", html];
+  }
+
+  /** Имя файла из имени проекта: без символов, запрещённых в именах файлов. */
+  private fileName(): string {
+    const base = (this.projectName || "схема").replace(/[\\/:*?"<>|]+/g, " ").trim() || "схема";
+    return `${base}.json`;
+  }
+
+  /** Скачать проект файлом: в claude.ai — через сохранение файлов артефакта, иначе обычной загрузкой. */
+  async exportProject(): Promise<void> {
+    const data = projectFile(this.projectName || "Без имени", this.scene);
+    const filename = this.fileName();
+    type Downloads = { save(r: { filename: string; data: string }): Promise<unknown> };
+    const claude = (window as unknown as { claude?: { use?(name: string): Promise<Downloads | null> } }).claude;
+    const downloads = claude?.use ? await claude.use("downloads").catch(() => null) : null;
+    if (downloads) {
+      try {
+        await downloads.save({ filename, data });
+      } catch (e) {
+        const code = (e as { code?: string }).code;
+        if (code !== "declined") this.toast("Файл не сохранён", code === "rate_limited" ? "Окно сохранения уже открыто." : "Сохранение файлов здесь недоступно.");
+      }
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  private async importProject(file: File): Promise<void> {
+    try {
+      const { name, scene } = parseProjectFile(await file.text(), file.name.replace(/\.json$/i, ""));
+      this.replaceScene(scene);
+      this.projectName = name;
+      this.projectDraft = undefined;
+      this.toast("Проект открыт", `«${name}» из файла. Ctrl+Z вернёт прежнюю схему.`);
+    } catch (e) {
+      this.toast("Не открылось", (e as Error).message);
+    }
+    this.inspectorHtml = "";
+    this.renderInspector();
+  }
+
+  private bindProjects(root: HTMLElement): void {
+    const input = root.querySelector<HTMLInputElement>("#f-proj-name");
+    input?.addEventListener("input", () => {
+      this.projectDraft = input.value;
+      const save = root.querySelector<HTMLButtonElement>('[data-proj-act="save"]');
+      if (save) {
+        save.disabled = !input.value.trim();
+        save.textContent = listProjects().some((p) => p.name === input.value.trim()) ? "Перезаписать" : "Сохранить";
+      }
+    });
+    input?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") root.querySelector<HTMLButtonElement>('[data-proj-act="save"]')?.click();
+    });
+    const file = root.querySelector<HTMLInputElement>("#f-proj-file");
+    file?.addEventListener("change", () => {
+      if (file.files?.[0]) void this.importProject(file.files[0]);
+    });
+    root.querySelectorAll<HTMLButtonElement>("[data-proj-act]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const name = btn.dataset.name ?? "";
+        switch (btn.dataset.projAct) {
+          case "save": {
+            const n = (this.projectDraft ?? this.projectName).trim();
+            if (!n) return;
+            if (saveProject(n, this.scene)) {
+              this.projectName = n;
+              this.projectDraft = undefined;
+              this.toast("Сохранено", `Проект «${n}» — в этом браузере.`);
+            } else this.toast("Не сохранилось", "Хранилище браузера недоступно или переполнено. Скачайте проект файлом.");
+            break;
+          }
+          case "open": {
+            const scene = loadProject(name);
+            if (!scene) return;
+            this.replaceScene(scene);
+            this.projectName = name;
+            this.projectDraft = undefined;
+            break;
+          }
+          case "delete":
+            if (this.confirmDelete !== name) {
+              this.confirmDelete = name;
+            } else {
+              deleteProject(name);
+              this.confirmDelete = undefined;
+            }
+            break;
+          case "export":
+            void this.exportProject();
+            return;
+          case "import":
+            file?.click();
+            return;
+        }
+        this.inspectorHtml = "";
+        this.renderInspector();
+      });
+    });
+  }
+
   setTool(tool: Tool): void {
     this.tool = tool;
     this.onTool?.(tool);
+    if (tool !== "select" && this.projectsOpen) {
+      this.projectsOpen = false;
+      this.onProjects?.();
+    }
     this.cancelPending();
     this.ghostRot = 0;
     for (const b of this.ui.tools.querySelectorAll<HTMLButtonElement>("[data-tool]")) {
@@ -1146,6 +1309,7 @@ export class App {
 
   private click(pressedId?: string): void {
     const h = this.hover;
+    this.setProjectsOpen(false);
     switch (this.tool) {
       case "select": {
         const id = pressedId ?? h.componentId;
@@ -1527,7 +1691,9 @@ export class App {
     const target = this.selected;
     let html: string;
     let key: string;
-    if (target && this.component(target)) {
+    if (this.projectsOpen) {
+      [key, html] = this.projectsPanel();
+    } else if (target && this.component(target)) {
       [key, html] = this.componentPanel(this.component(target)!, true);
     } else if (target && (this.scene.traces ?? []).some((t) => t.id === target)) {
       [key, html] = this.tracePanel(target);
@@ -1558,6 +1724,7 @@ export class App {
     this.inspectorHtml = html;
     this.ui.inspector.innerHTML = html;
     this.bindInspector();
+    if (key === "p") this.bindProjects(this.ui.inspector);
   }
 
   private readout(u: number, i: number, p: number, third: [string, string] = ["P", formatSI(p, "Вт")]): string {
@@ -2251,6 +2418,14 @@ function burnMessage(c: Component): [string, string] {
     default:
       return [`${c.id} вышел из строя`, ""];
   }
+}
+
+/** «1 деталь», «3 детали», «7 деталей». */
+function plural(n: number, one: string, few: string, many: string): string {
+  const d = n % 10;
+  const dd = n % 100;
+  const word = d === 1 && dd !== 11 ? one : d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
+  return `${n} ${word}`;
 }
 
 /** «0,125 Вт», «2 Вт». */

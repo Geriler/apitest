@@ -83,6 +83,11 @@ async function start(): Promise<void> {
   };
   app.onTool(app.tool);
 
+  // «Проекты» — панель справа
+  const projBtn = $("btn-projects");
+  app.onProjects = () => projBtn.setAttribute("aria-pressed", String(app.projectsOpen));
+  projBtn.addEventListener("click", () => app.setProjectsOpen(!app.projectsOpen));
+
   // «?» — сводка по схеме и подсказки
   const helpBtn = $("btn-help");
   helpBtn.addEventListener("click", () => {
