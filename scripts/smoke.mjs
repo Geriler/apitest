@@ -67,6 +67,8 @@ try {
     check(app.components === 7, `${viewport.name}: в примере 7 деталей`);
     check(app.hl1 > 0.9 && app.hl1 < 1.3, `${viewport.name}: HL1 горит (${app.hl1.toFixed(2)} от номинала)`);
     check(app.r1 < 1, `${viewport.name}: R1 не перегружен (${app.r1.toFixed(2)})`);
+    const hintVisible = await page.isVisible("#hint");
+    check(!hintVisible, `${viewport.name}: в режиме выбора подсказки нет`);
     const horizontalScroll = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     check(!horizontalScroll, `${viewport.name}: нет горизонтальной прокрутки`);
 
