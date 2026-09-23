@@ -138,6 +138,28 @@ describe("2N7000 (N-канал)", () => {
     expect(f.mode).toBe("закрыт");
   });
 
+  it("утечка затвора (по 1 пСм к истоку и стоку): висящий затвор медленно уплывает к середине, τ ≈ 5500 с", () => {
+    const q = M("VT1", "2N7000");
+    const scene = circuit(
+      [q, R("Rload", 470)],
+      [
+        [PLUS, pin("Rload", 0)],
+        [pin("Rload", 1), fet(q, "D")],
+        [fet(q, "S"), MINUS],
+      ],
+    );
+    const sim = new Simulation(scene);
+    const vds = sim.mosfet(q).vds;
+    const v0 = sim.mosfet(q).vgs;
+    expect(v0).toBeCloseTo(vds / 11, 3);
+    // 60 с: Uзи(t) = Uси/2 + (U0 − Uси/2)·e^(−t/τ), τ = 11 нФ / 2 пСм
+    for (let t = 0; t < 60; t += 0.5) sim.step(0.5);
+    const tau = (10e-9 + 1e-9) / (2 * 1e-12);
+    const expected = vds / 2 + (v0 - vds / 2) * Math.exp(-60 / tau);
+    expect(sim.mosfet(q).vgs).toBeCloseTo(expected, 3);
+    expect(sim.mosfet(q).vgs - v0).toBeGreaterThan(0.03);
+  });
+
   it("затвор «помнит» заряд: без стягивающего резистора транзистор остаётся открытым", () => {
     const q = M("VT1", "2N7000");
     const scene = circuit(
