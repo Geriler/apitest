@@ -2,7 +2,6 @@ import * as THREE from "three";
 import {
   BOARDS,
   HOLE_BY_ID,
-  PCB_SIZES,
   TABLE_LIMIT,
   applyBoards,
   boardById,
@@ -10,7 +9,6 @@ import {
   boardRect,
   boardSize,
   boardsOverlap,
-  describeNode,
   holeAt,
   holeLabel,
   holesOnNode,
@@ -28,46 +26,22 @@ import {
   type Endpoint,
   type Pin,
   type Scene,
-  type SchematicLayout,
   type Wire,
   type WireShape,
 } from "./model/types";
-import { formatOhms, formatSI } from "./sim/resistorCodes";
-import { Simulation, heatThreshold, traceResistance, wireResistance } from "./sim/simulation";
-import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "./projects";
+import { formatSI } from "./sim/resistorCodes";
+import { Simulation, heatThreshold } from "./sim/simulation";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
-import { schematicSvg } from "./view/schematic";
-import { PARTS, part, type ToolDef } from "./parts";
-import { pill, readout, selectField } from "./view/panel";
+import { PARTS, part } from "./parts";
 import type { World } from "./view/world";
+import { ProjectsPanel } from "./ui/projects";
+import { PLACE_TOOLS, TOOL_KEYS, renderToolButtons, type PlaceTool, type Tool } from "./ui/tools";
+import { SchematicPanel } from "./ui/schematicPanel";
+import { boardPanel, boardToolPanel, componentPanel, holePanel, overviewPanel, traceToolPanel, tracePanel, wirePanel, wireToolPanel } from "./ui/panels";
 
-/** Инструмент: встроенный (выбор, провод, дорожка, платы, удаление) или установка детали (id из PartDef.tools). */
-type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "delete" | PlaceTool;
-type PlaceTool = string;
-
-/** Инструменты установки деталей из реестра: id → тип детали и описание инструмента. */
-const PLACE_TOOLS = new Map<PlaceTool, { type: Component["type"]; def: ToolDef }>(
-  Object.values(PARTS).flatMap((p) => p.tools.map((t) => [t.id, { type: p.type, def: t as ToolDef }] as const)),
-);
-const TOOL_KEYS: Record<string, Tool> = {
-  "1": "select", "2": "wire",
-  t: "trace", T: "trace", "е": "trace", "Е": "trace",
-  b: "bb", B: "bb", "и": "bb", "И": "bb", v: "pcb", V: "pcb", "м": "pcb", "М": "pcb",
-  ...Object.fromEntries([...PLACE_TOOLS.values()].flatMap(({ def }) => def.keys.map((k) => [k, def.id]))),
-};
 const WIRE_COLORS = ["#e3b21c", "#2f9e5a", "#2f6fd1", "#e2762a", "#8e4cc9", "#e9e9e4"];
 /** Палитра проводов для ручного выбора. */
-export const WIRE_PALETTE: { hex: string; name: string }[] = [
-  { hex: "#c8261f", name: "красный" },
-  { hex: "#1b1d20", name: "чёрный" },
-  { hex: "#2f6fd1", name: "синий" },
-  { hex: "#e3b21c", name: "жёлтый" },
-  { hex: "#2f9e5a", name: "зелёный" },
-  { hex: "#e2762a", name: "оранжевый" },
-  { hex: "#8e4cc9", name: "фиолетовый" },
-  { hex: "#e9e9e4", name: "белый" },
-];
 /** Самые длинные выводы, которые можно согнуть между двумя отверстиями (в шагах). */
 const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
@@ -154,7 +128,17 @@ export class App {
     initial: Scene,
   ) {
     this.scene = initial;
-    this.renderToolButtons();
+    renderToolButtons(this.ui.tools);
+    this.schematic = new SchematicPanel(this.ui.schematic, {
+      scene: () => this.scene,
+      sim: () => this.sim,
+      highlighted: () => this.selected ?? this.picked,
+      layoutChanged: () => {
+        this.save();
+        this.record();
+      },
+      partClicked: (c) => this.schematicClick(c),
+    });
     this.adoptBoards();
     this.world.rebuildBoards(true);
     this.sim = new Simulation(this.scene, App.loadTolerance());
@@ -166,7 +150,6 @@ export class App {
     this.rebuild();
     this.snapshot = JSON.stringify(this.scene);
     this.bindInput();
-    this.bindSchematic();
     this.setTool("select");
     // Если кадры редкие, физика догоняет сама
     setInterval(() => this.tick(), 50);
@@ -198,7 +181,7 @@ export class App {
   }
 
   /** Занятые отверстия: отверстие → кто в нём (вывод детали или провод). */
-  private occupied(): Map<string, string> {
+  occupied(): Map<string, string> {
     const occ = new Map<string, string>();
     for (const c of this.scene.components) {
       if (c.placement.mode === "board") for (const h of c.placement.holes) occ.set(h, c.id);
@@ -406,38 +389,8 @@ export class App {
     return true;
   }
 
-  /** Раздел панели о плате: название, размер, что можно сделать. */
-  private boardSection(b: BoardSpec): string {
-    const size = boardSize(b);
-    const mmSize = `${Math.round(size.width * 2.54)} × ${Math.round(size.depth * 2.54)} мм`;
-    const sizeRow =
-      b.kind === "pcb"
-        ? selectField("boardSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), `${b.cols}x${b.rows}`)
-        : `<div class="kv"><span>Размер</span><span>400 точек, ${mmSize}</span></div>`;
-    return `<div class="board-section">
-      <div class="eyebrow">плата</div>
-      <h3>${boardName(b)[0].toUpperCase()}${boardName(b).slice(1)}</h3>
-      ${sizeRow}
-      <p class="sub">Чтобы передвинуть, тащите плату мышью — детали, провода и дорожки поедут вместе с ней.</p>
-      <div class="row"><button class="btn inline danger" data-board-act="remove">Убрать плату</button></div>
-    </div>`;
-  }
 
-  private boardPanel(b: BoardSpec): [string, string] {
-    return [`b:${b.id}`, this.boardSection(b)];
-  }
 
-  private boardToolPanel(kind: BoardSpec["kind"]): [string, string] {
-    const html =
-      kind === "breadboard"
-        ? `<div class="eyebrow">новая плата</div><h2>Макетка</h2>
-      <p>400 точек: 30 столбцов по 5 соединённых отверстий и по две шины питания сверху и снизу.</p>
-      <p class="sub">Нажмите на свободное место на столе. Макетки между собой не соединены — как настоящие: соединяйте проводом.</p>`
-        : `<div class="eyebrow">новая плата</div><h2>Печатная плата</h2>
-      ${selectField("pcbSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), this.defaults.pcbSize)}
-      <p class="sub">Нажмите на свободное место на столе. Площадки ни с чем не соединены — соединяйте медными дорожками (T).</p>`;
-    return [`bt:${kind}`, html];
-  }
 
   // ─── Допуски ───────────────────────────────────────────────────────────
 
@@ -468,11 +421,6 @@ export class App {
     return { ...NO_TOLERANCE, seed: Math.floor(Math.random() * 1e9) };
   }
 
-  /** Строки «Фактически» для панели детали; пусто, если режим допусков выключен. */
-  private actualRows(c: Component): string {
-    const t = this.sim.tolerance;
-    return t.enabled ? (part(c).actual?.(c, t) ?? "") : "";
-  }
 
   static load(): Scene | undefined {
     try {
@@ -487,7 +435,7 @@ export class App {
 
   replaceScene(s: Scene): void {
     // Другая схема — уже не тот проект (открытие проекта задаёт имя после загрузки)
-    this.projectName = "";
+    this.projects.name = "";
     this.scene = s;
     this.adoptBoards();
     this.world.rebuildBoards(true);
@@ -704,140 +652,43 @@ export class App {
 
   // ─── Принципиальная схема ──────────────────────────────────────────────
 
+  private schematic!: SchematicPanel;
+
   /** Показана ли панель со схемой. */
-  showSchematic = false;
-  private schematicHtml = "";
+  get showSchematic(): boolean {
+    return this.schematic.visible;
+  }
 
   setShowSchematic(on: boolean): void {
-    this.showSchematic = on;
-    const el = this.ui.schematic;
-    if (!el) return;
-    el.hidden = !on;
-    this.schematicHtml = "";
-    this.renderSchematic();
+    this.schematic.setVisible(on);
   }
 
   /** Перерисовать схему, если она видна и что-то поменялось (токи, выделение, сама сборка). */
   renderSchematic(): void {
-    const el = this.ui.schematic;
-    if (!el || !this.showSchematic) return;
-    let svg: string;
-    try {
-      svg = schematicSvg(this.scene, this.sim, this.selected ?? this.picked, this.schematicLayout());
-    } catch {
-      svg = ""; // сборка в промежуточном состоянии (например, пропало отверстие) — нарисуем в следующий раз
-    }
-    const reset = el.querySelector<HTMLElement>("#btn-sch-reset");
-    if (reset) reset.hidden = !this.scene.schematic;
-    const html = svg || `<p class="sub">На столе нет деталей — схема появится, когда вы что-нибудь соберёте.</p>`;
-    if (html === this.schematicHtml) return;
-    const body = el.querySelector(".sch-body");
-    if (!body) return;
-    // Если поменялись только цифры (токи, напряжения), меняем текст подписей на месте: иначе
-    // элементы пересоздаются каждые 0,2 с и щелчок, начатый на старом элементе, теряется
-    const shape = (h: string) => h.replace(/>[^<]*<\/text>/g, "></text>");
-    if (this.schematicHtml && shape(html) === shape(this.schematicHtml)) {
-      const next = [...html.matchAll(/>([^<]*)<\/text>/g)].map((m) => m[1]);
-      body.querySelectorAll("text").forEach((t, i) => {
-        const v = next[i]?.replace(/&lt;/g, "<").replace(/&amp;/g, "&");
-        if (v !== undefined && t.textContent !== v) t.textContent = v;
-      });
-    } else {
-      body.innerHTML = html;
-    }
-    this.schematicHtml = html;
+    this.schematic.render();
   }
-
-  /** Ручная раскладка схемы с учётом перетаскивания, которое идёт прямо сейчас. */
-  private schematicLayout(): SchematicLayout {
-    const base = this.scene.schematic ?? {};
-    const d = this.schDrag;
-    if (!d?.moved) return base;
-    return d.kind === "part" ? { ...base, x: { ...base.x, [d.id]: d.value } } : { ...base, y: { ...base.y, [d.id]: d.value } };
-  }
-
-  /** Перетаскивание на схеме: деталь — по горизонтали, линия цепи — по вертикали. */
-  private schDrag?: { kind: "part" | "net"; id: string; base: number; start: number; scale: number; value: number; moved: boolean };
-  /** Только что тащили — щелчок, который браузер пришлёт следом, не считается. */
-  private schJustDragged = false;
 
   /** Вернуть автоматическую раскладку схемы (отменяется Ctrl+Z). */
   resetSchematicLayout(): void {
-    delete this.scene.schematic;
-    this.save();
-    this.record();
-    this.schematicHtml = "";
-    this.renderSchematic();
-  }
-
-  private bindSchematicDrag(el: HTMLElement): void {
-    el.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0) return;
-      const target = e.target as Element;
-      const svg = target.closest("svg.sch") as SVGSVGElement | null;
-      const part = target.closest<SVGGElement>("[data-part]");
-      const net = part ? null : target.closest<SVGGElement>("[data-net]");
-      if (!svg || (!part && !net)) return;
-      // Экранных пикселей на единицу чертежа (схема может быть вписана в панель)
-      const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width || 1;
-      this.schDrag = part
-        ? { kind: "part", id: part.dataset.part!, base: Number(part.dataset.x), start: e.clientX, scale, value: Number(part.dataset.x), moved: false }
-        : { kind: "net", id: net!.dataset.net!, base: Number(net!.dataset.y), start: e.clientY, scale, value: Number(net!.dataset.y), moved: false };
-    });
-    el.addEventListener("pointermove", (e) => {
-      const d = this.schDrag;
-      if (!d) return;
-      const delta = ((d.kind === "part" ? e.clientX : e.clientY) - d.start) / d.scale;
-      if (!d.moved && Math.abs(delta * d.scale) < 4) return;
-      // Указатель захватываем, только когда действительно потащили: иначе щелчок уйдёт панели, а не детали
-      if (!d.moved) el.setPointerCapture(e.pointerId);
-      d.moved = true;
-      // Шаг 4 единицы — линии проще выровнять
-      const value = Math.max(20, Math.round((d.base + delta) / 4) * 4);
-      if (value === d.value) return;
-      d.value = value;
-      this.renderSchematic();
-    });
-    const finish = () => {
-      const d = this.schDrag;
-      this.schDrag = undefined;
-      if (!d?.moved) return;
-      const base = this.scene.schematic ?? {};
-      this.scene.schematic = d.kind === "part" ? { ...base, x: { ...base.x, [d.id]: d.value } } : { ...base, y: { ...base.y, [d.id]: d.value } };
-      this.schJustDragged = true;
-      setTimeout(() => (this.schJustDragged = false), 0);
-      this.save();
-      this.record();
-      this.renderSchematic();
-    };
-    el.addEventListener("pointerup", finish);
-    el.addEventListener("pointercancel", finish);
+    this.schematic.resetLayout();
   }
 
   /** Щелчок по детали на схеме: тумблер переключается, остальное — панель детали. */
-  private bindSchematic(): void {
-    if (this.ui.schematic) this.bindSchematicDrag(this.ui.schematic);
-    this.ui.schematic?.addEventListener("click", (e) => {
-      if (this.schJustDragged) return;
-      const el = (e.target as Element).closest<SVGGElement>("[data-part]");
-      const c = el ? this.component(el.dataset.part!) : undefined;
-      if (!c) return;
-      this.setProjectsOpen(false);
-      if (this.tool !== "select") this.setTool("select");
-      if (part(c).clickToggles) {
-        part(c).toggle!(c);
-        this.changed();
-      } else {
-        this.selected = c.id;
-        this.picked = undefined;
-        this.selectedHole = undefined;
-        this.selectedBoard = undefined;
-        this.refreshMarks();
-        this.inspectorHtml = "";
-        this.renderInspector();
-      }
-      this.renderSchematic();
-    });
+  private schematicClick(c: Component): void {
+    this.setProjectsOpen(false);
+    if (this.tool !== "select") this.setTool("select");
+    if (part(c).clickToggles) {
+      part(c).toggle!(c);
+      this.changed();
+    } else {
+      this.selected = c.id;
+      this.picked = undefined;
+      this.selectedHole = undefined;
+      this.selectedBoard = undefined;
+      this.refreshMarks();
+      this.inspectorHtml = "";
+      this.renderInspector();
+    }
   }
 
   // ─── Проекты ───────────────────────────────────────────────────────────
@@ -846,159 +697,28 @@ export class App {
   projectsOpen = false;
   /** Вызывается, когда панель проектов открывается или закрывается (для кнопки). */
   onProjects?: () => void;
-  /** Имя текущего проекта (под ним он сохранён или открыт). */
-  projectName = "";
-  /** Имя в поле ввода, пока его набирают. */
-  private projectDraft?: string;
-  /** Проект, который попросили удалить: второе нажатие удаляет. */
-  private confirmDelete?: string;
-
   setProjectsOpen(open: boolean): void {
     if (this.projectsOpen === open) return;
     this.projectsOpen = open;
-    this.confirmDelete = undefined;
-    this.projectDraft = undefined;
+    this.projects.reset();
     if (open) this.setTool("select");
     this.inspectorHtml = "";
     this.renderInspector();
     this.onProjects?.();
   }
 
-  private projectsPanel(): [string, string] {
-    const name = this.projectDraft ?? this.projectName;
-    const list = listProjects();
-    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-    const date = (ms: number) => new Date(ms).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-    const exists = list.some((p) => p.name === name.trim());
-    const rows = list
-      .map(
-        (p) => `<li><span><b>${esc(p.name)}</b><br /><small>${date(p.savedAt)} · ${plural(p.scene.components.length, "деталь", "детали", "деталей")}</small></span>
-          <span class="row"><button class="btn inline" data-proj-act="open" data-name="${esc(p.name)}">Открыть</button>
-          <button class="btn inline danger" data-proj-act="delete" data-name="${esc(p.name)}">${this.confirmDelete === p.name ? "Точно?" : "Удалить"}</button></span></li>`,
-      )
-      .join("");
-    const html = `<div class="eyebrow">проекты</div><h2>${this.projectName ? esc(this.projectName) : "Новая схема"}</h2>
-      <div class="field"><label for="f-proj-name">Имя</label>
-        <input id="f-proj-name" class="btn" type="text" maxlength="60" placeholder="Например, мигалка" value="${esc(name)}" /></div>
-      <div class="row"><button class="btn inline" data-proj-act="save" ${name.trim() ? "" : "disabled"}>${exists ? "Перезаписать" : "Сохранить"}</button></div>
-      ${rows ? `<ul class="list projects">${rows}</ul>` : `<p class="sub">Сохранённых проектов пока нет. Они хранятся в этом браузере.</p>`}
-      <div class="field"><label>Файл</label>
-        <div class="row"><button class="btn inline" data-proj-act="export">Скачать файл</button>
-        <button class="btn inline" data-proj-act="import">Открыть файл</button></div>
-        <input type="file" id="f-proj-file" accept=".json,application/json" hidden /></div>
-      <p class="sub">Файл .json можно передать другому человеку или открыть в другом браузере. Открыть проект — как загрузить пример: Ctrl+Z вернёт прежнюю схему.</p>`;
-    return ["p", html];
+  /** Панель «Проекты»: имя, сохранение, список, файл. */
+  readonly projects = new ProjectsPanel(this);
+
+  /** Имя текущего проекта (под ним он сохранён или открыт). */
+  get projectName(): string {
+    return this.projects.name;
   }
 
-  /** Имя файла из имени проекта: без символов, запрещённых в именах файлов. */
-  private fileName(): string {
-    const base = (this.projectName || "схема").replace(/[\\/:*?"<>|]+/g, " ").trim() || "схема";
-    return `${base}.json`;
-  }
-
-  /** Скачать проект файлом: в claude.ai — через сохранение файлов артефакта, иначе обычной загрузкой. */
-  async exportProject(): Promise<void> {
-    const data = projectFile(this.projectName || "Без имени", this.scene);
-    const filename = this.fileName();
-    type Downloads = { save(r: { filename: string; data: string }): Promise<unknown> };
-    const claude = (window as unknown as { claude?: { use?(name: string): Promise<Downloads | null> } }).claude;
-    const downloads = claude?.use ? await claude.use("downloads").catch(() => null) : null;
-    if (downloads) {
-      try {
-        await downloads.save({ filename, data });
-      } catch (e) {
-        const code = (e as { code?: string }).code;
-        if (code !== "declined") this.toast("Файл не сохранён", code === "rate_limited" ? "Окно сохранения уже открыто." : "Сохранение файлов здесь недоступно.");
-      }
-      return;
-    }
-    if (claude?.use) {
-      // Внутри claude.ai без разрешения на файлы обычная загрузка ничего не делает — говорим честно
-      this.toast("Скачивание здесь недоступно", "В этом окне песочница не может сохранять файлы. Сохраните проект в браузере (кнопка «Сохранить») или откройте песочницу отдельно.");
-      return;
-    }
-    const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  private async importProject(file: File): Promise<void> {
-    try {
-      const { name, scene } = parseProjectFile(await file.text(), file.name.replace(/\.json$/i, ""));
-      this.replaceScene(scene);
-      this.projectName = name;
-      this.projectDraft = undefined;
-      this.toast("Проект открыт", `«${name}» из файла. Ctrl+Z вернёт прежнюю схему.`);
-    } catch (e) {
-      this.toast("Не открылось", (e as Error).message);
-    }
+  /** Перерисовать панель справа, даже если разметка та же. */
+  refreshInspector(): void {
     this.inspectorHtml = "";
     this.renderInspector();
-  }
-
-  private bindProjects(root: HTMLElement): void {
-    const input = root.querySelector<HTMLInputElement>("#f-proj-name");
-    input?.addEventListener("input", () => {
-      this.projectDraft = input.value;
-      const save = root.querySelector<HTMLButtonElement>('[data-proj-act="save"]');
-      if (save) {
-        save.disabled = !input.value.trim();
-        save.textContent = listProjects().some((p) => p.name === input.value.trim()) ? "Перезаписать" : "Сохранить";
-      }
-    });
-    input?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") root.querySelector<HTMLButtonElement>('[data-proj-act="save"]')?.click();
-    });
-    const file = root.querySelector<HTMLInputElement>("#f-proj-file");
-    file?.addEventListener("change", () => {
-      if (file.files?.[0]) void this.importProject(file.files[0]);
-    });
-    root.querySelectorAll<HTMLButtonElement>("[data-proj-act]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const name = btn.dataset.name ?? "";
-        switch (btn.dataset.projAct) {
-          case "save": {
-            const n = (this.projectDraft ?? this.projectName).trim();
-            if (!n) return;
-            if (saveProject(n, this.scene)) {
-              this.projectName = n;
-              this.projectDraft = undefined;
-              this.toast("Сохранено", `Проект «${n}» — в этом браузере.`);
-            } else this.toast("Не сохранилось", "Хранилище браузера недоступно или переполнено. Скачайте проект файлом.");
-            break;
-          }
-          case "open": {
-            const scene = loadProject(name);
-            if (!scene) return;
-            this.replaceScene(scene);
-            this.projectName = name;
-            this.projectDraft = undefined;
-            break;
-          }
-          case "delete":
-            if (this.confirmDelete !== name) {
-              this.confirmDelete = name;
-            } else {
-              deleteProject(name);
-              this.confirmDelete = undefined;
-            }
-            break;
-          case "export":
-            void this.exportProject();
-            return;
-          case "import":
-            file?.click();
-            return;
-        }
-        this.inspectorHtml = "";
-        this.renderInspector();
-      });
-    });
   }
 
   setTool(tool: Tool): void {
@@ -1070,20 +790,6 @@ export class App {
   private newComponent(tool: PlaceTool, placement: Component["placement"]): Component {
     const { type, def } = PLACE_TOOLS.get(tool)!;
     return { id: this.nextId(type), ...def.create(this.toolSettings.get(tool)), placement } as Component;
-  }
-
-  /** Кнопки инструментов деталей — в группы на панели слева, в порядке реестра. */
-  private renderToolButtons(): void {
-    for (const { def } of PLACE_TOOLS.values()) {
-      if (!def.group) continue;
-      const body = this.ui.tools.querySelector(`details[data-group="${def.group}"] .group-body`);
-      body?.insertAdjacentHTML(
-        "beforeend",
-        `<button class="tool" data-tool="${def.id}" aria-pressed="false" title="${def.title}">
-          <svg viewBox="0 0 30 18">${def.icon}</svg>${def.label}<kbd>${def.kbd ?? def.keys[0]}</kbd>
-        </button>`,
-      );
-    }
   }
 
   /**
@@ -1732,27 +1438,27 @@ export class App {
     let html: string;
     let key: string;
     if (this.projectsOpen) {
-      [key, html] = this.projectsPanel();
+      [key, html] = this.projects.render();
     } else if (target && this.component(target)) {
-      [key, html] = this.componentPanel(this.component(target)!, true);
+      [key, html] = componentPanel(this, this.component(target)!, true);
     } else if (target && (this.scene.traces ?? []).some((t) => t.id === target)) {
-      [key, html] = this.tracePanel(target);
+      [key, html] = tracePanel(this, target);
     } else if (target && this.scene.wires.some((w) => w.id === target)) {
-      [key, html] = this.wirePanel(target);
+      [key, html] = wirePanel(this, target);
     } else if (this.selectedHole && this.tool === "select") {
-      [key, html] = this.holePanel(this.selectedHole);
+      [key, html] = holePanel(this, this.selectedHole);
     } else if (this.selectedBoard && boardById(this.selectedBoard) && this.tool === "select") {
-      [key, html] = this.boardPanel(boardById(this.selectedBoard)!);
+      [key, html] = boardPanel(boardById(this.selectedBoard)!);
     } else if (this.tool === "bb" || this.tool === "pcb") {
-      [key, html] = this.boardToolPanel(this.tool === "bb" ? "breadboard" : "pcb");
+      [key, html] = boardToolPanel(this, this.tool === "bb" ? "breadboard" : "pcb");
     } else if (this.isPlaceTool(this.tool)) {
       [key, html] = this.newPartPanel(this.tool);
     } else if (this.tool === "wire") {
-      [key, html] = this.wireToolPanel();
+      [key, html] = wireToolPanel(this);
     } else if (this.tool === "trace") {
-      [key, html] = this.traceToolPanel();
+      [key, html] = traceToolPanel();
     } else {
-      [key, html] = this.overviewPanel();
+      [key, html] = overviewPanel(this);
     }
     // Сводка и подсказки — только по кнопке «?»; иначе панель справа видна, лишь когда есть что показать
     this.ui.inspector.hidden = key === "o" && !this.showHelp;
@@ -1764,161 +1470,18 @@ export class App {
     this.inspectorHtml = html;
     this.ui.inspector.innerHTML = html;
     this.bindInspector();
-    if (key === "p") this.bindProjects(this.ui.inspector);
+    if (key === "p") this.projects.bind(this.ui.inspector);
   }
 
-  private statusPill(c: Component): string {
-    const p = part(c);
-    const s = this.sim.state(c.id);
-    if (s.burned) return pill("bad", p.burnedWord ?? "СГОРЕЛ");
-    if (this.sim.isShorted(c)) return pill("bad", "КОРОТКОЕ ЗАМЫКАНИЕ");
-    if (p.reversedPill && this.sim.isReversed(c)) return p.reversedPill;
-    const k = this.sim.overload(c);
-    const t = heatThreshold(c);
-    if (t && k > t) return pill("bad", `ПЕРЕГРУЗКА ×${k.toFixed(1).replace(".", ",")}`);
-    if (t && k > t * 0.7) return pill("warn", p.warmWord?.(k) ?? "ГРЕЕТСЯ");
-    return p.status?.(c, this.sim) ?? pill("ok", "НОРМА");
-  }
 
-  private powerMeter(c: Component): string {
-    const load = this.sim.load(c);
-    if (!load) return "";
-    const k = load.ratio;
-    const t = heatThreshold(c);
-    const cls = k > t ? "bad" : k > t * 0.7 && !part(c).nearLimitOk ? "warn" : "";
-    const what = load.what[0].toUpperCase() + load.what.slice(1);
-    return `<div class="kv"><span>${what} / предел ${load.limit}</span><span>${Math.round(k * 100)} %</span></div>
-      <div class="meter ${cls}"><i style="width:${Math.min(100, k * 100)}%"></i></div>`;
-  }
 
-  private componentPanel(c: Component, pinned: boolean): [string, string] {
-    const p = part(c);
-    const s = this.sim.state(c.id);
-    const polar = p.polar(c) && !p.noFlip;
-    const pinName = p.pinNames ?? ["анод", "катод"];
-    const where =
-      c.placement.mode !== "board"
-        ? "на столе, на проводах"
-        : p.where
-          ? p.where(c, c.placement.holes)
-          : polar
-            ? `${pinName[0]} ${holeLabel(c.placement.holes[0])}, ${pinName[1]} ${holeLabel(c.placement.holes[1])}`
-            : c.placement.holes.map(holeLabel).join(" ↔ ");
-    const { title, body, editor = "" } = p.panel(c, this.sim);
-    const actions = pinned
-      ? `<div class="row">
-          ${s.burned ? `<button class="btn inline" data-act="repair" id="btn-repair-one">Заменить новой</button>` : ""}
-          ${polar ? `<button class="btn inline" data-act="flip" id="btn-flip">Перевернуть (F)</button>` : ""}
-          ${c.placement.mode === "free" ? `<button class="btn inline" data-act="rotate" id="btn-rotate">Повернуть (R)</button>` : ""}
-          <button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button>
-        </div>`
-      : `<p class="sub">Нажмите, чтобы выбрать и изменить.</p>`;
-    const html = `<div class="eyebrow"><span class="ref">${c.id}</span></div>
-      <h2>${title}</h2>
-      ${this.statusPill(c)}
-      ${p.readout?.(c, this.sim) ?? readout(this.sim.voltage(c), this.sim.current(c), this.sim.power(c))}
-      ${this.powerMeter(c)}
-      <div class="kv"><span>Где</span><span>${where}</span></div>
-      ${this.actualRows(c)}
-      ${body}
-      ${pinned ? editor : ""}
-      ${actions}`;
-    return [`c:${c.id}`, html];
-  }
 
-  private wirePanel(id: string): [string, string] {
-    const w = this.scene.wires.find((x) => x.id === id)!;
-    const b = this.sim.branch(id);
-    const name = (e: Endpoint) => ("hole" in e ? holeLabel(e.hole) : `вывод ${e.pin + 1} детали ${e.comp}`);
-    const sameBoard = isFlatWire({ ...w, shape: "flat" });
-    const shapeRow = sameBoard
-      ? `<div class="field"><label>Какой провод</label>${this.shapeButtons(w.shape ?? "arc")}</div>`
-      : `<p class="sub">Концы не на одной плате — такой провод идёт только дугой.</p>`;
-    const html = `<div class="eyebrow"><span class="ref">${id}</span> · провод</div>
-      <h2>${isFlatWire(w) ? "Прямая перемычка" : "Провод"}</h2>
-      ${readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
-      <div class="kv"><span>От</span><span>${name(w.a)}</span></div>
-      <div class="kv"><span>До</span><span>${name(w.b)}</span></div>
-      <div class="field"><label>Цвет</label>${this.swatches(w.color, false)}</div>
-      ${shapeRow}
-      <div class="kv"><span>Сопротивление</span><span>${formatOhms(wireResistance(this.scene, w))}</span></div>
-      <p class="sub">Медь 22 AWG, ≈ 53 мОм на метр — сопротивление зависит от длины провода. Светлые точки показывают направление тока (от плюса к минусу), скорость — его силу.</p>
-      ${this.selected === id ? `<div class="row"><button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button></div>` : ""}`;
-    return [`w:${id}`, html];
-  }
 
-  /** Кружки цветов; auto — с вариантом «Авто». */
-  private swatches(current: string, auto: boolean): string {
-    const items = [...(auto ? [{ hex: "auto", name: "авто: красный к плюсу, чёрный к минусу" }] : []), ...WIRE_PALETTE];
-    return `<div class="swatches" role="group" aria-label="Цвет провода">${items
-      .map(
-        (c) =>
-          `<button class="swatch${c.hex === "auto" ? " auto" : ""}" data-color="${c.hex}" title="${c.name}" aria-label="${c.name}" aria-pressed="${c.hex === current}"${
-            c.hex === "auto" ? "" : ` style="background:${c.hex}"`
-          }>${c.hex === "auto" ? "A" : ""}</button>`,
-      )
-      .join("")}</div>`;
-  }
 
-  /** Переключатель «прямая перемычка / гибкий дугой». */
-  private shapeButtons(current: WireShape): string {
-    const b = (shape: WireShape, text: string) =>
-      `<button class="btn inline" data-shape="${shape}" aria-pressed="${current === shape}">${text}</button>`;
-    return `<div class="row">${b("flat", "Прямая перемычка")}${b("arc", "Гибкий, дугой")}</div>`;
-  }
 
-  private tracePanel(id: string): [string, string] {
-    const t = (this.scene.traces ?? []).find((x) => x.id === id)!;
-    const b = this.sim.branch(id);
-    const a = HOLE_BY_ID.get(t.a)!;
-    const c = HOLE_BY_ID.get(t.b)!;
-    const lengthMm = Math.hypot(a.x - c.x, a.z - c.z) * 2.54;
-    const html = `<div class="eyebrow"><span class="ref">${id}</span> · дорожка</div>
-      <h2>Медная дорожка</h2>
-      ${readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
-      <div class="kv"><span>От</span><span>${holeLabel(t.a)}</span></div>
-      <div class="kv"><span>До</span><span>${holeLabel(t.b)}</span></div>
-      <div class="kv"><span>Длина</span><span>${String(lengthMm.toFixed(1)).replace(".", ",")} мм</span></div>
-      <div class="kv"><span>Сопротивление</span><span>${formatOhms(traceResistance(t.a, t.b))}</span></div>
-      <p class="sub">Медь 35 мкм, ширина с площадку — 1,8 мм: ≈ 0,27 мОм на миллиметр. Чтобы набрать хотя бы 1 Ом, понадобилось бы ≈ 3,7 м такой дорожки.</p>
-      <div class="row"><button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button></div>`;
-    return [`t:${id}`, html];
-  }
 
-  private traceToolPanel(): [string, string] {
-    const html = `<div class="eyebrow">печатная плата</div><h2>Дорожка</h2>
-      <p class="sub">На печатной плате площадки <b>ничем не соединены</b> — в отличие от макетки. Соединения рисуются медными дорожками: площадка → площадка → … Esc — закончить.</p>
-      <p class="sub">Детали ставятся на площадки так же, как в макетку, и припаиваются. Провода можно вести от площадок к батарее, блоку питания или макетке.</p>`;
-    return [`tt`, html];
-  }
 
-  private wireToolPanel(): [string, string] {
-    const cur = this.defaults.wireColor;
-    const name = cur === "auto" ? "авто" : (WIRE_PALETTE.find((x) => x.hex === cur)?.name ?? "");
-    const html = `<div class="eyebrow">новый провод</div><h2>Провод</h2>
-      <div class="field"><label>Какой провод</label>${this.shapeButtons(this.defaults.wireShape)}</div>
-      <p class="sub">${
-        this.defaults.wireShape === "flat"
-          ? "Прямая перемычка лежит на плате, концы загнуты в отверстия — аккуратно и не мешает. Работает, если оба конца на одной плате; к детали на столе или на другую плату провод всё равно пойдёт дугой."
-          : "Гибкий провод идёт дугой — дотянется куда угодно: к детали на столе, на другую плату."
-      }</p>
-      <div class="field"><label>Цвет: ${name}</label>${this.swatches(cur, true)}</div>
-      <p class="sub">Принято: <b>красный — плюс</b>, <b>чёрный или синий — минус</b>. «Авто» красит так сам, если провод идёт к батарее или шине, остальные — по очереди. Цвет готового провода меняется, если нажать на него в режиме «Выбор».</p>`;
-    return [`wt`, html];
-  }
 
-  private holePanel(h: Hole): [string, string] {
-    const v = this.sim.solution.voltage.get(h.node);
-    const occ = this.occupied().get(h.id);
-    const html = `<div class="eyebrow">отверстие</div>
-      <h2>${holeLabel(h.id)}</h2>
-      <div class="kv"><span>Соединено с</span><span>${describeNode(h.node)}</span></div>
-      <div class="kv"><span>Потенциал</span><span>${v === undefined ? "не подключено" : formatSI(v, "В")}</span></div>
-      <div class="kv"><span>Занято</span><span>${occ ?? "свободно"}</span></div>
-      <p class="sub">Подсвечены все отверстия, соединённые с этим внутри платы. Esc — закрыть.</p>
-      ${boardById(h.boardId) ? this.boardSection(boardById(h.boardId)!) : ""}`;
-    return [`h:${h.id}`, html];
-  }
 
   private newPartPanel(tool: PlaceTool): [string, string] {
     const { def } = PLACE_TOOLS.get(tool)!;
@@ -1927,42 +1490,6 @@ export class App {
     return [`n:${tool}`, html];
   }
 
-  private overviewPanel(): [string, string] {
-    const rows: string[] = [];
-    for (const c of this.scene.components) {
-      const s = this.sim.state(c.id);
-      const t = heatThreshold(c);
-      const flag = s.burned
-        ? " — вышел из строя"
-        : this.sim.isShorted(c)
-          ? " — КЗ"
-          : this.sim.isReversed(c)
-            ? " — наоборот"
-            : t && this.sim.overload(c) > t
-              ? " — перегрузка"
-              : "";
-      rows.push(`<li><span><span class="ref">${c.id}</span> ${part(c).label(c)}${flag}</span><span>${formatSI(Math.abs(this.sim.current(c)), "А")}</span></li>`);
-    }
-    const html = `<div class="eyebrow">схема</div>
-      <h2>${this.scene.components.length ? "Токи через детали" : "Стол пуст"}</h2>
-      ${rows.length ? `<ul class="list">${rows.join("")}</ul>` : BOARDS.length
-            ? `<p>Начните с батареи (9), затем добавьте резистор (3) и светодиод (6). Или выберите пример вверху.</p>`
-            : `<p>На столе пусто. Положите макетку (B) или печатную плату (V), потом батарею (9), резистор (3) и светодиод (6). Или выберите пример вверху.</p>`}
-      <div class="help">
-        <b>Как устроена макетка.</b> Пять отверстий столбца (a–e или f–j) соединены внутри. Шины + и − вдоль краёв соединены по всей длине. Наведите курсор на отверстие — подсветятся все, что с ним соединены.
-      </div>
-      <div class="help">
-        <b>Допуски.</b> ${
-          this.sim.tolerance.enabled
-            ? "Включены: у каждой детали параметры немного отличаются от номинала, как у настоящих. Значения видны в панели детали."
-            : "Выключены: все детали точно по номиналу. Кнопка «Допуски» вверху включает разброс, как у настоящих деталей."
-        }
-      </div>
-      <div class="help">
-        <b>Управление.</b> <b>Shift+нажатие</b> на деталь, провод или дорожку (на телефоне — долгое нажатие) — здесь появятся ток, напряжение и настройки. Обычное нажатие выделяет: Del — удалить, R — повернуть, F — перевернуть; тумблер от нажатия переключается. Детали можно перетаскивать мышью — и на столе, и по плате. Нажатие на отверстие показывает, с чем оно соединено. Вращать вид — зажать и тянуть, приближать — колесом.
-      </div>`;
-    return [`o`, html];
-  }
 
   private bindInspector(): void {
     const root = this.ui.inspector;
@@ -2093,14 +1620,6 @@ export class App {
 
 
 
-
-/** «1 деталь», «3 детали», «7 деталей». */
-function plural(n: number, one: string, few: string, many: string): string {
-  const d = n % 10;
-  const dd = n % 100;
-  const word = d === 1 && dd !== 11 ? one : d >= 2 && d <= 4 && (dd < 12 || dd > 14) ? few : many;
-  return `${n} ${word}`;
-}
 
 
 
