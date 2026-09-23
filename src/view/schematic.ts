@@ -10,17 +10,9 @@
 
 import { HOLE_BY_ID } from "../model/breadboard";
 import {
-  BATTERIES,
-  LAMPS,
-  LEDS,
   MOSFETS,
   TRANSISTORS,
-  capacitorVolts,
-  diodeSpec,
-  formatFarads,
   mosfetPin,
-  pinCount,
-  thtResistorSpec,
   type Component,
   type Mosfet,
   type Pin,
@@ -28,8 +20,9 @@ import {
   type SchematicLayout,
   type Transistor,
 } from "../model/types";
-import { formatOhms, formatSI } from "../sim/resistorCodes";
+import { formatSI } from "../sim/resistorCodes";
 import { endpointNode, pinNode, type Simulation } from "../sim/simulation";
+import { part } from "../parts";
 
 export interface Netlist {
   /** Узлы расчёта в каждой цепи (только цепи, к которым подключены детали). */
@@ -59,7 +52,7 @@ export function buildNetlist(scene: Scene): Netlist {
   };
   const pinNodes = new Map<string, string[]>();
   for (const c of scene.components) {
-    const nodes = Array.from({ length: pinCount(c) }, (_, p) => pinNode(c, p as Pin));
+    const nodes = Array.from({ length: part(c).pins }, (_, p) => pinNode(c, p as Pin));
     nodes.forEach(find);
     pinNodes.set(c.id, nodes);
   }
@@ -106,61 +99,6 @@ const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 function formatVolts(v: number): string {
   const t = (Math.abs(v) < 0.005 ? 0 : v).toFixed(2).replace(".", ",").replace("-", "−");
   return `${t} В`;
-}
-
-/** Номинал для подписи. */
-function value(c: Component): string {
-  switch (c.type) {
-    case "resistor":
-      return `${formatOhms(c.ohms)}${c.variant === "smd" ? ` ${c.smdSize}` : `, ${String(thtResistorSpec(c).ratedW).replace(".", ",")} Вт`}`;
-    case "capacitor":
-      return `${formatFarads(c.uF)}, ${String(capacitorVolts(c)).replace(".", ",")} В`;
-    case "diode":
-      return diodeSpec(c).label;
-    case "led":
-      return `${LEDS[c.color].label}${c.size === "1W" ? ", 1 Вт" : ""}`;
-    case "lamp":
-      return LAMPS[c.kind].label;
-    case "battery":
-      return BATTERIES[c.kind].label;
-    case "psu":
-      return c.on ? `${formatSI(c.volts, "В")} / ${formatSI(c.amps, "А")}` : "выход выкл.";
-    case "switch":
-      return c.closed ? "замкнут" : "разомкнут";
-    case "transistor":
-      return TRANSISTORS[c.kind].label;
-    case "mosfet":
-      return MOSFETS[c.kind].label;
-  }
-}
-
-/** Обозначение двухвыводной детали в своей системе координат: вывод 0 вверху (y = −HALF), вывод 1 внизу. */
-function symbol2(c: Component): string {
-  switch (c.type) {
-    case "resistor":
-      return `<path d="M0 -20V-15M0 15V20"/><rect x="-5" y="-15" width="10" height="30"/>`;
-    case "lamp":
-      return `<path d="M0 -20V-11M0 11V20"/><circle r="11"/><path d="M-7.8 -7.8L7.8 7.8M7.8 -7.8L-7.8 7.8"/>`;
-    case "capacitor":
-      return `<path d="M0 -20V-4M0 4V20M-12 -4H12M-12 4H12"/>${c.variant === "electrolytic" ? `<path d="M9 -13H15M12 -16V-10" class="thin"/>` : ""}`;
-    case "diode":
-    case "led":
-      // Анод (вывод 0) сверху: треугольник остриём к катоду
-      return `<path d="M0 -20V-8M0 8V20M-9 8H9"/><path d="M-9 -8H9L0 8Z"/>${
-        c.type === "led" ? `<path d="M10 -6L17 -13M13 -1L20 -8M14 -13H17V-10M17 -8H20V-5" class="thin"/>` : ""
-      }`;
-    case "switch":
-      return c.closed
-        ? `<path d="M0 -20V-10M0 10V20M0 -10L0 10"/><circle cy="-10" r="1.8" class="dot"/><circle cy="10" r="1.8" class="dot"/>`
-        : `<path d="M0 -20V-10M0 10V20M0 10L11 -8"/><circle cy="-10" r="1.8" class="dot"/><circle cy="10" r="1.8" class="dot"/>`;
-    case "battery":
-      // Вывод 1 — плюс: длинная тонкая пластина со стороны вывода 1 (внизу), короткая толстая — минус
-      return `<path d="M0 -20V-4M0 4V20M-13 4H13"/><path d="M-7 -4H7" class="thick"/><path d="M9 11H15M12 8V14" class="thin"/>`;
-    case "psu":
-      return `<path d="M0 -20V-12M0 12V20"/><circle r="12"/><path d="M0 -6V6M-4 2L0 6L4 2" class="thin"/><path d="M8 17H14M11 14V20" class="thin"/>`;
-    default:
-      return "";
-  }
 }
 
 const isSource = (c: Component) => c.type === "battery" || c.type === "psu";
@@ -250,14 +188,14 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
   let x = LEFT;
   for (const c of parts) {
     const netOf = pins.get(c.id)!;
-    const auto = pinCount(c) === 2 ? x : x + COL * 0.4;
+    const auto = part(c).pins === 2 ? x : x + COL * 0.4;
     // Ручной сдвиг детали по горизонтали: остальные остаются на своих местах
     const px = layout.x?.[c.id] ?? auto;
     const current = Math.abs(c.type === "transistor" ? sim.transistor(c).ic : c.type === "mosfet" ? sim.mosfet(c).id : sim.current(c));
     const label = (lx: number, ly: number) =>
-      `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(value(c))}</text>` +
+      `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(part(c).value(c))}</text>` +
       `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`;
-    if (pinCount(c) === 2) {
+    if (part(c).pins === 2) {
       const [ya, yb] = [Y(netOf[0]), Y(netOf[1])];
       let top = Math.min(ya, yb);
       let bottom = Math.max(ya, yb);
@@ -278,7 +216,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
         // Невидимая область щелчка: обозначение и подпись
         `<rect class="hit" x="${num(px - 16)}" y="${num(yc - 26)}" width="96" height="52"/>` +
         `<path d="M${num(px)} ${num(top)}V${num(yc - HALF)}M${num(px)} ${num(yc + HALF)}V${num(bottom)}"/>${extra}` +
-        `<g transform="translate(${num(px)} ${num(yc)}) scale(1 ${flip})">${symbol2(c)}</g>` +
+        `<g transform="translate(${num(px)} ${num(yc)}) scale(1 ${flip})">${part(c).symbol?.(c) ?? ""}</g>` +
         label(px + 18, yc);
       placed.push({ c, x: px, attach, svg, bottom });
       x += COL;

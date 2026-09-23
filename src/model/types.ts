@@ -353,23 +353,7 @@ export function sameEndpoint(p: Endpoint, q: Endpoint): boolean {
   return "comp" in q && q.comp === p.comp && q.pin === p.pin;
 }
 
-/** Полярная ли деталь: важно, какой вывод куда. */
-export function isPolar(c: Component): boolean {
-  return (
-    c.type === "diode" ||
-    c.type === "led" ||
-    c.type === "battery" ||
-    c.type === "psu" ||
-    c.type === "transistor" ||
-    c.type === "mosfet" ||
-    (c.type === "capacitor" && c.variant === "electrolytic")
-  );
-}
 
-/** Сколько выводов у детали. */
-export function pinCount(c: Component): number {
-  return c.type === "transistor" || c.type === "mosfet" ? 3 : 2;
-}
 
 /**
  * Размер банки электролита. Таблица — для 16 В; на другое напряжение объём растёт примерно
@@ -388,26 +372,7 @@ export function formatFarads(uF: number): string {
   return `${String(Math.round(uF * 1000)).replace(".", ",")} нФ`;
 }
 
-/** Номинальная мощность детали, Вт (для перегрева). У батареи и выключателя нет. */
-export function ratedPower(c: Component): number | undefined {
-  switch (c.type) {
-    case "resistor":
-      return c.variant === "smd" ? SMD_SIZES[c.smdSize].ratedW : thtResistorSpec(c).ratedW;
-    case "lamp": {
-      const l = LAMPS[c.kind];
-      return l.ratedV * l.ratedA;
-    }
-    default:
-      return undefined;
-  }
-}
 
-/** Может ли деталь стоять в макетной плате: у SMD нет ножек. У батареи — отдельный корпус. */
-export function canGoOnBoard(type: ComponentType, variant?: "tht" | "smd"): boolean {
-  if (type === "battery" || type === "psu") return false;
-  if (type === "resistor") return variant !== "smd";
-  return true;
-}
 
 /** Платы сцены: из boards, из старой раскладки или стартовый набор. */
 export function sceneBoards(scene: Scene): BoardSpec[] {

@@ -38,12 +38,9 @@ import {
   ledSpec,
   thtResistorSpec,
   TRANSISTORS,
-  canGoOnBoard,
   formatFarads,
   isFlatWire,
-  isPolar,
   boardConflicts,
-  pinCount,
   sameEndpoint,
   sceneBoards,
   type BatteryKind,
@@ -71,6 +68,7 @@ import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
 import { schematicSvg } from "./view/schematic";
+import { PARTS, part } from "./parts";
 import type { World } from "./view/world";
 
 type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "tht" | "smd" | "cap" | "diode" | "led" | "bjt" | "fet" | "lamp" | "switch" | "battery" | "psu" | "delete";
@@ -86,13 +84,6 @@ const TOOL_KEYS: Record<string, Tool> = {
 /** Инструмент → тип детали. */
 const TOOL_TYPE: Record<PlaceTool, Component["type"]> = {
   tht: "resistor", smd: "resistor", cap: "capacitor", diode: "diode", led: "led", bjt: "transistor", fet: "mosfet", lamp: "lamp", switch: "switch", battery: "battery", psu: "psu",
-};
-/**
- * Обозначения по ЕСКД: R — резистор, C — конденсатор, VD — диод, HL — лампа и светодиод
- * (приборы световой индикации), VT — транзистор, SA — выключатель, GB — батарея.
- */
-const PREFIX: Record<Component["type"], string> = {
-  resistor: "R", lamp: "HL", led: "HL", switch: "SA", battery: "GB", capacitor: "C", diode: "VD", transistor: "VT", mosfet: "VT", psu: "G",
 };
 const WIRE_COLORS = ["#e3b21c", "#2f9e5a", "#2f6fd1", "#e2762a", "#8e4cc9", "#e9e9e4"];
 /** Палитра проводов для ручного выбора. */
@@ -229,7 +220,7 @@ export class App {
   // ─── Модель ────────────────────────────────────────────────────────────
 
   private nextId(type: Component["type"]): string {
-    const p = PREFIX[type];
+    const p = PARTS[type].prefix;
     let n = 1;
     for (const c of this.scene.components) {
       const m = c.id.match(new RegExp(`^${p}(\\d+)$`));
@@ -783,7 +774,7 @@ export class App {
     const v = this.views.get(c.id)!;
     this.world.emitSparks(v.hotspot, 18);
     this.world.emitSmoke(v.hotspot, 10);
-    const [what, note] = burnMessage(c);
+    const [what, note] = part(c).burn(c);
     this.toast(what, note);
   }
 
@@ -1224,7 +1215,7 @@ export class App {
       // Для транзистора: К-Б-Э → Э-Б-К
       c.placement.holes = [...c.placement.holes].reverse();
     } else {
-      const last = pinCount(c) - 1;
+      const last = part(c).pins - 1;
       for (const w of this.scene.wires) {
         for (const k of ["a", "b"] as const) {
           const e = w[k];
@@ -1676,7 +1667,7 @@ export class App {
 
   private clickPlace(tool: PlaceTool): void {
     const h = this.hover;
-    const boardOk = canGoOnBoard(TOOL_TYPE[tool], tool === "smd" ? "smd" : "tht");
+    const boardOk = PARTS[TOOL_TYPE[tool]].onBoard(tool === "smd" ? "smd" : "tht");
 
     if ((tool === "bjt" || tool === "fet") && h.hole) {
       const holes = this.transistorHoles(h.hole);
@@ -1979,7 +1970,7 @@ export class App {
 
   private componentPanel(c: Component, pinned: boolean): [string, string] {
     const s = this.sim.state(c.id);
-    const polar = isPolar(c) && c.type !== "battery" && c.type !== "psu";
+    const polar = part(c).polar(c) && c.type !== "battery" && c.type !== "psu";
     const pinName = c.type === "capacitor" ? ["+", "−"] : ["анод", "катод"];
     const where =
       c.type === "mosfet"
@@ -2302,7 +2293,7 @@ export class App {
             : t && this.sim.overload(c) > t
               ? " — перегрузка"
               : "";
-      rows.push(`<li><span><span class="ref">${c.id}</span> ${label(c)}${flag}</span><span>${formatSI(Math.abs(this.sim.current(c)), "А")}</span></li>`);
+      rows.push(`<li><span><span class="ref">${c.id}</span> ${part(c).label(c)}${flag}</span><span>${formatSI(Math.abs(this.sim.current(c)), "А")}</span></li>`);
     }
     const html = `<div class="eyebrow">схема</div>
       <h2>${this.scene.components.length ? "Токи через детали" : "Стол пуст"}</h2>
@@ -2524,30 +2515,6 @@ export class App {
   }
 }
 
-function label(c: Component): string {
-  switch (c.type) {
-    case "resistor":
-      return `${formatOhms(c.ohms)}${c.variant === "smd" ? ` SMD ${c.smdSize}` : `, ${formatW(thtResistorSpec(c).ratedW)}`}`;
-    case "lamp":
-      return `лампа ${LAMPS[c.kind].label}`;
-    case "switch":
-      return c.closed ? "тумблер, вкл." : "тумблер, выкл.";
-    case "battery":
-      return BATTERIES[c.kind].label;
-    case "capacitor":
-      return `${formatFarads(c.uF)} ${formatV(capacitorVolts(c))}${c.variant === "electrolytic" ? "" : " керамический"}`;
-    case "diode":
-      return diodeSpec(c).label;
-    case "led":
-      return `светодиод ${LEDS[c.color].label}${c.size === "1W" ? " 1 Вт" : ""}`;
-    case "transistor":
-      return `транзистор ${TRANSISTORS[c.kind].label}, I<sub>к</sub>`;
-    case "mosfet":
-      return `MOSFET ${MOSFETS[c.kind].label}, I<sub>с</sub>`;
-    case "psu":
-      return c.on ? `блок питания ${formatSI(c.volts, "В")} / ${formatSI(c.amps, "А")}` : "блок питания, выход выкл.";
-  }
-}
 
 const ROLE_RU = { G: "З", D: "С", S: "И" } as const;
 
@@ -2557,40 +2524,6 @@ function mosfetPinNames(kind: MosfetKind): string {
   return MOSFETS[kind].pins.map((r) => names[r]).join(", ");
 }
 
-/** Заголовок и пояснение для уведомления о выходе детали из строя. */
-function burnMessage(c: Component): [string, string] {
-  switch (c.type) {
-    case "lamp":
-      return [`Лампа ${c.id} перегорела`, `Номинал ${LAMPS[c.kind].label}. Добавьте последовательно резистор или возьмите батарею слабее.`];
-    case "resistor":
-      return c.variant === "smd"
-        ? [`Резистор ${c.id} сгорел`, `Корпус ${c.smdSize} рассеивает не больше ${formatSI(SMD_SIZES[c.smdSize].ratedW, "Вт")}. Возьмите корпус крупнее или резистор с бо́льшим сопротивлением.`]
-        : [`Резистор ${c.id} сгорел`, `Номинал ${formatW(thtResistorSpec(c).ratedW)}. Возьмите резистор мощнее, увеличьте сопротивление или понизьте напряжение.`];
-    case "led": {
-      const s = ledSpec(c);
-      const vf = String(Math.round((LEDS[c.color].vf + s.vfAdd) * 10) / 10).replace(".", ",");
-      return [`Светодиод ${c.id} сгорел`, `Ток больше ${formatSI(s.ratedA * 1.5, "А")}. Поставьте последовательно резистор: R = (U − ${vf} В) / ${String(s.ratedA).replace(".", ",")} А.`];
-    }
-    case "diode":
-      return [`Диод ${c.id} сгорел`, `Ток больше ${formatSI(diodeSpec(c).maxA, "А")}. Ограничьте ток резистором или возьмите диод мощнее.`];
-    case "mosfet":
-      return [
-        `MOSFET ${c.id} сгорел`,
-        `Больше ${String(MOSFETS[c.kind].maxP).replace(".", ",")} Вт без радиатора или ток выше предела. Полевой транзистор греется, когда приоткрыт: подайте на затвор полное напряжение или ограничьте ток нагрузкой.`,
-      ];
-    case "transistor":
-      return [
-        `Транзистор ${c.id} сгорел`,
-        "Ток коллектора больше 100 мА или мощность больше 0,5 Вт. Поставьте резистор в цепь коллектора и резистор в базу.",
-      ];
-    case "capacitor":
-      return c.variant === "electrolytic"
-        ? [`Конденсатор ${c.id} вздулся`, `Электролит не терпит обратной полярности и напряжения выше ${formatV(capacitorVolts(c))}. Проверьте, где плюс (F — перевернуть), или возьмите конденсатор на большее напряжение.`]
-        : [`Конденсатор ${c.id} пробит`, `Напряжение выше ${formatV(capacitorVolts(c))}. Возьмите конденсатор на большее напряжение.`];
-    default:
-      return [`${c.id} вышел из строя`, ""];
-  }
-}
 
 /** «1 деталь», «3 детали», «7 деталей». */
 function plural(n: number, one: string, few: string, many: string): string {

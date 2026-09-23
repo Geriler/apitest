@@ -53,7 +53,6 @@ import {
   isFlatWire,
   type WireShape,
   mosfetPin,
-  ratedPower,
   type Component,
   type ComponentState,
   type Endpoint,
@@ -63,6 +62,7 @@ import {
   type Scene,
   type Transistor,
 } from "../model/types";
+import { part } from "../parts";
 import { solveCircuit, type Branch, type BranchResult, type Extras, type Solution } from "./solver";
 import * as tolerance from "./tolerance";
 import { NO_TOLERANCE, type Tolerance } from "./tolerance";
@@ -705,7 +705,7 @@ export class Simulation {
     switch (c.type) {
       case "resistor":
       case "lamp": {
-        const rated = ratedPower(c)!;
+        const rated = part(c).rated!(c);
         return { ratio: this.branch(c.id).power / rated, what: "мощность", limit: formatLimit(rated, "Вт") };
       }
       case "led": {

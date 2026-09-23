@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { LEDS, capacitorVolts, diodeSpec, electrolyticSize, ledSpec, ratedPower, thtResistorSpec, type Component, type Scene } from "../src/model/types";
+import { LEDS, capacitorVolts, diodeSpec, electrolyticSize, ledSpec, thtResistorSpec, type Component, type Scene } from "../src/model/types";
+import { part } from "../src/parts";
 import { Simulation, VT, diodeParams } from "../src/sim/simulation";
 
 const free = (x: number) => ({ mode: "free" as const, x, z: 0, rot: 0 });
@@ -23,7 +24,7 @@ const R = (watts?: number): Component => ({ id: "R1", type: "resistor", variant:
 
 describe("номиналы деталей", () => {
   it("старые схемы без номинала: резистор 0,25 Вт, электролит 16 В, керамика 50 В, 1N4007, светодиод 5 мм", () => {
-    expect(ratedPower(R())).toBe(0.25);
+    expect(part(R()).rated!(R())).toBe(0.25);
     expect(capacitorVolts({ variant: "electrolytic" })).toBe(16);
     expect(capacitorVolts({ variant: "ceramic" })).toBe(50);
     expect(diodeSpec({}).label).toBe("1N4007");
