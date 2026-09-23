@@ -917,6 +917,11 @@ export class App {
       }
       return;
     }
+    if (claude?.use) {
+      // Внутри claude.ai без разрешения на файлы обычная загрузка ничего не делает — говорим честно
+      this.toast("Скачивание здесь недоступно", "В этом окне песочница не может сохранять файлы. Сохраните проект в браузере (кнопка «Сохранить») или откройте песочницу отдельно.");
+      return;
+    }
     const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url;
