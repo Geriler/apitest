@@ -195,6 +195,54 @@ try {
       await page.waitForTimeout(300);
       const wire = await page.evaluate(() => window.maketka.scene.wires.at(-1));
       check(wire.color === "#2f6fd1" && "hole" in wire.a && wire.a.hole === "f2", `провод выбранного цвета: ${wire.color} ${JSON.stringify(wire.a)}`);
+
+      // Пример 3: мигалка на транзисторах
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("1");
+      await page.selectOption("#demo-select", "blinker");
+      const seen = { hl1: false, hl2: false, hl1Only: false, hl2Only: false };
+      for (let i = 0; i < 16; i++) {
+        await page.waitForTimeout(250);
+        const cur = await page.evaluate(() => {
+          const a = window.maketka;
+          return [a.sim.current(a.component("HL1")), a.sim.current(a.component("HL2"))];
+        });
+        const on1 = cur[0] > 0.005, on2 = cur[1] > 0.005;
+        seen.hl1 ||= on1;
+        seen.hl2 ||= on2;
+        seen.hl1Only ||= on1 && !on2;
+        seen.hl2Only ||= on2 && !on1;
+        if (i === 6) await page.screenshot({ path: "screenshots/desktop-blinker.png" });
+      }
+      check(seen.hl1Only && seen.hl2Only, `мигалка: светодиоды горят по очереди ${JSON.stringify(seen)}`);
+      const vt1 = await page.evaluate(() => {
+        const s = window.maketka.world.toScreen(window.maketka.views.get("VT1").hotspot);
+        return { x: s.x, y: s.y + 6 };
+      });
+      await page.mouse.click(vt1.x, vt1.y);
+      await page.waitForTimeout(400);
+      const panel = await page.textContent("#inspector");
+      check(/BC547B/.test(panel ?? "") && /I(К|к)/.test(panel ?? ""), "щелчок по VT1: панель транзистора с токами");
+      await page.screenshot({ path: "screenshots/desktop-transistor.png" });
+
+      // Поставить транзистор мышью: одно нажатие → три соседних отверстия
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("0");
+      const f3 = await page.evaluate(() => {
+        const s = window.maketka.world.toScreen(window.maketka.endpointPos({ hole: "f3" }));
+        return { x: s.x, y: s.y };
+      });
+      await page.mouse.move(f3.x, f3.y);
+      await page.mouse.click(f3.x, f3.y);
+      await page.waitForTimeout(300);
+      const q = await page.evaluate(() => window.maketka.scene.components.at(-1));
+      check(q.type === "transistor" && q.placement.holes.join() === "f3,f4,f5", `мышью: транзистор ${q.id} в ${q.placement.holes?.join(", ")}`);
+      await page.evaluate((id) => {
+        window.maketka.selected = id;
+      }, q.id);
+      await page.keyboard.press("f");
+      const flipped = await page.evaluate((id) => window.maketka.component(id).placement.holes.join(), q.id);
+      check(flipped === "f5,f4,f3", `F переворачивает транзистор: ${flipped}`);
     }
 
     check(errors.length === 0, `${viewport.name}: нет ошибок в консоли${errors.length ? ": " + errors.join(" | ") : ""}`);

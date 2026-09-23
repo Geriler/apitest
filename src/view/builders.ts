@@ -6,6 +6,7 @@ import {
   LEDS,
   SMD_SIZES,
   THT_RESISTOR,
+  TRANSISTORS,
   electrolyticSize,
   type Battery,
   type Capacitor,
@@ -15,6 +16,7 @@ import {
   type Led,
   type Resistor,
   type Switch,
+  type Transistor,
 } from "../model/types";
 import { colorBands, smdCode } from "../sim/resistorCodes";
 import { smdLabelTexture } from "./textures";
@@ -37,7 +39,7 @@ export interface Visual {
 export interface ComponentView {
   group: THREE.Group;
   /** Мировые координаты выводов: куда цепляются провода. */
-  pins: [THREE.Vector3, THREE.Vector3];
+  pins: THREE.Vector3[];
   /** Точка, откуда идёт дым или свет. */
   hotspot: THREE.Vector3;
   update(v: Visual): void;
@@ -94,7 +96,7 @@ function disposeGroup(group: THREE.Group): void {
 }
 
 /** Оставляет два вывода на плате так, чтобы корпус оказался посередине над ними. */
-function boardFrame(holes: [string, string]) {
+function boardFrame(holes: string[]) {
   const p0 = holePos(holes[0]);
   const p1 = holePos(holes[1]);
   const mid = p0.clone().add(p1).multiplyScalar(0.5);
@@ -111,7 +113,7 @@ function boardFrame(holes: [string, string]) {
  * от вывода 0 к выводу 1. На столе лежит; на плате лежит над отверстиями, а если они слишком близко — стоит.
  */
 function axialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, L: number, r: number) {
-  let pins: [THREE.Vector3, THREE.Vector3];
+  let pins: THREE.Vector3[];
   let hotspot: THREE.Vector3;
   if (c.placement.mode === "free") {
     const lift = r;
@@ -160,7 +162,7 @@ function axialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, L: 
  * spacing — расстояние между выводами у корпуса, bottom — высота низа корпуса над платой/столом.
  */
 function radialLayout(c: Component, group: THREE.Group, body: THREE.Object3D, spacing: number, bottom: number, height: number) {
-  let pins: [THREE.Vector3, THREE.Vector3];
+  let pins: THREE.Vector3[];
   let hotspot: THREE.Vector3;
   if (c.placement.mode === "free") {
     body.position.y = bottom;
@@ -219,7 +221,7 @@ function thtBody(c: Resistor) {
 
 function resistorView(c: Resistor): ComponentView {
   const group = new THREE.Group();
-  let pins: [THREE.Vector3, THREE.Vector3];
+  let pins: THREE.Vector3[];
   let hotspot: THREE.Vector3;
   let bodyMat: THREE.MeshStandardMaterial;
   let extraMats: THREE.MeshStandardMaterial[] = [];
@@ -302,7 +304,7 @@ function lampView(c: Lamp): ComponentView {
   });
   const filamentMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, emissive: new THREE.Color(0xffb347), emissiveIntensity: 0 });
   const light = new THREE.PointLight(0xffc27a, 0, 14, 2);
-  let pins: [THREE.Vector3, THREE.Vector3];
+  let pins: THREE.Vector3[];
   let hotspot: THREE.Vector3;
 
   const bulb = (r: number) => {
@@ -397,7 +399,7 @@ function switchView(c: Switch): ComponentView {
   lever.rotation.z = c.closed ? -0.45 : 0.45;
   body.add(lever);
 
-  let pins: [THREE.Vector3, THREE.Vector3];
+  let pins: THREE.Vector3[];
   let hotspot: THREE.Vector3;
   if (c.placement.mode === "free") {
     body.position.y = 0.4;
@@ -526,7 +528,7 @@ function batteryView(c: Battery): ComponentView {
   group.position.set(c.placement.x, 0, c.placement.z);
   group.rotation.y = c.placement.rot;
   tagPickable(group, c.id);
-  const pins: [THREE.Vector3, THREE.Vector3] = [freeTransform(c, pinLocal[0]), freeTransform(c, pinLocal[1])];
+  const pins = [freeTransform(c, pinLocal[0]), freeTransform(c, pinLocal[1])];
   return {
     group,
     pins,
@@ -593,7 +595,7 @@ function capacitorView(c: Capacitor): ComponentView {
   const body = new THREE.Group();
   let bodyMat: THREE.MeshStandardMaterial;
   let top: THREE.Mesh | undefined;
-  let layout: { pins: [THREE.Vector3, THREE.Vector3]; hotspot: THREE.Vector3 };
+  let layout: { pins: THREE.Vector3[]; hotspot: THREE.Vector3 };
 
   if (c.variant === "electrolytic") {
     const size = electrolyticSize(c.uF);
@@ -711,7 +713,7 @@ function ledView(c: Led): ComponentView {
   light.position.y = h * 0.6;
   body.add(light);
 
-  let layout: { pins: [THREE.Vector3, THREE.Vector3]; hotspot: THREE.Vector3 };
+  let layout: { pins: THREE.Vector3[]; hotspot: THREE.Vector3 };
   if (c.placement.mode === "free") {
     // На столе видно, что анод (вывод 0) длиннее катода
     body.position.y = 1.4;
@@ -753,6 +755,100 @@ function ledView(c: Led): ComponentView {
   };
 }
 
+// ─── Транзистор TO-92 ──────────────────────────────────────────────────────
+
+function to92Label(label: string): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = "#1d1e21";
+  g.fillRect(0, 0, 256, 256);
+  g.fillStyle = "#c9ccd1";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.font = `600 58px "IBM Plex Mono", ui-monospace, monospace`;
+  g.fillText(label.slice(0, 5), 128, 100);
+  g.font = `600 46px "IBM Plex Mono", ui-monospace, monospace`;
+  g.fillText(label.slice(5) || " ", 128, 160);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * Корпус TO-92: полуцилиндр Ø 4,8 мм с плоской гранью, на ней маркировка.
+ * Выводы с шагом 2,54 мм по локальной оси X: коллектор (−X), база, эмиттер (+X);
+ * плоская грань смотрит в +Z — как если держать транзистор маркировкой к себе.
+ */
+function transistorView(c: Transistor): ComponentView {
+  const group = new THREE.Group();
+  const spec = TRANSISTORS[c.kind];
+  const r = mm(2.4);
+  const h = mm(4.8);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x1d1e21, roughness: 0.55 });
+  const faceMat = new THREE.MeshStandardMaterial({ map: to92Label(spec.label), roughness: 0.55 });
+  const body = new THREE.Group();
+  // Полуцилиндр задней стороной (z ≤ 0)
+  const back = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 32, 1, false, Math.PI / 2, Math.PI), bodyMat);
+  back.position.y = h / 2;
+  body.add(back);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(2 * r, h), faceMat);
+  face.position.y = h / 2;
+  body.add(face);
+  const topCap = new THREE.Mesh(new THREE.CircleGeometry(r, 32, Math.PI, Math.PI), bodyMat);
+  topCap.rotation.x = -Math.PI / 2;
+  topCap.position.y = h;
+  body.add(topCap);
+
+  const step = mm(2.54);
+  let pins: THREE.Vector3[];
+  let hotspot: THREE.Vector3;
+  if (c.placement.mode === "free") {
+    const bottom = 1.3;
+    body.position.y = bottom;
+    group.add(body);
+    for (const k of [-1, 0, 1]) {
+      group.add(lead([new THREE.Vector3(k * step * 0.5, bottom + 0.1, 0), new THREE.Vector3(k * step * 0.5, 0.5, 0), new THREE.Vector3(k * step * 1.2, mm(0.3), 0.8)], mm(0.22)));
+    }
+    group.position.set(c.placement.x, 0, c.placement.z);
+    group.rotation.y = c.placement.rot;
+    pins = [-1, 0, 1].map((k) => freeTransform(c, new THREE.Vector3(k * step * 1.2, mm(0.3), 0.8)));
+    hotspot = freeTransform(c, new THREE.Vector3(0, bottom + h, 0));
+  } else {
+    // Три соседних отверстия: корпус над средним, плоской гранью «вперёд» относительно направления К → Э
+    const holes = c.placement.holes;
+    const f = boardFrame([holes[0], holes[2]]);
+    pins = holes.map((id) => holePos(id));
+    const bottom = H + 1.0;
+    body.position.set(f.mid.x, bottom, f.mid.z);
+    body.rotation.y = f.angle;
+    group.add(body);
+    pins.forEach((p, i) => {
+      const atBody = f.mid.clone().addScaledVector(f.dir, (i - 1) * step * 0.5).setY(bottom + 0.1);
+      group.add(lead([p.clone().setY(H - 0.2), p.clone().setY(H + 0.35), atBody.clone().setY(H + 0.7), atBody], mm(0.22)));
+    });
+    hotspot = f.mid.clone().setY(bottom + h);
+  }
+
+  tagPickable(group, c.id);
+  return {
+    group,
+    pins,
+    hotspot,
+    update(v) {
+      if (v.burned) {
+        bodyMat.color.set(0x0b0a09);
+        faceMat.color.set(0x333333);
+        bodyMat.emissive.set(0x000000);
+        return;
+      }
+      bodyMat.emissive.setRGB(1, 0.3, 0.05).multiplyScalar(v.heat > 0.3 ? (v.heat - 0.3) * 1.2 : 0);
+    },
+    dispose: () => disposeGroup(group),
+  };
+}
+
 export function buildComponentView(c: Component): ComponentView {
   switch (c.type) {
     case "resistor":
@@ -769,6 +865,8 @@ export function buildComponentView(c: Component): ComponentView {
       return diodeView(c);
     case "led":
       return ledView(c);
+    case "transistor":
+      return transistorView(c);
   }
 }
 

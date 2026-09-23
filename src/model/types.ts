@@ -74,13 +74,26 @@ export const LED_RATED_A = 0.02;
 export const LED_N = 2;
 export const LED_RS = 8;
 
+/**
+ * Биполярные транзисторы в корпусе TO-92, модель Эберса–Молла.
+ * Is, βF, βR — по порядку величин распространённых SPICE-моделей BC547B / BC557B
+ * (у разных производителей и экземпляров β заметно разнится: у BC547B паспорт 200–450).
+ * Цоколёвка (плоской стороной к себе, выводы вниз, слева направо): К, Б, Э.
+ */
+export const TRANSISTORS = {
+  BC547: { label: "BC547B", polarity: "npn" as const, is: 2e-14, betaF: 300, betaR: 8, maxIc: 0.1, maxP: 0.5 },
+  BC557: { label: "BC557B", polarity: "pnp" as const, is: 2e-14, betaF: 250, betaR: 8, maxIc: 0.1, maxP: 0.5 },
+};
+export type TransistorKind = keyof typeof TRANSISTORS;
+
 /** Сопротивление провода-перемычки, Ом (≈ 10 см медного провода 22 AWG). */
 export const WIRE_RESISTANCE = 0.005;
 /** Сопротивление замкнутого выключателя, Ом. */
 export const SWITCH_RESISTANCE = 0.01;
 
 export type Placement =
-  | { mode: "board"; holes: [string, string] }
+  /** Отверстия по выводам: [вывод 0, вывод 1] или для транзистора [коллектор, база, эмиттер]. */
+  | { mode: "board"; holes: string[] }
   | { mode: "free"; x: number; z: number; rot: number };
 
 interface Base {
@@ -126,11 +139,18 @@ export interface Led extends Base {
   color: LedColor;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led;
+/** Биполярный транзистор. Выводы: 0 — коллектор, 1 — база, 2 — эмиттер. */
+export interface Transistor extends Base {
+  type: "transistor";
+  kind: TransistorKind;
+}
+
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */
-export type Endpoint = { hole: string } | { comp: string; pin: 0 | 1 };
+export type Pin = 0 | 1 | 2;
+export type Endpoint = { hole: string } | { comp: string; pin: Pin };
 
 export interface Wire {
   id: string;
@@ -158,7 +178,18 @@ export function sameEndpoint(p: Endpoint, q: Endpoint): boolean {
 
 /** Полярная ли деталь: важно, какой вывод куда. */
 export function isPolar(c: Component): boolean {
-  return c.type === "diode" || c.type === "led" || c.type === "battery" || (c.type === "capacitor" && c.variant === "electrolytic");
+  return (
+    c.type === "diode" ||
+    c.type === "led" ||
+    c.type === "battery" ||
+    c.type === "transistor" ||
+    (c.type === "capacitor" && c.variant === "electrolytic")
+  );
+}
+
+/** Сколько выводов у детали. */
+export function pinCount(c: Component): number {
+  return c.type === "transistor" ? 3 : 2;
 }
 
 export function electrolyticSize(uF: number) {

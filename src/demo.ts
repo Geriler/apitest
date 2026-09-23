@@ -64,3 +64,44 @@ export function ledDemoScene(): Scene {
     ],
   };
 }
+
+/**
+ * Пример 3: мигалка на двух транзисторах (симметричный мультивибратор).
+ *
+ * Сверху VT1 (BC547) в c10–c12, снизу VT2 в h20–h22. В коллекторах — светодиоды
+ * через 470 Ом, базы через 10 кОм и 12 кОм к плюсу, перекрёстные конденсаторы 100 мкФ
+ * плюсом к коллектору; минус каждого конденсатора проводом идёт на базу другого транзистора.
+ * Полупериоды ≈ 0,69·R·C: 0,69 с и 0,83 с — светодиоды мигают по очереди примерно раз в 1,5 с.
+ * Номиналы баз разные нарочно: в идеально симметричной схеме оба транзистора могут открыться сразу.
+ */
+export function blinkerScene(): Scene {
+  const r = (id: string, ohms: number, holes: string[]) =>
+    ({ id, type: "resistor", variant: "tht", ohms, smdSize: "0805", placement: { mode: "board", holes } }) as const;
+  return {
+    components: [
+      { id: "GB1", type: "battery", kind: "9V", placement: { mode: "free", x: -32, z: -4, rot: 0 } },
+      { id: "VT1", type: "transistor", kind: "BC547", placement: { mode: "board", holes: ["c10", "c11", "c12"] } },
+      r("R1", 470, ["top+6", "b7"]),
+      { id: "HL1", type: "led", color: "red", placement: { mode: "board", holes: ["d7", "d10"] } },
+      r("R2", 10_000, ["top+14", "b11"]),
+      { id: "C1", type: "capacitor", variant: "electrolytic", uF: 100, placement: { mode: "board", holes: ["e10", "e14"] } },
+      { id: "VT2", type: "transistor", kind: "BC547", placement: { mode: "board", holes: ["h20", "h21", "h22"] } },
+      r("R3", 470, ["bot+16", "i17"]),
+      { id: "HL2", type: "led", color: "green", placement: { mode: "board", holes: ["g17", "g20"] } },
+      r("R4", 12_000, ["bot+24", "i21"]),
+      { id: "C2", type: "capacitor", variant: "electrolytic", uF: 100, placement: { mode: "board", holes: ["f20", "f24"] } },
+    ],
+    wires: [
+      { id: "W1", a: { comp: "GB1", pin: 0 }, b: { hole: "top-1" }, color: "#1b1d20" },
+      { id: "W2", a: { comp: "GB1", pin: 1 }, b: { hole: "top+1" }, color: "#c8261f" },
+      { id: "W3", a: { hole: "top+25" }, b: { hole: "bot+25" }, color: "#c8261f" },
+      { id: "W4", a: { hole: "top-25" }, b: { hole: "bot-25" }, color: "#1b1d20" },
+      // Эмиттеры на минус
+      { id: "W5", a: { hole: "a12" }, b: { hole: "top-10" }, color: "#2f6fd1" },
+      { id: "W6", a: { hole: "j22" }, b: { hole: "bot-19" }, color: "#2f6fd1" },
+      // Перекрёстные связи: минус C1 → база VT2, минус C2 → база VT1
+      { id: "W7", a: { hole: "d14" }, b: { hole: "g21" }, color: "#e3b21c" },
+      { id: "W8", a: { hole: "g24" }, b: { hole: "d11" }, color: "#2f9e5a" },
+    ],
+  };
+}

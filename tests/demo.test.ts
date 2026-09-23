@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { demoScene, ledDemoScene } from "../src/demo";
+import { blinkerScene, demoScene, ledDemoScene } from "../src/demo";
 import { Simulation } from "../src/sim/simulation";
 
 describe("пример схемы", () => {
@@ -62,5 +62,60 @@ describe("пример «Конденсатор и светодиоды»", () =
     expect(sim.current(hl1)).toBeGreaterThan(0.004);
     for (let i = 0; i < 100; i++) sim.step(0.05); // ещё 5 с
     expect(sim.current(hl1)).toBeLessThan(0.002);
+  });
+});
+
+describe("пример «Мигалка»", () => {
+  it("светодиоды на макетке мигают по очереди с периодом около 1,5 с, ничего не перегружено", () => {
+    const scene = blinkerScene();
+    const sim = new Simulation(scene);
+    const hl1 = scene.components.find((c) => c.id === "HL1")!;
+    const hl2 = scene.components.find((c) => c.id === "HL2")!;
+    const dt = 0.01;
+    let prev: boolean | undefined;
+    const edges: number[] = [];
+    let both = 0;
+    let peak = 0;
+    for (let t = 0; t < 8; t += dt) {
+      sim.step(dt);
+      const i1 = sim.current(hl1);
+      peak = Math.max(peak, i1);
+      const on1 = i1 > 0.005;
+      const on2 = sim.current(hl2) > 0.005;
+      if (t > 1 && on1 && on2) both++;
+      if (prev !== undefined && on1 && !prev) edges.push(t);
+      prev = on1;
+    }
+    expect(edges.length).toBeGreaterThanOrEqual(4);
+    const periods = edges.slice(1).map((t, i) => t - edges[i]);
+    const avg = periods.reduce((a, b) => a + b, 0) / periods.length;
+    expect(avg).toBeGreaterThan(1.2);
+    expect(avg).toBeLessThan(1.8);
+    // Одновременно горят только в короткое «послесвечение» после переключения (τ ≈ 50 мс)
+    expect((both * dt) / 7).toBeLessThan(0.15);
+    expect(peak).toBeGreaterThan(0.012);
+    expect(peak).toBeLessThan(0.02);
+    for (const c of scene.components) expect(sim.state(c.id).burned).toBe(false);
+    // Каждое решение сошлось — иначе переключения считаются неверно
+    expect(sim.nonConverged).toBe(0);
+  });
+
+  it("в раскладке нет занятых дважды отверстий", () => {
+    const scene = blinkerScene();
+    const used = new Map<string, string>();
+    for (const c of scene.components) {
+      if (c.placement.mode !== "board") continue;
+      for (const h of c.placement.holes) {
+        expect(used.get(h), `${h}: ${c.id} и ${used.get(h)}`).toBeUndefined();
+        used.set(h, c.id);
+      }
+    }
+    for (const w of scene.wires) {
+      for (const e of [w.a, w.b]) {
+        if (!("hole" in e)) continue;
+        expect(used.get(e.hole), `${e.hole}: ${w.id} и ${used.get(e.hole)}`).toBeUndefined();
+        used.set(e.hole, w.id);
+      }
+    }
   });
 });

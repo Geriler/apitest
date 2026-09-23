@@ -1,5 +1,5 @@
 import { App } from "./app";
-import { demoScene, ledDemoScene } from "./demo";
+import { blinkerScene, demoScene, ledDemoScene } from "./demo";
 import { World } from "./view/world";
 
 async function start(): Promise<void> {
@@ -30,6 +30,10 @@ async function start(): Promise<void> {
     leds: {
       scene: ledDemoScene,
       tip: "Разомкните SA1 — светодиод HL1 будет гаснуть несколько секунд: его питает конденсатор C1. Внизу HL3 вставлен наоборот и не горит: нажмите на него и затем F.",
+    },
+    blinker: {
+      scene: blinkerScene,
+      tip: "Светодиоды мигают по очереди: транзисторы VT1 и VT2 открывают друг друга через конденсаторы C1 и C2. Нажмите на VT1 — видно, как малый ток базы управляет током коллектора. Поменяйте C1 или R2 — изменится ритм.",
     },
   };
   const demoSelect = $("demo-select") as HTMLSelectElement;

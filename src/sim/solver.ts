@@ -27,6 +27,17 @@ export interface Branch {
   emf?: number;
 }
 
+/**
+ * Дополнительные элементы, не сводящиеся к ветви «ЭДС + сопротивление».
+ * Нужны для транзистора: его ток коллектора управляется напряжением база–эмиттер.
+ */
+export interface Extras {
+  /** Источник постоянного тока J, А: вытекает из узла a, втекает в узел b. */
+  currents?: { a: string; b: string; j: number }[];
+  /** Ток g·(V(cp) − V(cn)), А: вытекает из узла a, втекает в узел b (источник тока, управляемый напряжением). */
+  vccs?: { a: string; b: string; cp: string; cn: string; g: number }[];
+}
+
 export interface BranchResult {
   /** Ток через ветвь от a к b, А. */
   current: number;
@@ -66,7 +77,7 @@ class UnionFind {
   }
 }
 
-export function solveCircuit(branches: Branch[], links: [string, string][] = []): Solution {
+export function solveCircuit(branches: Branch[], links: [string, string][] = [], extras: Extras = {}): Solution {
   const uf = new UnionFind();
   for (const [x, y] of links) uf.union(x, y);
   for (const br of branches) {
@@ -136,6 +147,28 @@ export function solveCircuit(branches: Branch[], links: [string, string][] = [])
     if (a !== undefined && b !== undefined) {
       G[a][b] -= g;
       G[b][a] -= g;
+    }
+  }
+
+  // Узлы, которые связаны только через управляемые источники, решателю не видны как связные.
+  // Для транзистора это не случается: переходы база–эмиттер и база–коллектор — обычные ветви.
+  const idx = (n: string) => index.get(uf.find(n));
+  for (const src of extras.currents ?? []) {
+    const a = idx(src.a);
+    const b = idx(src.b);
+    if (a !== undefined) I[a] -= src.j;
+    if (b !== undefined) I[b] += src.j;
+  }
+  for (const s of extras.vccs ?? []) {
+    const a = idx(s.a);
+    const b = idx(s.b);
+    const cp = idx(s.cp);
+    const cn = idx(s.cn);
+    // Уходящий из a ток g·(Vcp − Vcn) — в левую часть уравнения узла a, с обратным знаком для b
+    for (const [row, sign] of [[a, 1], [b, -1]] as const) {
+      if (row === undefined) continue;
+      if (cp !== undefined) G[row][cp] += sign * s.g;
+      if (cn !== undefined) G[row][cn] -= sign * s.g;
     }
   }
 

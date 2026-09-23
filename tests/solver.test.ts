@@ -143,3 +143,26 @@ describe("solveCircuit", () => {
     expect(() => solveCircuit([resistor("R", "a", "b", 0)])).toThrow();
   });
 });
+
+describe("источники тока", () => {
+  it("источник тока 1 мА через 1 кОм даёт 1 В", () => {
+    const s = solveCircuit([{ id: "R", a: "n", b: "g", r: 1000 }], [], {
+      currents: [{ a: "g", b: "n", j: 1e-3 }],
+    });
+    expect(s.voltage.get("n")! - s.voltage.get("g")!).toBeCloseTo(1, 9);
+  });
+
+  it("управляемый источник: ток g·Vупр в нагрузке", () => {
+    // Управляющая цепь: 2 В на резисторе. Выход: ток 0,01·2 = 20 мА из узла o в землю через 100 Ом → −2 В.
+    const s = solveCircuit(
+      [
+        { id: "bat", a: "g", b: "c", r: 1e-9, emf: 2 },
+        { id: "Rc", a: "c", b: "g", r: 1000 },
+        { id: "Rl", a: "o", b: "g", r: 100 },
+      ],
+      [],
+      { vccs: [{ a: "o", b: "g", cp: "c", cn: "g", g: 0.01 }] },
+    );
+    expect(s.voltage.get("o")! - s.voltage.get("g")!).toBeCloseTo(-2, 6);
+  });
+});

@@ -11,17 +11,20 @@ import {
   LED_RATED_A,
   LED_RS,
   SWITCH_RESISTANCE,
+  TRANSISTORS,
   WIRE_RESISTANCE,
   ratedPower,
   type Component,
   type ComponentState,
   type Endpoint,
+  type Pin,
   type Scene,
+  type Transistor,
 } from "../model/types";
-import { solveCircuit, type Branch, type BranchResult, type Solution } from "./solver";
+import { solveCircuit, type Branch, type BranchResult, type Extras, type Solution } from "./solver";
 
 /** Электрический узел вывода детали. На плате — узел полосы, иначе собственный узел вывода. */
-export function pinNode(c: Component, pin: 0 | 1): string {
+export function pinNode(c: Component, pin: Pin): string {
   if (c.placement.mode === "board") {
     const hole = HOLE_BY_ID.get(c.placement.holes[pin]);
     if (!hole) throw new Error(`Нет отверстия ${c.placement.holes[pin]}`);
@@ -120,6 +123,7 @@ const THERMAL: Partial<Record<Component["type"], { threshold: number; rate: numb
   led: { threshold: 1.5, rate: 1.5, cooling: 1 },
   diode: { threshold: 1, rate: 0.6, cooling: 0.5 },
   capacitor: { threshold: 1, rate: 0.4, cooling: 0.3 },
+  transistor: { threshold: 1, rate: 0.6, cooling: 0.5 },
 };
 
 /** С какой нагрузки деталь начинает перегреваться (0 — не греется). */
@@ -132,6 +136,44 @@ export const SHORT_CIRCUIT_FRACTION = 0.5;
 
 /** Шаг по времени при наличии конденсаторов, с. */
 export const SUBSTEP = 0.005;
+
+/** Режим работы транзистора. */
+export type TransistorMode = "отсечка" | "усиление" | "насыщение" | "инверсный";
+
+export interface TransistorState {
+  /** Токи в «прямом» смысле: для n-p-n втекают в коллектор и базу, для p-n-p — вытекают. */
+  ic: number;
+  ib: number;
+  ie: number;
+  /** Напряжения в «прямом» смысле: для n-p-n Vбэ = Vб − Vэ, для p-n-p Vэб. */
+  vbe: number;
+  vce: number;
+  vbc: number;
+  mode: TransistorMode;
+}
+
+/**
+ * Ёмкость переходов транзистора, Ф. У настоящего BC547 — единицы пикофарад; здесь намеренно 10 нФ:
+ * без ёмкостей переключение мгновенное, и у схем с положительной обратной связью (мигалка, триггер)
+ * в момент переключения нет непрерывного решения — метод Ньютона блуждает. С ёмкостью переключение
+ * занимает микросекунды, для глаза это всё равно мгновенно.
+ */
+export const JUNCTION_CAPACITANCE = 10e-9;
+
+/** Модель транзистора: знак (+1 n-p-n, −1 p-n-p) и параметры Эберса–Молла. */
+function bjt(c: Transistor) {
+  const t = TRANSISTORS[c.kind];
+  const sign = t.polarity === "npn" ? 1 : -1;
+  return {
+    sign,
+    is: t.is,
+    /** Переходы как диоды: ток базы через каждый — Is/β. */
+    be: { is: t.is / t.betaF, n: 1, rs: 0 },
+    bc: { is: t.is / t.betaR, n: 1, rs: 0 },
+    /** Для ограничения шага: весь ток перехода, а не только базовая часть. */
+    junction: { is: t.is, n: 1, rs: 0 },
+  };
+}
 
 export interface Load {
   ratio: number;
@@ -163,18 +205,25 @@ export class Simulation {
     return s;
   }
 
+  /** Есть ли что-то, что зависит от времени: конденсаторы или транзисторы (у них ёмкости переходов). */
   private hasCapacitors(): boolean {
-    return this.scene.components.some((c) => c.type === "capacitor" && !this.state(c.id).burned);
+    return this.scene.components.some((c) => (c.type === "capacitor" || c.type === "transistor") && !this.state(c.id).burned);
   }
 
-  /** Схема для решателя при заданных линеаризациях диодов и шаге h для конденсаторов. */
-  private branches(h: number): Branch[] {
+  /** Схема для решателя при заданных линеаризациях диодов и транзисторов и шаге h для конденсаторов. */
+  private branches(h: number): { out: Branch[]; extras: Required<Extras> } {
+    this.h = h;
     const out: Branch[] = [];
+    const extras: Required<Extras> = { currents: [], vccs: [] };
     for (const c of this.scene.components) {
       const a = pinNode(c, 0);
       const b = pinNode(c, 1);
       const burned = this.state(c.id).burned;
       const open = { id: c.id, a, b, r: Infinity };
+      if (c.type === "transistor") {
+        if (!burned) this.transistorStamps(c, out, extras);
+        continue;
+      }
       if (burned && c.type !== "battery" && c.type !== "switch") {
         out.push(open);
         continue;
@@ -213,16 +262,97 @@ export class Simulation {
     for (const w of this.scene.wires) {
       out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: WIRE_RESISTANCE });
     }
-    return out;
+    return { out, extras };
   }
 
-  /** Решение с итерациями Ньютона по диодам. Заряд конденсаторов не меняется. */
-  private solveAt(h: number): void {
+  /**
+   * Транзистор по Эберсу–Моллу: два перехода как диоды (дают ток базы) и ток переноса
+   * коллектор → эмиттер It = Is·(e^(Vбэ/Vt) − e^(Vбк/Vt)), линеаризованный в текущей точке.
+   * Для p-n-p все напряжения и токи с обратным знаком.
+   */
+  private transistorStamps(c: Transistor, out: Branch[], extras: Required<Extras>): void {
+    const m = bjt(c);
+    const [C, B, E] = [pinNode(c, 0), pinNode(c, 1), pinNode(c, 2)];
+    const vbe0 = this.junction.get(`${c.id}:be`) ?? 0;
+    const vbc0 = this.junction.get(`${c.id}:bc`) ?? 0;
+    // Переходы: у n-p-n анод — база, у p-n-p — эмиттер/коллектор
+    const be = diodeBranch(m.be, vbe0);
+    const bc = diodeBranch(m.bc, vbc0);
+    out.push(m.sign > 0 ? { id: `${c.id}:be`, a: B, b: E, ...be } : { id: `${c.id}:be`, a: E, b: B, ...be });
+    out.push(m.sign > 0 ? { id: `${c.id}:bc`, a: B, b: C, ...bc } : { id: `${c.id}:bc`, a: C, b: B, ...bc });
+    // Ёмкости переходов (неявный метод Эйлера, как у конденсатора)
+    for (const [key, a, b] of [[`${c.id}:cbe`, B, E], [`${c.id}:cbc`, B, C]] as const) {
+      out.push({ id: key, a, b, r: this.h / JUNCTION_CAPACITANCE, emf: -(this.capVoltage.get(key) ?? 0) });
+    }
+    const ef = Math.exp(vbe0 / VT);
+    const er = Math.exp(vbc0 / VT);
+    const gf = (m.is / VT) * ef;
+    const gr = (m.is / VT) * er;
+    const it0 = m.is * (ef - er);
+    // I(К→Э) = знак·(It0 − gf·vbe0 + gr·vbc0) + gf·(Vб − Vэ) − gr·(Vб − Vк)
+    extras.currents.push({ a: C, b: E, j: m.sign * (it0 - gf * vbe0 + gr * vbc0) });
+    extras.vccs.push({ a: C, b: E, cp: B, cn: E, g: gf });
+    extras.vccs.push({ a: C, b: E, cp: B, cn: C, g: -gr });
+  }
+
+  /** Токи и напряжения транзистора из текущего решения. */
+  transistor(c: Transistor): TransistorState {
+    const zero: TransistorState = { ic: 0, ib: 0, ie: 0, vbe: 0, vce: 0, vbc: 0, mode: "отсечка" };
+    const v = (pin: Pin) => this.solution.voltage.get(pinNode(c, pin));
+    const [vc, vb, ve] = [v(0), v(1), v(2)];
+    if (vc === undefined || vb === undefined || ve === undefined) return zero;
+    const m = bjt(c);
+    const vbe = m.sign * (vb - ve);
+    const vbc = m.sign * (vb - vc);
+    if (this.state(c.id).burned) return { ...zero, vbe, vbc, vce: vbe - vbc };
+    const ibe = this.solution.branches.get(`${c.id}:be`)?.current ?? 0;
+    const ibc = this.solution.branches.get(`${c.id}:bc`)?.current ?? 0;
+    const it = m.is * (Math.exp(vbe / VT) - Math.exp(vbc / VT));
+    const ic = it - ibc;
+    const ib = ibe + ibc;
+    const mode: TransistorMode =
+      Math.abs(ic) < 1e-6 && Math.abs(ib) < 1e-6
+        ? "отсечка"
+        : vbe < 0.3 && vbc > 0.4
+          ? "инверсный"
+          : vbc > 0.4
+            ? "насыщение"
+            : "усиление";
+    return { ic, ib, ie: ic + ib, vbe, vbc, vce: vbe - vbc, mode };
+  }
+
+  /** Текущий шаг по времени, с (для ёмкостей). */
+  private h = SUBSTEP;
+
+  /** Сколько решений не сошлось (для тестов и отладки). */
+  nonConverged = 0;
+
+  /**
+   * Решение с итерациями Ньютона по диодам и транзисторам. Заряд конденсаторов не меняется.
+   * Возвращает false, если за 100 итераций не сошлось (бывает на резких переключениях).
+   */
+  private solveAt(h: number): boolean {
     const diodes = this.scene.components.filter((c) => (c.type === "diode" || c.type === "led") && !this.state(c.id).burned);
-    for (let iter = 1; iter <= 200; iter++) {
-      this.solution = solveCircuit(this.branches(h));
+    const bjts = this.scene.components.filter((c): c is Transistor => c.type === "transistor" && !this.state(c.id).burned);
+    for (let iter = 1; iter <= 100; iter++) {
+      const { out, extras } = this.branches(h);
+      this.solution = solveCircuit(out, [], extras);
       this.lastIterations = iter;
       let converged = true;
+      for (const t of bjts) {
+        const m = bjt(t);
+        const volt = (pin: Pin) => this.solution.voltage.get(pinNode(t, pin)) ?? 0;
+        const targets: [string, number][] = [
+          [`${t.id}:be`, m.sign * (volt(1) - volt(2))],
+          [`${t.id}:bc`, m.sign * (volt(1) - volt(0))],
+        ];
+        for (const [key, vterm] of targets) {
+          const vold = this.junction.get(key) ?? 0;
+          const vnew = limitJunction(vterm, vold, m.junction);
+          if (Math.abs(vnew - vold) > 1e-7) converged = false;
+          this.junction.set(key, vnew);
+        }
+      }
       for (const d of diodes) {
         const p = diodeParams(d);
         const br = this.solution.branches.get(d.id)!;
@@ -233,9 +363,9 @@ export class Simulation {
         if (Math.abs(vnew - vold) > 1e-7) converged = false;
         this.junction.set(d.id, vnew);
       }
-      if (converged) return;
+      if (converged) return true;
     }
-    // Не сошлось за 200 итераций — оставляем последнее приближение (на практике не встречалось).
+    return false;
   }
 
   /** Пересчитать токи. Вызывать после любого изменения сцены. */
@@ -243,7 +373,7 @@ export class Simulation {
     for (const c of this.scene.components) this.state(c.id);
     const alive = new Set(this.scene.components.map((c) => c.id));
     for (const m of [this.states, this.capVoltage, this.junction]) {
-      for (const id of [...m.keys()]) if (!alive.has(id)) m.delete(id);
+      for (const key of [...m.keys()]) if (!alive.has(key.split(":")[0])) m.delete(key);
     }
     this.solveAt(SUBSTEP);
   }
@@ -255,11 +385,13 @@ export class Simulation {
   /** Напряжение между выводами 0 и 1 (V0 − V1), В. Для диода — прямое напряжение. */
   voltage(c: Component): number {
     if (c.type === "capacitor") return this.capVoltage.get(c.id) ?? 0;
+    if (c.type === "transistor") return this.transistor(c).vce;
     return -this.branch(c.id).voltage;
   }
 
   /** Ток от вывода 0 к выводу 1 через деталь, А. */
   current(c: Component): number {
+    if (c.type === "transistor") return this.transistor(c).ic;
     return this.branch(c.id).current;
   }
 
@@ -271,6 +403,10 @@ export class Simulation {
         return Math.max(0, this.voltage(c) * this.current(c));
       case "capacitor":
         return 0;
+      case "transistor": {
+        const t = this.transistor(c);
+        return Math.max(0, t.vce * t.ic + t.vbe * t.ib);
+      }
       case "battery": {
         // Мощность, которую батарея отдаёт в цепь
         const bat = BATTERIES[c.kind];
@@ -305,6 +441,15 @@ export class Simulation {
         if (v < 0) return { ratio: -v / ELECTROLYTIC_REVERSE_V, what: "обратное напряжение", limit: `${ELECTROLYTIC_REVERSE_V} В` };
         return { ratio: v / ELECTROLYTIC_RATED_V, what: "напряжение", limit: `${ELECTROLYTIC_RATED_V} В` };
       }
+      case "transistor": {
+        const spec = TRANSISTORS[c.kind];
+        const t = this.transistor(c);
+        const byI = Math.abs(t.ic) / spec.maxIc;
+        const byP = this.power(c) / spec.maxP;
+        return byI >= byP
+          ? { ratio: byI, what: "ток", limit: `${spec.maxIc * 1000} мА` }
+          : { ratio: byP, what: "мощность", limit: `${spec.maxP} Вт` };
+      }
       default:
         return undefined;
     }
@@ -325,6 +470,7 @@ export class Simulation {
   isReversed(c: Component): boolean {
     if (c.type === "diode" || c.type === "led") return this.voltage(c) < -0.5;
     if (c.type === "capacitor" && c.variant === "electrolytic") return this.voltage(c) < -0.2;
+    if (c.type === "transistor") return this.transistor(c).mode === "инверсный";
     return false;
   }
 
@@ -338,17 +484,37 @@ export class Simulation {
     const n = transient ? Math.max(1, Math.round(dt / SUBSTEP)) : 1;
     const h = dt / n;
     for (let i = 0; i < n; i++) {
-      if (transient) {
-        this.solveAt(h);
-        for (const c of this.scene.components) {
-          if (c.type === "capacitor" && !this.state(c.id).burned) this.capVoltage.set(c.id, -this.branch(c.id).voltage);
-        }
+      if (transient) failed.push(...this.advance(h, 0));
+      else {
+        failed.push(...this.heat(h));
+        if (failed.length) this.solve();
       }
-      failed.push(...this.heat(h));
-      if (failed.length && !transient) this.solve();
     }
     if (transient) this.solveAt(SUBSTEP);
     return failed;
+  }
+
+  /**
+   * Шаг по времени h с конденсаторами. Если Ньютон не сошёлся (резкое переключение транзистора),
+   * шаг откатывается и делится пополам — до 15 раз, то есть до ≈ 150 нс. Нагрев считается
+   * только по сошедшимся решениям, чтобы недосчитанный скачок не «сжёг» деталь.
+   */
+  private advance(h: number, depth: number): Component[] {
+    const saved = new Map(this.junction);
+    const ok = this.solveAt(h);
+    if (!ok && depth < 15) {
+      this.junction = saved;
+      return [...this.advance(h / 2, depth + 1), ...this.advance(h / 2, depth + 1)];
+    }
+    if (!ok) this.nonConverged++;
+    for (const c of this.scene.components) {
+      if (this.state(c.id).burned) continue;
+      if (c.type === "capacitor") this.capVoltage.set(c.id, -this.branch(c.id).voltage);
+      if (c.type === "transistor") {
+        for (const key of [`${c.id}:cbe`, `${c.id}:cbc`]) this.capVoltage.set(key, -this.branch(key).voltage);
+      }
+    }
+    return ok ? this.heat(h) : [];
   }
 
   private heat(dt: number): Component[] {
