@@ -110,6 +110,8 @@ const TOLERANCE_KEY = "maketka.tolerance.v1";
 const CURRENT_KEY = "maketka.showCurrent.v1";
 /** Сколько шагов можно отменить. */
 const HISTORY_LIMIT = 100;
+/** Долгое нажатие на сенсорном экране (вместо Shift+щелчка), мс. */
+const LONG_PRESS_MS = 450;
 
 interface Hover {
   hole?: Hole;
@@ -129,6 +131,11 @@ export class App {
   tool: Tool = "select";
   /** Выбранная щелчком деталь или провод. Панель справа показывает только выбранное, не наведённое. */
   selected?: string;
+  /**
+   * Выделенная обычным щелчком деталь, провод или дорожка — без панели (работают Del, R, F).
+   * Панель открывает Shift+щелчок (на телефоне — долгое нажатие), тогда элемент в selected.
+   */
+  picked?: string;
   /** Выбранное щелчком отверстие (в режиме «Выбор»). */
   selectedHole?: Hole;
   /** Выбранная щелчком плата: её можно тащить мышью. */
@@ -146,6 +153,8 @@ export class App {
   private ghost?: THREE.Object3D;
   private ghostRot = 0;
   private drag?: { id: string; offset: THREE.Vector3 };
+  /** Перенос детали по плате: за какое отверстие взяли и где выводы были в начале. */
+  private partDrag?: { id: string; grab: Hole; from: string[]; moved: boolean };
   /** Перенос платы: смещение от курсора до центра платы. */
   private boardDrag?: { id: string; offset: THREE.Vector3; moved: boolean };
   private boardFrame = 0;
@@ -308,9 +317,9 @@ export class App {
     this.world.rebuildBoards();
     this.sim.scene = this.scene;
     this.cancelPending();
-    if (this.selected && !this.component(this.selected) && !this.scene.wires.some((w) => w.id === this.selected) && !(this.scene.traces ?? []).some((t) => t.id === this.selected)) {
-      this.selected = undefined;
-    }
+    const exists = (id: string) => !!this.component(id) || this.scene.wires.some((w) => w.id === id) || (this.scene.traces ?? []).some((t) => t.id === id);
+    if (this.selected && !exists(this.selected)) this.selected = undefined;
+    if (this.picked && !exists(this.picked)) this.picked = undefined;
     if (this.selectedHole) this.selectedHole = HOLE_BY_ID.get(this.selectedHole.id);
     if (this.selectedBoard && !boardById(this.selectedBoard)) this.selectedBoard = undefined;
     this.sim.solve();
@@ -565,6 +574,7 @@ export class App {
     this.world.rebuildBoards(true);
     this.sim = new Simulation(s, this.sim.tolerance);
     this.selected = undefined;
+    this.picked = undefined;
     this.selectedHole = undefined;
     this.selectedBoard = undefined;
     this.burnedAt.clear();
@@ -765,6 +775,7 @@ export class App {
     }
     if (tool !== "select") {
       this.selected = undefined;
+      this.picked = undefined;
       this.selectedHole = undefined;
       this.selectedBoard = undefined;
     }
@@ -914,19 +925,20 @@ export class App {
         else if (this.tool !== "select") this.setTool("select");
         else {
           this.selected = undefined;
+          this.picked = undefined;
           this.selectedHole = undefined;
           this.selectedBoard = undefined;
           this.inspectorHtml = "";
           this.refreshMarks();
         }
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        if (this.selected) this.remove(this.selected);
+        if (this.selected ?? this.picked) this.remove((this.selected ?? this.picked)!);
         else if (this.selectedBoard) this.removeBoard(this.selectedBoard);
         else this.setTool("delete");
       } else if (e.key === "r" || e.key === "R" || e.key === "к" || e.key === "К") {
         this.rotate();
       } else if (e.key === "f" || e.key === "F" || e.key === "а" || e.key === "А") {
-        this.flip(this.selected);
+        this.flip(this.selected ?? this.picked);
       } else if (TOOL_KEYS[e.key]) {
         this.setTool(TOOL_KEYS[e.key]);
       }
@@ -943,7 +955,8 @@ export class App {
       this.updateGhost();
       return;
     }
-    const c = this.selected ? this.component(this.selected) : undefined;
+    const id = this.selected ?? this.picked;
+    const c = id ? this.component(id) : undefined;
     if (c && c.placement.mode === "free") {
       c.placement.rot = (c.placement.rot + Math.PI / 2) % (Math.PI * 2);
       this.changed();
@@ -989,6 +1002,18 @@ export class App {
   }
 
   private onMove(e: PointerEvent): void {
+    if (this.partDrag) {
+      const d = this.partDrag;
+      const target = this.world.pickHole(this.world.ndcFromEvent(e));
+      const c = this.component(d.id);
+      if (!target || !c || c.placement.mode !== "board") return;
+      const holes = this.shiftedHoles(c, d.from, d.grab, target);
+      if (!holes || holes.join() === c.placement.holes.join()) return;
+      c.placement.holes = holes;
+      d.moved = true;
+      this.scheduleRebuild();
+      return;
+    }
     if (this.boardDrag) {
       const d = this.boardDrag;
       const p = this.world.pickTablePlane(this.world.ndcFromEvent(e));
@@ -1003,14 +1028,7 @@ export class App {
       b.z = z;
       d.moved = true;
       applyBoards(this.scene.boards ?? []);
-      // Перестраиваем сцену не чаще раза за кадр
-      if (!this.boardFrame) {
-        this.boardFrame = requestAnimationFrame(() => {
-          this.boardFrame = 0;
-          this.world.rebuildBoards();
-          this.rebuild();
-        });
-      }
+      this.scheduleRebuild(true);
       return;
     }
     if (this.drag) {
@@ -1041,7 +1059,7 @@ export class App {
   }
 
   private onDown(e: PointerEvent): void {
-    this.down = { x: e.clientX, y: e.clientY, t: performance.now() };
+    this.down = { x: e.clientX, y: e.clientY, t: e.timeStamp };
     if (this.tool !== "select" || e.button !== 0) return;
     const h = this.computeHover(e);
     const c = h.componentId ? this.component(h.componentId) : undefined;
@@ -1049,6 +1067,15 @@ export class App {
       const p = this.world.pickTable(this.world.ndcFromEvent(e));
       if (p) {
         this.drag = { id: c.id, offset: new THREE.Vector3(c.placement.x - p.x, 0, c.placement.z - p.z) };
+        this.world.controls.enabled = false;
+      }
+      return;
+    }
+    // Деталь на плате: берём за ближайшее отверстие под курсором
+    if (c && c.placement.mode === "board") {
+      const grab = this.world.pickHole(this.world.ndcFromEvent(e));
+      if (grab) {
+        this.partDrag = { id: c.id, grab, from: [...c.placement.holes], moved: false };
         this.world.controls.enabled = false;
       }
       return;
@@ -1064,9 +1091,29 @@ export class App {
     }
   }
 
+  /** Щелчок с Shift: у тумблера — открыть панель вместо переключения. */
+  private shiftClick = false;
+
   private onUp(e: PointerEvent): void {
+    // На сенсорном экране Shift нет — вместо него долгое нажатие
+    this.shiftClick = e.shiftKey || (e.pointerType !== "mouse" && !!this.down && e.timeStamp - this.down.t > LONG_PRESS_MS);
     const moved = this.down ? Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) : 99;
     const wasDrag = this.drag;
+    if (this.partDrag) {
+      const d = this.partDrag;
+      this.partDrag = undefined;
+      this.world.controls.enabled = true;
+      if (d.moved) {
+        cancelAnimationFrame(this.boardFrame);
+        this.boardFrame = 0;
+        if (this.selected !== d.id) this.picked = d.id;
+        this.changed();
+        return;
+      }
+      if (moved > 5 || e.button !== 0) return;
+      this.hover = this.computeHover(e);
+      return this.click(d.id);
+    }
     if (this.boardDrag) {
       const d = this.boardDrag;
       this.boardDrag = undefined;
@@ -1096,20 +1143,26 @@ export class App {
     switch (this.tool) {
       case "select": {
         const id = pressedId ?? h.componentId;
-        if (id) {
-          const c = this.component(id)!;
-          // Тумблер щёлкается сразу, с первого нажатия (перетаскивание по столу — не щелчок)
-          if (c.type === "switch") {
+        const target = id ?? h.wireId ?? h.traceId;
+        if (target && this.shiftClick) {
+          // Shift+щелчок (долгое нажатие) — панель с показаниями и настройками
+          this.selected = target;
+          this.picked = undefined;
+        } else if (target) {
+          const c = id ? this.component(id) : undefined;
+          // Тумблер просто щёлкается
+          if (c?.type === "switch") {
             c.closed = !c.closed;
             this.changed();
+            return;
           }
-          this.selected = id;
-        } else if (h.wireId || h.traceId) {
-          this.selected = h.wireId ?? h.traceId;
+          this.picked = target;
+          if (this.selected !== target) this.selected = undefined;
         } else {
           this.selected = undefined;
+          this.picked = undefined;
         }
-        const onBoard = !id && !h.wireId && !h.traceId;
+        const onBoard = !target;
         this.selectedHole = onBoard ? h.hole : undefined;
         this.selectedBoard = onBoard ? (h.hole?.boardId ?? h.boardId) : undefined;
         this.refreshMarks();
@@ -1188,6 +1241,41 @@ export class App {
     this.clearGhost();
     this.changed();
     this.updateHint();
+  }
+
+  /** Перестроить сцену в следующем кадре (не чаще раза за кадр — при перетаскивании). */
+  private scheduleRebuild(boards = false): void {
+    if (boards) this.boardsDirty = true;
+    if (this.boardFrame) return;
+    this.boardFrame = requestAnimationFrame(() => {
+      this.boardFrame = 0;
+      if (this.boardsDirty) this.world.rebuildBoards();
+      this.boardsDirty = false;
+      this.rebuild();
+    });
+  }
+  private boardsDirty = false;
+
+  /**
+   * Выводы детали, сдвинутые так, чтобы отверстие grab оказалось в target (форма выводов
+   * сохраняется, можно и на другую плату). Нет — если какого-то отверстия там нет, оно занято
+   * или транзистор попал бы в шину.
+   */
+  private shiftedHoles(c: Component, from: string[], grab: Hole, target: Hole): string[] | undefined {
+    const dx = target.x - grab.x;
+    const dz = target.z - grab.z;
+    const occ = this.occupied();
+    const out: string[] = [];
+    for (const id of from) {
+      const h = HOLE_BY_ID.get(id);
+      const to = h && holeAt(target.boardId, h.x + dx, h.z + dz);
+      if (!to) return undefined;
+      const owner = occ.get(to.id);
+      if (owner && owner !== c.id) return undefined;
+      if ((c.type === "transistor" || c.type === "mosfet") && to.kind === "rail") return undefined;
+      out.push(to.id);
+    }
+    return out;
   }
 
   /** Положить новую плату на свободное место стола. */
@@ -1312,6 +1400,7 @@ export class App {
     }
     this.sim.scene = this.scene;
     if (this.selected === id) this.selected = undefined;
+    if (this.picked === id) this.picked = undefined;
     this.changed();
   }
 
@@ -1331,7 +1420,8 @@ export class App {
     if (this.selectedHole) strip(this.selectedHole, "#f0c9a8", "#b0612a");
     if (this.pendingEnd && "hole" in this.pendingEnd) strip(HOLE_BY_ID.get(this.pendingEnd.hole)!, "#f0c9a8", "#b0612a");
     // Выделенная деталь на плате: её отверстия
-    const sel = this.selected ? this.component(this.selected) : undefined;
+    const selId = this.selected ?? this.picked;
+    const sel = selId ? this.component(selId) : undefined;
     if (sel?.placement.mode === "board") for (const id of sel.placement.holes) marks.set(id, "#b0612a");
     this.world.markHoles(marks);
     this.world.highlightBoard(this.tool === "select" ? this.selectedBoard : undefined);
@@ -1885,7 +1975,7 @@ export class App {
         }
       </div>
       <div class="help">
-        <b>Управление.</b> Нажмите на деталь, провод или отверстие — здесь появятся ток и напряжение. Детали на столе можно перетаскивать. Нажатие на тумблер переключает его. Вращать вид — зажать и тянуть, приближать — колесом.
+        <b>Управление.</b> <b>Shift+нажатие</b> на деталь, провод или дорожку (на телефоне — долгое нажатие) — здесь появятся ток, напряжение и настройки. Обычное нажатие выделяет: Del — удалить, R — повернуть, F — перевернуть; тумблер от нажатия переключается. Детали можно перетаскивать мышью — и на столе, и по плате. Нажатие на отверстие показывает, с чем оно соединено. Вращать вид — зажать и тянуть, приближать — колесом.
       </div>`;
     return [`o`, html];
   }

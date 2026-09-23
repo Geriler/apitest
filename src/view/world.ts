@@ -256,6 +256,8 @@ export class World {
       Math.max(1, HOLES.length),
     );
     this.holeMarks.renderOrder = 2;
+    // Буфер хотя бы на одно отверстие, но рисуется ровно столько, сколько их есть (без плат — ни одного)
+    this.holeMarks.count = HOLES.length;
     this.clearHoleMarks();
     this.boardGroup.add(this.holeMarks);
     this.scene.add(this.boardGroup);

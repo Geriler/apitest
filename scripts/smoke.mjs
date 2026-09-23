@@ -90,6 +90,39 @@ try {
     const horizontalScroll = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     check(!horizontalScroll, `${viewport.name}: нет горизонтальной прокрутки`);
 
+    if (viewport.name === "phone") {
+      // Долгое нажатие пальцем вместо Shift+щелчка: открывает панель детали
+      const where = await page.evaluate(() => {
+        const a = window.maketka;
+        const c = a.scene.components.find((x) => x.type === "resistor" && x.placement.mode === "board");
+        const s = a.world.toScreen(a.views.get(c.id).hotspot);
+        for (let dy = 0; dy <= 12; dy += 2) for (const dx of [0, -2, 2, -4, 4]) {
+          const p = { clientX: s.x + dx, clientY: s.y + dy };
+          if (a.world.pickObject(a.world.ndcFromEvent(p))?.componentId === c.id) return { id: c.id, x: p.clientX, y: p.clientY };
+        }
+        return { id: c.id, x: s.x, y: s.y };
+      });
+      // Настоящие касания через протокол браузера (у синтетических PointerEvent нет активного указателя)
+      const cdp = await page.context().newCDPSession(page);
+      const touch = (type, x, y) =>
+        cdp.send("Input.dispatchTouchEvent", {
+          type: type === "pointerdown" ? "touchStart" : "touchEnd",
+          touchPoints: type === "pointerdown" ? [{ x, y }] : [],
+        });
+      // Короткое: начало и конец касания уходят сразу друг за другом (медленный тестовый браузер
+      // иначе растягивает касание на полсекунды между командами)
+      touch("pointerdown", where.x, where.y);
+      await touch("pointerup", where.x, where.y);
+      await page.waitForTimeout(200);
+      const shortTap = await page.evaluate(() => window.maketka.selected ?? "");
+      await touch("pointerdown", where.x, where.y);
+      await page.waitForTimeout(700);
+      await touch("pointerup", where.x, where.y);
+      await page.waitForTimeout(300);
+      const longPress = await page.evaluate(() => ({ sel: window.maketka.selected ?? "", hidden: document.getElementById("inspector").hidden }));
+      check(shortTap === "" && longPress.sel === where.id && !longPress.hidden, `phone: короткое касание ${where.id} без панели (открыто: «${shortTap}»), долгое — панель (${JSON.stringify(longPress)})`);
+    }
+
     if (viewport.name === "desktop") {
       // Панель детали — только по щелчку, не при наведении
       const r1 = await page.evaluate(() => {
@@ -99,9 +132,11 @@ try {
       await page.mouse.move(r1.x, r1.y);
       await page.waitForTimeout(400);
       check(!/Резистор 3,3 Ом/.test(await page.textContent("#inspector")), "наведение на R1 не открывает его панель");
+      await page.keyboard.down("Shift");
       await page.mouse.click(r1.x, r1.y);
+      await page.keyboard.up("Shift");
       await page.waitForTimeout(400);
-      check(/Резистор 3,3 Ом/.test(await page.textContent("#inspector")), "щелчок по R1 открывает его панель");
+      check(/Резистор 3,3 Ом/.test(await page.textContent("#inspector")), "Shift+щелчок по R1 открывает его панель");
       await page.keyboard.press("Escape");
 
       // Замкнуть SA2 одним нажатием мышью, второе — разомкнуть, третье — снова замкнуть
@@ -120,6 +155,15 @@ try {
       }
       const closed = clicks[2];
       check(clicks.join() === "true,false,true", `мышью: SA2 щёлкается с каждого нажатия (${clicks.join(" → ")})`);
+      const afterClicks = await page.evaluate(() => ({ sel: window.maketka.selected ?? "", title: document.querySelector("#inspector h2")?.textContent ?? "" }));
+      check(afterClicks.sel !== "SA2" && afterClicks.title !== "Тумблер", `щелчок по тумблеру не открывает его панель (открыто: «${afterClicks.title}»)`);
+      await page.keyboard.down("Shift");
+      await page.mouse.click(sa2.x, sa2.y);
+      await page.keyboard.up("Shift");
+      await page.waitForTimeout(200);
+      const shiftSel = await page.evaluate(() => ({ sel: window.maketka.selected, closed: window.maketka.component("SA2").closed }));
+      check(shiftSel.sel === "SA2" && shiftSel.closed === true, `Shift+щелчок открывает панель тумблера и не переключает его`);
+      await page.keyboard.press("Escape");
       await page.waitForTimeout(1200);
       await page.screenshot({ path: "screenshots/desktop-smoke.png" });
       await page.waitForTimeout(3500);
@@ -180,11 +224,11 @@ try {
       });
       await page.mouse.click(hl3.x, hl3.y);
       await page.waitForTimeout(300);
-      const selected = await page.evaluate(() => window.maketka.selected);
+      const selected = await page.evaluate(() => window.maketka.picked);
       await page.keyboard.press("f");
       await page.waitForTimeout(400);
       const hl3After = await page.evaluate(() => window.maketka.sim.current(window.maketka.component("HL3")));
-      check(selected === "HL3" && hl3After > 0.01, `мышью: HL3 выбран (${selected}) и после F горит (${(hl3After * 1000).toFixed(1)} мА)`);
+      check(selected === "HL3" && hl3After > 0.01, `мышью: HL3 выделен щелчком (${selected}) и после F горит (${(hl3After * 1000).toFixed(1)} мА)`);
 
       // Разомкнуть SA1: HL1 гаснет не сразу
       await page.evaluate(() => {
@@ -275,10 +319,17 @@ try {
         }
         return { x: s.x, y: s.y + 6 };
       });
+      // Обычный щелчок только выделяет, панель — по Shift+щелчку
       await page.mouse.click(vt1.x, vt1.y);
+      await page.waitForTimeout(300);
+      const plain = await page.evaluate(() => ({ picked: window.maketka.picked, selected: window.maketka.selected ?? "" }));
+      check(plain.picked === "VT1" && plain.selected === "", `обычный щелчок по VT1 выделяет без панели (${JSON.stringify(plain)})`);
+      await page.keyboard.down("Shift");
+      await page.mouse.click(vt1.x, vt1.y);
+      await page.keyboard.up("Shift");
       await page.waitForTimeout(400);
       const panel = await page.textContent("#inspector");
-      check(/BC547B/.test(panel ?? "") && /I(К|к)/.test(panel ?? ""), "щелчок по VT1: панель транзистора с токами");
+      check(/BC547B/.test(panel ?? "") && /I(К|к)/.test(panel ?? ""), "Shift+щелчок по VT1: панель транзистора с токами");
       await page.screenshot({ path: "screenshots/desktop-transistor.png" });
 
       // Поставить транзистор мышью: одно нажатие → три соседних отверстия
@@ -335,10 +386,12 @@ try {
         }
         return { x: s.x, y: s.y + 6 };
       });
+      await page.keyboard.down("Shift");
       await page.mouse.click(fet1.x, fet1.y);
+      await page.keyboard.up("Shift");
       await page.waitForTimeout(400);
       const mpanel = await page.textContent("#inspector");
-      check(/2N7000/.test(mpanel ?? "") && /Ток затвора/.test(mpanel ?? ""), "щелчок по VT1: панель MOSFET");
+      check(/2N7000/.test(mpanel ?? "") && /Ток затвора/.test(mpanel ?? ""), "Shift+щелчок по VT1: панель MOSFET");
 
       // Пример 5: печатная плата и блок питания
       await page.keyboard.press("Escape");
@@ -545,10 +598,49 @@ try {
       await page.click("#btn-clear");
       await page.waitForTimeout(300);
       const cleared = await page.evaluate(() => ({ n: window.maketka.scene.components.length, b: window.maketka.scene.boards.length }));
+      const marks = await page.evaluate(() => window.maketka.world.holeMarks.count);
+      check(marks === 0, `на пустом столе нет подсветки отверстий (белого квадрата): ${marks}`);
       await page.click("#btn-undo");
       await page.waitForTimeout(300);
       const back = await page.evaluate(() => ({ ids: window.maketka.scene.components.map((c) => c.id).join(), b: window.maketka.scene.boards.length, redo: !document.getElementById("btn-redo").disabled }));
       check(cleared.n === 0 && cleared.b === 0 && back.ids === removed && back.b > 0 && back.redo, `кнопка ↶ отменила «Очистить»: детали и платы на месте (${back.ids})`);
+
+      // Перенос детали на плате мышью: берём за вывод и тащим на свободные отверстия
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("1");
+      const plan = await page.evaluate(() => {
+        const a = window.maketka;
+        const c = a.scene.components.find((x) => x.type === "resistor" && x.placement.mode === "board");
+        const H = (id) => window.maketka.endpointPos({ hole: id });
+        const grab = c.placement.holes[0];
+        // Свободное место: сдвиг по столбцам, при котором все выводы попадают в пустые отверстия
+        for (const dz of [0, 1, -1, 2, -2]) for (const dx of [3, -3, 4, -4, 5, -5, 6, -6]) {
+          const from = c.placement.holes;
+          const g = H(grab);
+          const hs = from.map((id) => { const p = H(id); return [p.x + dx, p.z + dz]; });
+          const occ = new Set(a.scene.components.filter((x) => x.id !== c.id && x.placement.mode === "board").flatMap((x) => x.placement.holes).concat(a.scene.wires.flatMap((w) => [w.a, w.b]).filter((e) => "hole" in e).map((e) => e.hole)));
+          const ids = hs.map(([x, z]) => { for (const id of ["a","b","c","d","e","f","g","h","i","j"].flatMap((r) => Array.from({ length: 30 }, (_, k) => r + (k + 1)))) { const p = H(id); if (Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6) return id; } return null; });
+          if (ids.every((id) => id && !occ.has(id))) {
+            const s0 = a.world.toScreen(g);
+            const t = H(ids[0]);
+            const s1 = a.world.toScreen(t);
+            return { id: c.id, from: from.join(), expect: ids.join(), a: { x: s0.x, y: s0.y }, b: { x: s1.x, y: s1.y } };
+          }
+        }
+        return null;
+      });
+      await page.mouse.move(plan.a.x, plan.a.y);
+      await page.mouse.down();
+      await page.mouse.move((plan.a.x + plan.b.x) / 2, (plan.a.y + plan.b.y) / 2, { steps: 4 });
+      await page.mouse.move(plan.b.x, plan.b.y, { steps: 4 });
+      await page.mouse.up();
+      await page.waitForTimeout(400);
+      const dragged = await page.evaluate((id) => window.maketka.component(id).placement.holes.join(), plan.id);
+      check(dragged === plan.expect, `деталь ${plan.id} перетащена мышью: ${plan.from} → ${dragged} (ожидалось ${plan.expect})`);
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(200);
+      const backHoles = await page.evaluate((id) => window.maketka.component(id).placement.holes.join(), plan.id);
+      check(backHoles === plan.from, `перенос отменяется Ctrl+Z (${backHoles})`);
     }
 
     check(errors.length === 0, `${viewport.name}: нет ошибок в консоли${errors.length ? ": " + errors.join(" | ") : ""}`);
