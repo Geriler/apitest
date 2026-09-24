@@ -226,7 +226,7 @@ export class CareerMap {
         </div>
       </header>
       <div class="map-body">
-        <div class="map-scroll"><svg viewBox="0 0 ${width} ${height}" class="map-svg" style="max-width:${width}px">
+        <div class="map-scroll"><svg viewBox="0 0 ${width} ${height}" class="map-svg" style="max-width:${width}px;min-width:${Math.round(width * 0.7)}px">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="arrow"/></marker>
             <marker id="arrow-lit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="arrow lit"/></marker>

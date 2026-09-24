@@ -153,12 +153,13 @@ export class CareerPanel {
             return r.each[k] ? bit : `<b class="bad">${bit}</b>`;
           })
           .join(" ");
-        return `<tr title="${esc(rowText(r))}"><td>${bits(r.inputs.map((b) => (b ? "1" : "0")), names)}</td><td>${bits(r.expected.map((b) => (b ? "1" : "0")), outs)}</td><td>${got}</td><td class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}</td></tr>`;
+        const need = r.ok ? "" : ` · нужно ${r.expected.map((b) => (b ? 1 : 0)).join(" ")}`;
+        return `<tr title="${esc(rowText(r) + need)}"><td>${bits(r.inputs.map((b) => (b ? "1" : "0")), names)}</td><td>${got}</td><td class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}</td></tr>`;
       })
       .join("");
     const failed = check.rows.filter((r) => !r.ok).length;
-    return `<p class="sub">Проверено ${check.rows.length} наборов входов${check.rows.length < 2 ** names.length ? ` из ${2 ** names.length} возможных — как проверяют настоящие микросхемы` : ""}${failed ? `, неверных ${failed}` : ""}.</p>
-      <div class="truth-scroll"><table class="truth compact"><tr><th>${head(names)}</th><th>нужно<br />${head(outs)}</th><th>есть<br />${head(outs)}</th><th></th></tr>${rows}</table></div>`;
+    return `<p class="sub">Проверено ${check.rows.length} наборов входов${check.rows.length < 2 ** names.length ? ` из ${2 ** names.length} возможных — как проверяют настоящие микросхемы` : ""}${failed ? `, неверных ${failed}; красным — выходы не такие, как нужно (что нужно — в подсказке строки)` : ""}.</p>
+      <div class="truth-scroll"><table class="truth compact"><tr><th>входы<br />${head(names)}</th><th>выходы<br />${head(outs)}</th><th></th></tr>${rows}</table></div>`;
   }
 
   bind(root: HTMLElement): void {
