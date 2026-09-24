@@ -7,11 +7,11 @@
  * песочницы, и на ней тесты проверяют, что уровень проходим ровно с выданным набором.
  */
 
-import type { ChipPinRole } from "../model/breadboard";
+import type { ChipPackage, ChipPinRole } from "../model/breadboard";
 import type { MosfetKind, TransistorKind } from "../model/types";
 
 /** Логическая функция компонента. */
-export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor";
+export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "mux" | "half" | "full";
 
 /** Деталь набора: сколько штук и что именно (тип и номинал). */
 export type KitItem =
@@ -50,6 +50,8 @@ export interface Level {
   names: string[];
   /** Вместимость корпуса, клеток (по умолчанию 2 на вывод). */
   room?: number;
+  /** Корпус уровня (по умолчанию SOT-23-5). */
+  package?: ChipPackage;
   kit: KitItem[];
   recipe: Recipe;
 }
@@ -60,27 +62,43 @@ const GATE2 = { roles: ["in", "in", "gnd", "out", "vcc"] as ChipPinRole[], names
 const GATE1 = { roles: ["nc", "in", "gnd", "out", "vcc"] as ChipPinRole[], names: ["", "A", "", "Y", ""] };
 
 /** Входы (номера выводов) и выход — для проверки таблицы истинности. */
-export function gateIo(level: Level): { inputs: number[]; output: number; vcc: number; gnd: number } {
+export function gateIo(level: Level): { inputs: number[]; outputs: number[]; vcc: number; gnd: number } {
   const pin = (r: ChipPinRole) => level.roles.map((x, i) => (x === r ? i + 1 : 0)).filter(Boolean);
-  return { inputs: pin("in"), output: pin("out")[0], vcc: pin("vcc")[0], gnd: pin("gnd")[0] };
+  return { inputs: pin("in"), outputs: pin("out"), vcc: pin("vcc")[0], gnd: pin("gnd")[0] };
 }
 
-/** Что должен выдать элемент на входах bits. */
-export function truth(func: LogicFunc, bits: boolean[]): boolean {
-  const [a, b] = bits;
+/**
+ * Что должен выдать элемент на входах bits (входы — по номерам выводов), по каждому выходу
+ * (тоже по номерам выводов).
+ */
+export function truth(func: LogicFunc, bits: boolean[]): boolean[] {
+  const [a, b, c] = bits;
   switch (func) {
     case "not":
-      return !a;
+      return [!a];
+    case "buf":
+      return [a];
     case "nand":
-      return !(a && b);
+      return [!(a && b)];
     case "nor":
-      return !(a || b);
+      return [!(a || b)];
     case "and":
-      return a && b;
+      return [a && b];
     case "or":
-      return a || b;
+      return [a || b];
     case "xor":
-      return a !== b;
+      return [a !== b];
+    case "xnor":
+      return [a === b];
+    // Входы A, B, S: S = 0 — выход A, S = 1 — выход B
+    case "mux":
+      return [c ? b : a];
+    // Выходы C (перенос), S (сумма)
+    case "half":
+      return [a && b, a !== b];
+    // Входы A, B, CI; выходы CO, S
+    case "full":
+      return [(a && b) || (c && a !== b), (a !== b) !== c];
   }
 }
 
@@ -91,6 +109,12 @@ const res = (id: string, ohms: number, a: string, b: string) => ({ id, ohms, hol
 const sot = (id: string, func: LogicFunc, row: string, col: number) => {
   const up = "ABCDEFGH"["ABCDEFGH".indexOf(row) - 3];
   return { id, func, holes: [`k:${row}${col}`, `k:${row}${col + 1}`, `k:${row}${col + 2}`, `k:${up}${col + 2}`, `k:${up}${col}`] };
+};
+
+/** Микросхема DIP-6 (своя) на поле корпуса: выводы 1–3 в ряду row, 4–6 — обратно тремя рядами выше. */
+const dip6 = (id: string, func: LogicFunc, row: string, col: number) => {
+  const up = "ABCDEFGH"["ABCDEFGH".indexOf(row) - 3];
+  return { id, func, holes: [`k:${row}${col}`, `k:${row}${col + 1}`, `k:${row}${col + 2}`, `k:${up}${col + 2}`, `k:${up}${col + 1}`, `k:${up}${col}`] };
 };
 
 export const LEVELS: Level[] = [
@@ -299,6 +323,124 @@ export const LEVELS: Level[] = [
       ],
     },
   },
+  {
+    id: "buf",
+    func: "buf",
+    part: "БУФЕР",
+    title: "Буфер",
+    about: "Выход повторяет вход: на входе единица — на выходе единица. Зачем он, если ничего не меняет? Он отдаёт на выход свой ток, а не ток входа — так один сигнал может вести много нагрузок.",
+    hints: ["Какой из открытых вентилей делает «наоборот»? А если сделать «наоборот» дважды?", "Два одинаковых вентиля друг за другом: выход первого — вход второго."],
+    ...GATE1,
+    kit: [{ part: "chip", func: "not", count: 2 }],
+    recipe: {
+      parts: [sot("D1", "not", "E", 2), sot("D2", "not", "E", 8)],
+      nets: [["P2", "D1.2"], ["P3", "D1.3", "D2.3"], ["P5", "D1.5", "D2.5"], ["D1.4", "D2.2"], ["D2.4", "P4"]],
+    },
+  },
+  {
+    id: "xnor",
+    func: "xnor",
+    part: "XNOR",
+    title: "Исключающее ИЛИ-НЕ (XNOR)",
+    about: "Единица на выходе, когда входы одинаковые; ноль — когда разные. Это «сравниватель»: он отвечает, равны ли два бита.",
+    hints: ["Сравните таблицу XNOR с таблицами открытых вентилей: какая совпадает во всех строках, но «наоборот»?", "Исключающее ИЛИ и инвертор на его выходе."],
+    ...GATE2,
+    room: 24,
+    kit: [
+      { part: "chip", func: "xor", count: 1 },
+      { part: "chip", func: "not", count: 1 },
+    ],
+    recipe: {
+      parts: [sot("D1", "xor", "E", 2), sot("D2", "not", "E", 8)],
+      nets: [["P1", "D1.1"], ["P2", "D1.2"], ["P3", "D1.3", "D2.3"], ["P5", "D1.5", "D2.5"], ["D1.4", "D2.2"], ["D2.4", "P4"]],
+    },
+  },
+  {
+    id: "mux",
+    func: "mux",
+    part: "MUX 2→1",
+    title: "Мультиплексор 2→1",
+    about: "Переключатель сигналов: вход S выбирает, какой из двух входов попадёт на выход. S = 0 — на выходе то же, что на A; S = 1 — то же, что на B.",
+    hints: [
+      "Разбейте на два случая: «пропустить A, если S = 0» и «пропустить B, если S = 1». Как сделать «пропустить, только если разрешено» из И-НЕ?",
+      "Одному пути разрешение нужно при S = 1, другому — при S = 0: понадобится S «наоборот». Из И-НЕ инвертор получается, если подать сигнал на оба входа.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "gnd", "out", "in", "vcc"],
+    names: ["A", "B", "", "Y", "S", ""],
+    room: 24,
+    kit: [{ part: "chip", func: "nand", count: 4 }],
+    recipe: {
+      parts: [sot("D1", "nand", "D", 2), sot("D2", "nand", "D", 8), sot("D3", "nand", "H", 2), sot("D4", "nand", "H", 8)],
+      nets: [
+        ["P6", "D1.5", "D2.5", "D3.5", "D4.5"],
+        ["P3", "D1.3", "D2.3", "D3.3", "D4.3"],
+        // D1 = не S; D2 = И-НЕ(A, не S); D3 = И-НЕ(B, S); D4 = И-НЕ(D2, D3)
+        ["P5", "D1.1", "D1.2", "D3.2"],
+        ["D1.4", "D2.2"],
+        ["P1", "D2.1"],
+        ["P2", "D3.1"],
+        ["D2.4", "D4.1"],
+        ["D3.4", "D4.2"],
+        ["D4.4", "P4"],
+      ],
+    },
+  },
+  {
+    id: "half",
+    func: "half",
+    part: "ПОЛУСУММАТОР",
+    title: "Полусумматор",
+    about: "Складывает два бита: A + B. Результат — двузначное двоичное число: S — младший разряд (сумма), C — перенос в старший. 1 + 1 = 10: S = 0, C = 1. У этого компонента два выхода.",
+    hints: ["Выпишите таблицу для S и для C отдельно и сравните каждую с таблицами открытых вентилей.", "S совпадает с одним открытым вентилем, C — с другим. Входы у них общие."],
+    package: "DIP",
+    roles: ["in", "in", "gnd", "out", "out", "vcc"],
+    names: ["A", "B", "", "C", "S", ""],
+    room: 40,
+    kit: [
+      { part: "chip", func: "xor", count: 1 },
+      { part: "chip", func: "and", count: 1 },
+    ],
+    recipe: {
+      parts: [sot("D1", "xor", "E", 2), sot("D2", "and", "E", 8)],
+      nets: [["P1", "D1.1", "D2.1"], ["P2", "D1.2", "D2.2"], ["P3", "D1.3", "D2.3"], ["P6", "D1.5", "D2.5"], ["D1.4", "P5"], ["D2.4", "P4"]],
+    },
+  },
+  {
+    id: "full",
+    func: "full",
+    part: "СУММАТОР",
+    title: "Полный сумматор",
+    about: "Складывает три бита: A + B + CI (перенос из младшего разряда). Выходы: S — сумма, CO — перенос в следующий разряд. Цепочка таких сумматоров складывает числа любой длины.",
+    hints: [
+      "Сложите сначала два бита, потом прибавьте к сумме третий. Сколько раз при этом может возникнуть перенос?",
+      "Два полусумматора друг за другом: второй прибавляет CI к сумме первого. Перенос наружу — если он случился хотя бы в одном из них.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "in", "gnd", "out", "out", "nc", "vcc"],
+    names: ["A", "B", "CI", "", "CO", "S", "", ""],
+    room: 96,
+    kit: [
+      { part: "chip", func: "half", count: 2 },
+      { part: "chip", func: "or", count: 1 },
+    ],
+    recipe: {
+      parts: [dip6("D1", "half", "D", 2), dip6("D2", "half", "D", 8), sot("D3", "or", "H", 12)],
+      nets: [
+        ["P8", "D1.6", "D2.6", "D3.5"],
+        ["P4", "D1.3", "D2.3", "D3.3"],
+        ["P1", "D1.1"],
+        ["P2", "D1.2"],
+        // D1: A + B; D2: сумма D1 + CI; перенос — ИЛИ двух переносов
+        ["D1.5", "D2.1"],
+        ["P3", "D2.2"],
+        ["D2.5", "P6"],
+        ["D1.4", "D3.1"],
+        ["D2.4", "D3.2"],
+        ["D3.4", "P5"],
+      ],
+    },
+  },
 ];
 
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
@@ -311,4 +453,16 @@ export function kitLabel(k: KitItem): string {
   return `${FUNC_NAMES[k.func]} — открытая микросхема`;
 }
 
-export const FUNC_NAMES: Record<LogicFunc, string> = { not: "НЕ", nand: "И-НЕ", nor: "ИЛИ-НЕ", and: "И", or: "ИЛИ", xor: "Исключающее ИЛИ" };
+export const FUNC_NAMES: Record<LogicFunc, string> = {
+  not: "НЕ",
+  nand: "И-НЕ",
+  nor: "ИЛИ-НЕ",
+  and: "И",
+  or: "ИЛИ",
+  xor: "Исключающее ИЛИ",
+  buf: "Буфер",
+  xnor: "Исключающее ИЛИ-НЕ",
+  mux: "Мультиплексор",
+  half: "Полусумматор",
+  full: "Полный сумматор",
+};

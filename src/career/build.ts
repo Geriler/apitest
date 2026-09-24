@@ -16,9 +16,10 @@ import { PIN_ROLES } from "../chips/roles";
 /** Напряжение питания при проверке, В. */
 export const CHECK_VOLTS = 5;
 
-/** Корпус уровня: SOT-23-5 с заданными выводами; менять их нельзя. */
+/** Корпус уровня (SOT-23-5 или DIP) с заданными выводами; менять их нельзя. */
 export function levelCase(level: Level): BoardSpec {
-  const b = newChipBoard(5, 0, 0, "K1", "SOT-23-5");
+  const pkg = level.package ?? "SOT-23-5";
+  const b = newChipBoard(level.roles.length, 0, 0, "K1", pkg);
   return { ...b, roles: [...level.roles], names: [...level.names], label: level.part, fixed: true, ...(level.room ? { room: level.room } : {}) };
 }
 
@@ -146,14 +147,17 @@ export function kitProblems(level: Level, scene: Scene): string[] {
 
 export interface CheckRow {
   inputs: boolean[];
-  expected: boolean;
-  volts: number;
+  /** По выходам (в порядке номеров выводов): что нужно и что есть, В. */
+  expected: boolean[];
+  volts: number[];
+  /** Каждый выход отдельно: верен ли. */
+  each: boolean[];
   /** Ток от питания в этом состоянии, А. */
   amps: number;
   /** Что сгорело или перегружено сверх номинала при этой строке (обозначения внутри микросхемы). */
   burned: string[];
   /** Выход «висит»: идёт за нагрузкой (к общему — ноль, к питанию — единица). */
-  floating?: boolean;
+  floating: boolean[];
   ok: boolean;
 }
 
@@ -225,41 +229,55 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
   const io = gateIo(level);
   const rows: CheckRow[] = [];
   const n = io.inputs.length;
-  /** Один прогон: входы inputs, нагрузка 100 кОм с выхода на общий (down) или на питание. */
+  const u: Chip = { id: "U1", type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement: { mode: "free", x: 0, z: 0, rot: 0 } };
+  const pin = (p: number): Endpoint => ({ comp: "U1", pin: p - 1 });
+  const plus: Endpoint = { comp: "G1", pin: 1 };
+  const minus: Endpoint = { comp: "G1", pin: 0 };
+  const loads = io.outputs.map((_, k) => `RL${k + 1}`);
+  /** Провода стенда: входы inputs, на каждом выходе нагрузка 100 кОм на общий (down) или на питание. */
+  const wiring = (inputs: boolean[], down: boolean) =>
+    (
+      [
+        [plus, pin(io.vcc)],
+        [minus, pin(io.gnd)],
+        ...io.inputs.map((p, i): [Endpoint, Endpoint] => [pin(p), inputs[i] ? plus : minus]),
+        ...io.outputs.flatMap((p, k): [Endpoint, Endpoint][] => [
+          [pin(p), { comp: loads[k], pin: 0 }],
+          [{ comp: loads[k], pin: 1 }, down ? minus : plus],
+        ]),
+      ] as [Endpoint, Endpoint][]
+    ).map(([a, b], i) => ({ id: `W${i}`, a, b, color: "" }));
+  const scene: Scene = {
+    components: [
+      { id: "G1", type: "psu", volts: CHECK_VOLTS, amps: 1, on: true, placement: { mode: "free", x: 0, z: 0, rot: 0 } },
+      u,
+      ...loads.map((id): Component => ({ id, type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: { mode: "free", x: 0, z: 0, rot: 0 } })),
+    ],
+    wires: wiring(Array(n).fill(false), true),
+    boards: [],
+    chips: { ...chips, [def.id]: def },
+  };
+  // Один стенд на всю таблицу, как на столе: входы и нагрузки переключаются, а расчёт продолжается
+  // с прошлого состояния — так он сходится в разы быстрее, чем каждый раз с нуля
+  const sim = new Simulation(scene);
+  const inner = innerParts(def, "U1/", scene.chips!);
+  /** Один прогон: переключить стенд и дать схеме установиться. */
   const run = (inputs: boolean[], down: boolean) => {
-    const u: Chip = { id: "U1", type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement: { mode: "free", x: 0, z: 0, rot: 0 } };
-    const pin = (p: number): Endpoint => ({ comp: "U1", pin: p - 1 });
-    const plus: Endpoint = { comp: "G1", pin: 1 };
-    const minus: Endpoint = { comp: "G1", pin: 0 };
-    const wires: [Endpoint, Endpoint][] = [
-      [plus, pin(io.vcc)],
-      [minus, pin(io.gnd)],
-      ...io.inputs.map((p, i): [Endpoint, Endpoint] => [pin(p), inputs[i] ? plus : minus]),
-      [pin(io.output), { comp: "RL", pin: 0 }],
-      [{ comp: "RL", pin: 1 }, down ? minus : plus],
-    ];
-    const scene: Scene = {
-      components: [
-        { id: "G1", type: "psu", volts: CHECK_VOLTS, amps: 1, on: true, placement: { mode: "free", x: 0, z: 0, rot: 0 } },
-        u,
-        { id: "RL", type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: { mode: "free", x: 0, z: 0, rot: 0 } },
-      ],
-      wires: wires.map(([a, b], i) => ({ id: `W${i}`, a, b, color: "" })),
-      boards: [],
-      chips: { ...chips, [def.id]: def },
-    };
-    const sim = new Simulation(scene);
+    scene.wires = wiring(inputs, down);
+    sim.solve();
     const burnt = new Set<string>();
-    for (let t = 0; t < 0.4; t += 0.05) for (const c of sim.step(0.05)) if (c.id.startsWith("U1/")) burnt.add(c.id.slice(3));
+    for (const c of sim.step(0.01)) if (c.id.startsWith("U1/")) burnt.add(c.id.slice(3));
     // Сгорание в расчёте копится нагревом за секунды, проверка короче — поэтому перегрузка сверх
     // номинала тоже провал: в жизни такая деталь сгорела бы чуть позже
-    for (const c of innerParts(def, "U1/", scene.chips!)) {
+    for (const c of inner) {
       const limit = heatThreshold(c);
       if (limit && sim.overload(c) > limit) burnt.add(c.id.slice(3));
     }
-    const volts = (sim.solution.voltage.get(pinNode(u, io.output - 1)) ?? 0) - (sim.solution.voltage.get(pinNode(u, io.gnd - 1)) ?? 0);
-    // Ток от питания без тока нагрузки: то, что потребляет сама микросхема
-    const amps = Math.max(0, Math.abs(sim.current(scene.components[0])) - Math.abs(sim.current(scene.components[2])));
+    const gnd = sim.solution.voltage.get(pinNode(u, io.gnd - 1)) ?? 0;
+    const volts = io.outputs.map((p) => (sim.solution.voltage.get(pinNode(u, p - 1)) ?? 0) - gnd);
+    // Ток от питания без токов нагрузок: то, что потребляет сама микросхема
+    const loadAmps = loads.reduce((sum, _, k) => sum + Math.abs(sim.current(scene.components[2 + k])), 0);
+    const amps = Math.max(0, Math.abs(sim.current(scene.components[0])) - loadAmps);
     return { volts, amps, burnt };
   };
   for (let m = 0; m < 1 << n; m++) {
@@ -269,17 +287,19 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     // «Висящий» выход послушно пойдёт за нагрузкой и провалит один из прогонов.
     const down = run(inputs, true), up = run(inputs, false);
     const burnt = [...new Set([...down.burnt, ...up.burnt])];
-    const good = (v: number) => (expected ? isHigh(v, CHECK_VOLTS) : isLow(v, CHECK_VOLTS));
-    // Показываем худший из двух прогонов
-    const volts = good(down.volts) ? up.volts : down.volts;
+    const good = (k: number, v: number) => (expected[k] ? isHigh(v, CHECK_VOLTS) : isLow(v, CHECK_VOLTS));
+    // По каждому выходу показываем худший из двух прогонов
+    const volts = expected.map((_, k) => (good(k, down.volts[k]) ? up.volts[k] : down.volts[k]));
+    const each = expected.map((_, k) => good(k, down.volts[k]) && good(k, up.volts[k]));
     rows.push({
       inputs,
       expected,
       volts,
       amps: down.amps,
       burned: burnt,
-      floating: isLow(down.volts, CHECK_VOLTS) && isHigh(up.volts, CHECK_VOLTS),
-      ok: !burnt.length && good(down.volts) && good(up.volts),
+      floating: expected.map((_, k) => isLow(down.volts[k], CHECK_VOLTS) && isHigh(up.volts[k], CHECK_VOLTS)),
+      each,
+      ok: !burnt.length && each.every(Boolean),
     });
   }
   return rows;
@@ -317,20 +337,32 @@ export function diagnose(level: Level, def: ChipDef, rows: CheckRow[]): string[]
   const pinName = (n: number) => `${n} ${level.names[n - 1] || PIN_ROLES[level.roles[n - 1]].name}`;
   // Выводы, от которых внутри ничего не идёт
   const inside = new Set(def.nets.filter((n) => n.members.length).flatMap((n) => n.pins ?? []));
-  const loose = [...io.inputs, io.output, io.vcc, io.gnd].filter((n) => !inside.has(n));
+  const loose = [...io.inputs, ...io.outputs, io.vcc, io.gnd].sort((x, y) => x - y).filter((n) => !inside.has(n));
   if (loose.length) out.push(`${loose.length > 1 ? "Выводы" : "Вывод"} ${loose.map(pinName).join(", ")} ни к чему внутри не ${loose.length > 1 ? "подключены" : "подключён"}.`);
   const burnt = [...new Set(rows.flatMap((r) => r.burned))];
   if (burnt.length) out.push(`При проверке сгорело или перегружено сверх номинала: ${burnt.join(", ")}. Где-то течёт слишком большой ток — посмотрите, откуда и куда.`);
   const names = io.inputs.map((p) => level.names[p - 1] || `вывод ${p}`);
+  const outNames = io.outputs.map((p) => level.names[p - 1] || `вывод ${p}`);
+  const many = io.outputs.length > 1;
   for (const r of rows) {
     if (r.ok || r.burned.length) continue;
     const when = r.inputs.map((b, i) => `${names[i]} = ${b ? 1 : 0}`).join(", ");
-    const v = formatSI(r.volts, "В");
-    const got = r.floating ? "выход ни за что не держится: куда тянет нагрузка, туда и идёт" : isLow(r.volts, CHECK_VOLTS) ? `выход прижат к общему (${v})` : isHigh(r.volts, CHECK_VOLTS) ? `выход у питания (${v})` : `выход висит посередине (${v}) — его никто уверенно не тянет или тянут сразу в обе стороны`;
-    out.push(`При ${when} нужен ${r.expected ? "единица" : "ноль"}, а ${got}.`.replace("нужен единица", "нужна единица"));
+    r.expected.forEach((want, k) => {
+      if (r.each[k]) return;
+      const v = formatSI(r.volts[k], "В");
+      const what = many ? `выход ${outNames[k]}` : "выход";
+      const got = r.floating[k]
+        ? `${what} ни за что не держится: куда тянет нагрузка, туда и идёт`
+        : isLow(r.volts[k], CHECK_VOLTS)
+          ? `${what} прижат к общему (${v})`
+          : isHigh(r.volts[k], CHECK_VOLTS)
+            ? `${what} у питания (${v})`
+            : `${what} висит посередине (${v}) — его никто уверенно не тянет или тянут сразу в обе стороны`;
+      out.push(`При ${when} ${many ? `на ${outNames[k]} ` : ""}нужен ${want ? "единица" : "ноль"}, а ${got}.`.replace("нужен единица", "нужна единица"));
+    });
   }
   return out;
 }
 
 /** Строка таблицы для людей: «A=1 B=0 → 4,98 В». */
-export const rowText = (r: CheckRow) => `${r.inputs.map((b) => (b ? 1 : 0)).join(" ")} → ${formatSI(r.volts, "В")}`;
+export const rowText = (r: CheckRow) => `${r.inputs.map((b) => (b ? 1 : 0)).join(" ")} → ${r.volts.map((v) => formatSI(v, "В")).join(", ")}`;

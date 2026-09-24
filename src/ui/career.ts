@@ -105,10 +105,14 @@ export class CareerPanel {
     const io = gateIo(level);
     const names = io.inputs.map((p) => level.names[p - 1] || `вывод ${p}`);
     const check = this.host.lastCheck;
+    const outs = io.outputs.map((p) => level.names[p - 1] || `вывод ${p}`);
     const table = check?.rows.length
-      ? `<table class="truth"><tr>${names.map((n) => `<th>${esc(n)}</th>`).join("")}<th>нужно</th><th>${esc(level.names[io.output - 1] || "выход")}</th><th></th></tr>${check.rows
+      ? `<table class="truth"><tr>${names.map((n) => `<th>${esc(n)}</th>`).join("")}${outs.map((n) => `<th>${esc(n)} нужно</th><th>${esc(n)}</th>`).join("")}<th></th></tr>${check.rows
           .map(
-            (r) => `<tr>${r.inputs.map((b) => `<td>${b ? 1 : 0}</td>`).join("")}<td>${r.expected ? 1 : 0}</td><td title="${esc(rowText(r))}">${r.volts.toFixed(2).replace(".", ",")} В</td><td class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}</td></tr>`,
+            (r) =>
+              `<tr>${r.inputs.map((b) => `<td>${b ? 1 : 0}</td>`).join("")}${r.expected
+                .map((e, k) => `<td>${e ? 1 : 0}</td><td class="${r.each[k] ? "" : "bad"}" title="${esc(rowText(r))}">${r.volts[k].toFixed(2).replace(".", ",")} В</td>`)
+                .join("")}<td class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}</td></tr>`,
           )
           .join("")}</table>`
       : "";

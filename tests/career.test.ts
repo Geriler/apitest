@@ -30,7 +30,7 @@ describe("карьера: уровни", () => {
       expect(r.rows.map((x) => x.ok)).toEqual(r.rows.map(() => true));
       expect(r.ok).toBe(true);
       expect(r.def!.id).toBe(`career:${level.id}`);
-      expect(r.def!.package).toBe("SOT-23-5");
+      expect(r.def!.package).toBe(level.package ?? "SOT-23-5");
       // Время проверки — чтобы видеть, не тормозят ли составные
       expect(ms).toBeLessThan(20_000);
     });
@@ -183,8 +183,38 @@ describe("карьера: висящий выход", () => {
     applyBoards(scene.boards!);
     const r = checkLevel(level, scene, allChips);
     expect(r.ok).toBe(false);
-    expect(r.rows.find((x) => x.inputs.every(Boolean))!.floating).toBe(true);
+    expect(r.rows.find((x) => x.inputs.every(Boolean))!.floating).toEqual([true]);
     expect(r.diagnosis!.join(" ")).toMatch(/Вывод 3 GND ни к чему внутри не подключён/);
     expect(r.diagnosis!.join(" ")).toMatch(/При A = 1, B = 1 нужен ноль, а выход ни за что не держится/);
+  });
+});
+
+
+describe("карьера: несколько выходов", () => {
+  it("полный сумматор: 8 строк, по два выхода; сумма и перенос по отдельности", () => {
+    const level = levelById("full")!;
+    const scene = recipeScene(level, chipFor);
+    applyBoards(scene.boards!);
+    const r = checkLevel(level, scene, allChips);
+    expect(r.rows).toHaveLength(8);
+    // A=1 B=1 CI=1 → CO=1, S=1
+    const all = r.rows.find((x) => x.inputs.every(Boolean))!;
+    expect(all.expected).toEqual([true, true]);
+    expect(all.volts.every((v) => v > 4.5)).toBe(true);
+    expect(r.metrics!.transistors).toBeGreaterThan(30);
+  });
+
+  it("полусумматор без провода к S: сказано, что именно S не так, а C в порядке", () => {
+    const level = levelById("half")!;
+    const scene = recipeScene(level, chipFor);
+    scene.wires = scene.wires.filter((w) => ![w.a, w.b].some((e) => "hole" in e && e.hole === "k:5"));
+    applyBoards(scene.boards!);
+    const r = checkLevel(level, scene, allChips);
+    expect(r.ok).toBe(false);
+    expect(r.rows.every((x) => x.each[0])).toBe(true);
+    const text = r.diagnosis!.join(" ");
+    expect(text).toMatch(/Вывод 5 S ни к чему внутри не подключён/);
+    expect(text).toMatch(/на S нужна единица, а выход S/);
+    expect(text).not.toMatch(/на C нужн/);
   });
 });
