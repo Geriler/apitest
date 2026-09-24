@@ -153,6 +153,8 @@ export interface PartDef<C extends Component = Component> {
   visual?(c: C, sim: Simulation): Partial<Visual>;
   /** Переключить: тумблер, выход блока питания (кнопка data-act="toggle" в панели). */
   toggle?(c: C): void;
+  /** Кнопка без фиксации: нажатие указателем держит её замкнутой до отпускания (Simulation.held). */
+  momentary?: boolean;
   /** Обычный щелчок переключает деталь (toggle), а не выделяет её. */
   clickToggles?: boolean;
 

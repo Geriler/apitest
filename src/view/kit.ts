@@ -19,6 +19,8 @@ export interface Visual {
   burned: boolean;
   shorted: boolean;
   time: number;
+  /** Кнопку держат нажатой. */
+  pressed?: boolean;
   /** Картинка для экрана прибора (осциллограф, мультиметр): считается, только когда её рисуют. */
   screen?: () => unknown;
   /** Показания лабораторного блока (для его дисплея). */

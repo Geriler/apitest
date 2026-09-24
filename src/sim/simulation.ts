@@ -92,6 +92,8 @@ export class Simulation {
   solution: Solution = { nodeOf: new Map(), voltage: new Map(), branches: new Map() };
   /** Время расчёта, с: растёт с каждым шагом (замедленное, если расчёт не успевает). */
   time = 0;
+  /** Детали, которые сейчас держат нажатыми (кнопки): не часть схемы, в проект не сохраняется. */
+  readonly held = new Set<string>();
   /** Своя память деталей между шагами (запись осциллографа): ключ — обозначение детали. */
   readonly memory = new Map<string, unknown>();
   /** Сколько итераций Ньютона потребовало последнее решение (для тестов и отладки). */
@@ -188,6 +190,7 @@ export class Simulation {
   solve(): void {
     for (const c of this.scene.components) this.state(c.id);
     const alive = new Set(this.scene.components.map((c) => c.id));
+    for (const id of [...this.held]) if (!alive.has(id)) this.held.delete(id);
     for (const m of [this.states, this.capVoltage, this.junction, this.psuMode, this.memory]) {
       for (const key of [...m.keys()]) if (!alive.has(key.split(":")[0])) m.delete(key);
     }

@@ -5,12 +5,14 @@
 
 import type { Component } from "../model/types";
 import { battery } from "./battery";
+import { button } from "./button";
 import { capacitor } from "./capacitor";
 import { diode } from "./diode";
 import { lamp } from "./lamp";
 import { led } from "./led";
 import { mosfet } from "./mosfet";
 import { multimeter } from "./multimeter";
+import { pot } from "./pot";
 import { psu } from "./psu";
 import { resistor } from "./resistor";
 import { scope } from "./scope";
@@ -33,6 +35,8 @@ export const PARTS: { [K in Component["type"]]: PartDef<ComponentOf<K>> } = {
   mosfet,
   meter: multimeter,
   scope,
+  button,
+  pot,
 };
 
 /** Описание типа этой детали. */

@@ -272,6 +272,20 @@ export interface PowerSupply extends Base {
 
 export const PSU_LIMITS = { maxV: 30, maxA: 3 };
 
+/** Кнопка без фиксации: замкнута, пока её держат. Нажата ли — состояние расчёта (Simulation.held), не схемы. */
+export interface PushButton extends Base {
+  type: "button";
+}
+
+/** Потенциометр: вывод 0 и 2 — концы дорожки, 1 — движок. */
+export interface Potentiometer extends Base {
+  type: "pot";
+  /** Полное сопротивление дорожки, Ом. */
+  ohms: number;
+  /** Положение движка: 0 — у вывода 0, 1 — у вывода 2. */
+  position: number;
+}
+
 /** Режим мультиметра: вольтметр, миллиамперметр, амперметр, омметр. */
 export type MeterMode = "V" | "mA" | "A" | "ohm";
 
@@ -292,7 +306,7 @@ export interface Oscilloscope extends Base {
   hold?: boolean;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope;
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */

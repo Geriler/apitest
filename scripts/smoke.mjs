@@ -279,6 +279,40 @@ try {
       });
       check(meterPlaced.n === nBefore + 1 && meterPlaced.type === "meter" && meterPlaced.mode === "V", `мультиметр встал на стол (${meterPlaced.type}, ${meterPlaced.mode})`);
       await page.keyboard.press("Escape");
+
+      // Кнопка без фиксации: лампа горит, пока кнопку держат мышью; нажатие не выделяет и не двигает кнопку
+      await page.evaluate(() =>
+        window.maketka.replaceScene({
+          components: [
+            { id: "GB1", type: "battery", kind: "9V", placement: { mode: "free", x: -32, z: -4, rot: 0 } },
+            { id: "SB1", type: "button", placement: { mode: "board", holes: ["e5", "e8"] } },
+            { id: "HL1", type: "lamp", kind: "12V", placement: { mode: "board", holes: ["c8", "c12"] } },
+          ],
+          wires: [
+            { id: "W1", a: { comp: "GB1", pin: 1 }, b: { hole: "a5" }, color: "#c8261f" },
+            { id: "W2", a: { comp: "GB1", pin: 0 }, b: { hole: "a12" }, color: "#1b1d20" },
+          ],
+        }),
+      );
+      await page.waitForTimeout(300);
+      const sbAt = await page.evaluate(() => {
+        const a = window.maketka;
+        const p = a.views.get("SB1").hotspot.clone();
+        p.y -= 1.5;
+        const s = a.world.toScreen(p);
+        return { x: s.x, y: s.y };
+      });
+      const buttonLampI = () => page.evaluate(() => window.maketka.sim.current(window.maketka.component("HL1")));
+      await page.mouse.move(sbAt.x, sbAt.y);
+      await page.mouse.down();
+      await page.waitForTimeout(300);
+      const heldI = await buttonLampI();
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+      const releasedI = await buttonLampI();
+      const sbState = await page.evaluate(() => ({ holes: window.maketka.component("SB1").placement.holes.join(), picked: window.maketka.picked ?? "" }));
+      check(heldI > 0.05 && Math.abs(releasedI) < 1e-9, `кнопка: держим — лампа ${(heldI * 1000).toFixed(0)} мА, отпустили — ${releasedI.toExponential(1)} А`);
+      check(sbState.holes === "e5,e8" && sbState.picked === "", "нажатие не сдвинуло и не выделило кнопку");
       await page.screenshot({ path: "screenshots/desktop-final.png" });
 
       // Пример 2: конденсатор и светодиоды

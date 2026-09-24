@@ -839,7 +839,10 @@ export class App {
     el.addEventListener("pointermove", (e) => this.onMove(e));
     el.addEventListener("pointerdown", (e) => this.onDown(e));
     el.addEventListener("pointerup", (e) => this.onUp(e));
+    el.addEventListener("pointercancel", () => this.release());
+    window.addEventListener("blur", () => this.release());
     el.addEventListener("pointerleave", () => {
+      this.release();
       this.hover = { overBoard: false };
       this.refreshMarks();
     });
@@ -997,6 +1000,13 @@ export class App {
     if (this.tool !== "select" || e.button !== 0) return;
     const h = this.computeHover(e);
     const c = h.componentId ? this.component(h.componentId) : undefined;
+    // Кнопку без фиксации нажимают, а не тащат: замкнута, пока указатель не отпустят
+    if (c && part(c).momentary && !e.shiftKey) {
+      this.holding = c.id;
+      this.sim.held.add(c.id);
+      this.sim.solve();
+      return;
+    }
     if (c && c.placement.mode === "free") {
       const p = this.world.pickTable(this.world.ndcFromEvent(e));
       if (p) {
@@ -1028,9 +1038,30 @@ export class App {
   /** Щелчок с Shift: у тумблера — открыть панель вместо переключения. */
   private shiftClick = false;
 
+  /** Держат ли кнопку «Нажать и держать» в панели. */
+  private panelHold = false;
+  /** Кнопка, которую сейчас держат указателем. */
+  private holding?: string;
+
+  /** Отпустить кнопку, которую держали указателем. */
+  private release(): void {
+    if (!this.holding) return;
+    this.sim.held.delete(this.holding);
+    this.holding = undefined;
+    this.sim.solve();
+  }
+
   private onUp(e: PointerEvent): void {
     // На сенсорном экране Shift нет — вместо него долгое нажатие
     this.shiftClick = e.shiftKey || (e.pointerType !== "mouse" && !!this.down && e.timeStamp - this.down.t > LONG_PRESS_MS);
+    if (this.holding) {
+      const id = this.holding;
+      this.release();
+      // Долгое нажатие на телефоне — ещё и открыть панель кнопки
+      if (!this.shiftClick) return;
+      this.hover = this.computeHover(e);
+      return this.click(id);
+    }
     const moved = this.down ? Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) : 99;
     const wasDrag = this.drag;
     if (this.partDrag) {
@@ -1276,7 +1307,7 @@ export class App {
 
     if (part(sample).pins === 3 && h.hole) {
       const holes = this.transistorHoles(h.hole);
-      if (!holes) return this.setHint("Транзистор ставится в основное поле: в шине все три вывода оказались бы замкнуты.");
+      if (!holes) return this.setHint("Деталь с тремя выводами ставится в основное поле: в шине все три вывода оказались бы замкнуты.");
       const occ = this.occupied();
       const busy = holes.find((id) => occ.has(id));
       if (busy) return this.setHint(`Отверстие <b>${holeLabel(busy)}</b> занято (${occ.get(busy)}). Нужны три свободных отверстия подряд.`);
@@ -1467,6 +1498,8 @@ export class App {
     const focused = document.activeElement;
     if ((focused instanceof HTMLSelectElement || focused instanceof HTMLInputElement) && this.ui.inspector.contains(focused) && key === this.inspectorKey) return;
     if (key === this.inspectorKey && html === this.inspectorHtml) return;
+    // Кнопку в панели держат — не пересоздаём её, иначе удержание оборвётся
+    if (this.panelHold && key === this.inspectorKey) return;
     this.inspectorKey = key;
     this.inspectorHtml = html;
     this.ui.inspector.innerHTML = html;
@@ -1513,6 +1546,32 @@ export class App {
         this.record();
         this.inspectorHtml = "";
       });
+    });
+    // «Нажать и держать» для кнопки без фиксации
+    root.querySelectorAll<HTMLButtonElement>("[data-hold]").forEach((btn) => {
+      const id = this.selected;
+      if (!id) return;
+      const set = (on: boolean) => {
+        if (on === this.sim.held.has(id)) return;
+        if (on) this.sim.held.add(id);
+        else this.sim.held.delete(id);
+        this.sim.solve();
+        // Панель не перерисовывается, пока кнопку держат, — плашку состояния меняем на месте
+        const c = this.component(id);
+        const pill = root.querySelector(".pill");
+        if (c && pill) pill.outerHTML = part(c).status?.(c, this.sim) ?? "";
+      };
+      btn.addEventListener("pointerdown", (e) => {
+        btn.setPointerCapture(e.pointerId);
+        this.panelHold = true;
+        set(true);
+      });
+      for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) {
+        btn.addEventListener(ev, () => {
+          this.panelHold = false;
+          set(false);
+        });
+      }
     });
     root.querySelectorAll<HTMLButtonElement>("[data-color]").forEach((btn) => {
       btn.addEventListener("click", () => {
