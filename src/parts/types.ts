@@ -144,6 +144,8 @@ export interface PartDef<C extends Component = Component> {
   schematicParts?(c: C, sim: Simulation): SchematicPart[];
   /** Названия выводов для подписей проводов: «COM», «NO»… (по умолчанию «вывод N»). */
   pinLabels?: string[];
+  /** То же, если название зависит от детали (цоколёвка MOSFET, выводы микросхемы). */
+  pinLabel?(c: C, pin: number, scene: Scene): string;
   /** Буквы в обозначении на схеме (V, A, Ω): рисуются не переворачиваясь, в центре обозначения. */
   symbolText?(c: C): string;
   /** Цвета проводов «авто» от выводов детали на столе: у батареи — чёрный к минусу, красный к плюсу. */

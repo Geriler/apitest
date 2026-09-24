@@ -65,6 +65,7 @@ export const multimeter: PartDef<Multimeter> = {
   type: "meter",
   prefix: "P",
   pins: 2,
+  pinLabels: ["COM", "V/Ω/A"],
   onBoard: () => false,
   tools: [
     toolFor<Multimeter>()({

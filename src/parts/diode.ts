@@ -17,6 +17,7 @@ export const diode: PartDef<Diode> = {
   type: "diode",
   prefix: "VD",
   pins: 2,
+  pinLabels: ["анод", "катод"],
   countAs: (c) => ({ name: `диод ${diodeSpec(c).label}` }),
   onBoard: () => true,
   tools: [

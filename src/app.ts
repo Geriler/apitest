@@ -30,10 +30,10 @@ import {
   type WireShape,
 } from "./model/types";
 import { formatSI } from "./sim/resistorCodes";
-import { Simulation, heatThreshold } from "./sim/simulation";
+import { Simulation, heatThreshold, pinNode } from "./sim/simulation";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
-import { PARTS, part, pinsOf } from "./parts";
+import { PARTS, part, pinLabelOf, pinsOf } from "./parts";
 import type { World } from "./view/world";
 import { ProjectsPanel } from "./ui/projects";
 import { loadLibrary, saveLibrary } from "./chips/library";
@@ -61,6 +61,8 @@ const LONG_PRESS_MS = 450;
 interface Hover {
   hole?: Hole;
   pin?: { comp: string; pin: Pin; pos: THREE.Vector3 };
+  /** Вывод под курсором для подсказки (любой детали, и на плате тоже). */
+  pinTip?: { comp: string; pin: Pin; pos: THREE.Vector3 };
   componentId?: string;
   wireId?: string;
   traceId?: string;
@@ -600,6 +602,7 @@ export class App {
     if (this.time - this.lastInspector > 0.2) {
       this.lastInspector = this.time;
       this.renderInspector();
+      if (this.pinTipEl && !this.pinTipEl.hidden) this.updatePinTip();
       this.renderSchematic();
     }
     this.world.render();
@@ -957,6 +960,7 @@ export class App {
     el.addEventListener("pointerleave", () => {
       this.release();
       this.hover = { overBoard: false };
+      this.updatePinTip();
       this.refreshMarks();
     });
     el.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -1034,6 +1038,19 @@ export class App {
     h.componentId = obj?.componentId;
     h.wireId = obj?.wireId;
     h.traceId = obj?.traceId;
+    // Подсказка у вывода: ближайший вывод детали под курсором (или вывод свободной детали рядом)
+    if (h.componentId) {
+      let near = 30;
+      this.views.get(h.componentId)?.pins.forEach((p, i) => {
+        const s = this.world.toScreen(p);
+        const d = Math.hypot(s.x - e.clientX, s.y - e.clientY);
+        if (d < near) {
+          near = d;
+          h.pinTip = { comp: h.componentId!, pin: i as Pin, pos: p };
+        }
+      });
+    }
+    h.pinTip ??= h.pin;
     if (this.tool === "trace") {
       // Дорожку рисуем по площадкам: детали и провода не мешают
       h.hole = this.world.pickHole(ndc);
@@ -1049,6 +1066,33 @@ export class App {
       if (!h.overBoard) h.table = this.world.pickTable(ndc);
     }
     return h;
+  }
+
+  /** Ярлык у курсора: деталь, вывод и его потенциал. */
+  private pinTipEl?: HTMLElement;
+  private pinTipAt = { x: 0, y: 0 };
+
+  private updatePinTip(x = this.pinTipAt.x, y = this.pinTipAt.y): void {
+    this.pinTipAt = { x, y };
+    const tip = this.hover.pinTip;
+    const c = tip && (this.tool === "select" || this.tool === "wire") ? this.component(tip.comp) : undefined;
+    if (!this.pinTipEl) {
+      this.pinTipEl = document.createElement("div");
+      this.pinTipEl.className = "pin-tip";
+      this.pinTipEl.setAttribute("role", "status");
+      document.body.appendChild(this.pinTipEl);
+    }
+    const el = this.pinTipEl;
+    if (!c || !tip) {
+      el.hidden = true;
+      return;
+    }
+    const v = this.sim.solution.voltage.get(pinNode(c, tip.pin));
+    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    el.innerHTML = `<b>${esc(c.id)}</b> · ${esc(pinLabelOf(c, tip.pin, this.scene))} <span>${v === undefined ? "не подключён" : formatSI(v, "В")}</span>`;
+    el.style.left = `${x + 16}px`;
+    el.style.top = `${y + 14}px`;
+    el.hidden = false;
   }
 
   private onMove(e: PointerEvent): void {
@@ -1092,6 +1136,7 @@ export class App {
       return;
     }
     this.hover = this.computeHover(e);
+    this.updatePinTip(e.clientX, e.clientY);
     const el = this.world.renderer.domElement;
     const interactive =
       (this.tool === "select" && (this.hover.componentId || this.hover.wireId || this.hover.traceId)) ||
@@ -1500,6 +1545,12 @@ export class App {
     };
     const h = this.hover;
     if (h.hole && !h.componentId) strip(h.hole, "#f0c9a8", "#b0612a");
+    // Вывод детали на плате под курсором — его цепь
+    const tipComp = h.pinTip ? this.component(h.pinTip.comp) : undefined;
+    if (tipComp?.placement.mode === "board" && this.tool === "select") {
+      const hole = HOLE_BY_ID.get(tipComp.placement.holes[h.pinTip!.pin]);
+      if (hole) strip(hole, "#f0c9a8", "#b0612a");
+    }
     else if (h.hole && this.tool !== "select" && this.tool !== "delete") strip(h.hole, "#f0c9a8", "#b0612a");
     if (this.pendingHole) strip(this.pendingHole, "#f0c9a8", "#b0612a");
     if (this.pendingPad) strip(this.pendingPad, "#f0c9a8", "#b0612a");

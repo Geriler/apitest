@@ -126,6 +126,7 @@ export const mosfet: PartDef<Mosfet> = {
   type: "mosfet",
   prefix: "VT",
   pins: 3,
+  pinLabel: (c, i) => ({ G: "затвор", D: "сток", S: "исток" })[MOSFETS[c.kind].pins[i]],
   countAs: (c) => ({ name: MOSFETS[c.kind].label, transistor: true }),
   onBoard: () => true,
   tools: [

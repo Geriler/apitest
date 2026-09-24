@@ -14,6 +14,7 @@ export const battery: PartDef<Battery> = {
   type: "battery",
   prefix: "GB",
   pins: 2,
+  pinLabels: ["минус", "плюс"],
   onBoard: () => false,
   tools: [
     toolFor<Battery>()({

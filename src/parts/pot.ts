@@ -35,6 +35,7 @@ export const pot: PartDef<Potentiometer> = {
   type: "pot",
   prefix: "R",
   pins: 3,
+  pinLabels: ["крайний вывод 1", "движок", "крайний вывод 3"],
   notInChip: () => "подстроечник 9,5 × 10 мм шире корпуса DIP (6,4 мм), да и крутить его будет нечем",
   onBoard: () => true,
   tools: [

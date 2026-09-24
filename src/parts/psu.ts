@@ -15,6 +15,7 @@ export const psu: PartDef<PowerSupply> = {
   type: "psu",
   prefix: "G",
   pins: 2,
+  pinLabels: ["минус", "плюс"],
   onBoard: () => false,
   tools: [
     toolFor<PowerSupply>()({

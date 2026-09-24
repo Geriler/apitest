@@ -102,6 +102,7 @@ export const scope: PartDef<Oscilloscope> = {
   type: "scope",
   prefix: "P",
   pins: 3,
+  pinLabels: ["общий", "канал 1", "канал 2"],
   onBoard: () => false,
   tools: [
     toolFor<Oscilloscope>()({

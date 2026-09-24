@@ -39,6 +39,10 @@ export const chip: PartDef<Chip> = {
   type: "chip",
   prefix: "D",
   pins: 0,
+  pinLabel: (c, i, scene) => {
+    const def = resolveChip(scene, c.def);
+    return def ? `${i + 1} ${chipPinName(def, i)}` : `вывод ${i + 1}`;
+  },
   pinCount: (c) => c.pins,
   // Вложенная микросхема занимает столько, сколько её начинка
   chipSpace: (c, scene) => {

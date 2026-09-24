@@ -22,6 +22,7 @@ export const chipPin: PartDef<ChipPin> = {
   type: "chippin",
   prefix: "X",
   pins: 1,
+  pinLabel: (c) => `вывод ${c.number} ${pinTitle(c)}`,
   chipSpace: () => 0,
   onBoard: () => true,
   tools: [

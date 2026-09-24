@@ -5,7 +5,7 @@
 
 import { BOARDS, HOLE_BY_ID, PCB_SIZES, boardById, boardName, boardSize, describeNode, holeLabel, type BoardSpec, type Hole } from "../model/breadboard";
 import { isFlatWire, type Component, type Endpoint, type Scene, type WireShape } from "../model/types";
-import { part } from "../parts";
+import { part, pinLabelOf } from "../parts";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
 import { heatThreshold, traceResistance, wireResistance, type Simulation } from "../sim/simulation";
 import { pill, readout, selectField } from "../view/panel";
@@ -103,8 +103,7 @@ export function wirePanel(h: PanelHost, id: string): [string, string] {
   const name = (e: Endpoint) => {
     if ("hole" in e) return holeLabel(e.hole);
     const c = h.scene.components.find((x) => x.id === e.comp);
-    const label = c && part(c).pinLabels?.[e.pin];
-    return label ? `${label} детали ${e.comp}` : `вывод ${e.pin + 1} детали ${e.comp}`;
+    return c ? `${pinLabelOf(c, e.pin, h.scene)} детали ${e.comp}` : `вывод ${e.pin + 1} детали ${e.comp}`;
   };
   const sameBoard = isFlatWire({ ...w, shape: "flat" });
   const shapeRow = sameBoard

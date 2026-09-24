@@ -3,7 +3,7 @@
  * сделать файл с PartDef в этой папке и добавить строку сюда.
  */
 
-import type { Component } from "../model/types";
+import type { Component, Scene } from "../model/types";
 import { battery } from "./battery";
 import { button } from "./button";
 import { capacitor } from "./capacitor";
@@ -44,6 +44,11 @@ export const PARTS: { [K in Component["type"]]: PartDef<ComponentOf<K>> } = {
   chippin: chipPin,
   chip,
 };
+
+/** Название вывода: «база», «2 MID», «COM»… (по умолчанию «вывод N»). */
+export function pinLabelOf(c: Component, pin: number, scene: Scene): string {
+  return part(c).pinLabel?.(c, pin, scene) ?? part(c).pinLabels?.[pin] ?? `вывод ${pin + 1}`;
+}
 
 /** Число выводов этой детали. */
 export function pinsOf(c: Component): number {
