@@ -37,7 +37,7 @@ import {
 import { formatSI } from "./sim/resistorCodes";
 import { Simulation, heatThreshold, pinNode } from "./sim/simulation";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
-import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
+import { MAX_WIRE_LAYERS, buildComponentView, buildTraceView, buildWireView, wireLifts, type ComponentView, type WireView } from "./view/builders";
 import { PARTS, dropUnknownParts, part, pinLabelOf, pinsOf } from "./parts";
 import type { World } from "./view/world";
 import { ProjectsPanel } from "./ui/projects";
@@ -537,8 +537,9 @@ export class App {
       this.world.componentLayer.add(v.group);
       if (this.sim.state(c.id).burned) v.update(this.visual(c));
     }
+    const lifts = this.wireLifts(this.scene.wires);
     for (const w of this.scene.wires) {
-      const wv = buildWireView(w.id, this.endpointPos(w.a), this.endpointPos(w.b), w.color, isFlatWire(w));
+      const wv = buildWireView(w.id, this.endpointPos(w.a), this.endpointPos(w.b), w.color, isFlatWire(w), lifts.get(w.id) ?? 0);
       this.wireViews.set(w.id, wv);
       this.world.wireLayer.add(wv.mesh);
     }
@@ -1789,7 +1790,11 @@ export class App {
       return;
     }
     if (sameEndpoint(this.pendingEnd, end)) return this.cancelPending();
-    this.scene.wires.push({ id: this.nextWireId(), a: this.pendingEnd, b: end, color: this.pickWireColor(this.pendingEnd, end), shape: this.defaults.wireShape });
+    const wire: Wire = { id: this.nextWireId(), a: this.pendingEnd, b: end, color: this.pickWireColor(this.pendingEnd, end), shape: this.defaults.wireShape };
+    if (this.wireLifts([...this.scene.wires, wire]).get(wire.id) === null) {
+      return this.setHint(`Здесь уже ${MAX_WIRE_LAYERS} провода друг над другом — ещё один не ляжет. Проведите в обход.`);
+    }
+    this.scene.wires.push(wire);
     this.pendingEnd = undefined;
     this.clearGhost();
     this.changed();
@@ -2027,14 +2032,31 @@ export class App {
     this.world.highlightBoard(this.tool === "select" ? this.selectedBoard : undefined);
   }
 
+  /** Высоты проводов, чтобы не проходили друг сквозь друга (last — где конец последнего, если его ещё нет в схеме). */
+  private wireLifts(wires: Wire[], last?: THREE.Vector3): Map<string, number | null> {
+    return wireLifts(
+      wires.map((w, i) => ({
+        id: w.id,
+        a: this.endpointPos(w.a),
+        b: last && i === wires.length - 1 ? last : this.endpointPos(w.b),
+        flat: isFlatWire(w),
+      })),
+    );
+  }
+
   private updateGhost(): void {
     const h = this.hover;
     if (this.tool === "wire" && this.pendingEnd) {
       const target = h.pin?.pos ?? (h.hole ? new THREE.Vector3(h.hole.x, h.hole.y, h.hole.z) : h.table);
       if (!target) return this.clearGhost();
       const a = this.endpointPos(this.pendingEnd);
-      const flat = !!h.hole && !h.pin && isFlatWire({ a: this.pendingEnd, b: { hole: h.hole.id }, shape: this.defaults.wireShape });
-      return this.showGhost(buildWireView("ghost", a, target, "#ffffff", flat).mesh);
+      const b: Endpoint = h.pin ? { comp: h.pin.comp, pin: h.pin.pin } : h.hole ? { hole: h.hole.id } : { hole: "" };
+      const flat = !!h.hole && !h.pin && isFlatWire({ a: this.pendingEnd, b, shape: this.defaults.wireShape });
+      // Призрак — на той высоте, где ляжет провод (над теми, что на пути)
+      const ghost: Wire = { id: "ghost", a: this.pendingEnd, b, color: "", shape: this.defaults.wireShape };
+      const lift = h.hole || h.pin ? this.wireLifts([...this.scene.wires, ghost], target).get("ghost") : 0;
+      if (lift === null) return this.clearGhost();
+      return this.showGhost(buildWireView("ghost", a, target, "#ffffff", flat, lift ?? 0).mesh);
     }
     if (this.tool === "trace" && this.pendingPad && h.hole?.boardId === this.pendingPad.boardId && h.hole.id !== this.pendingPad.id) {
       return this.showGhost(buildTraceView("ghost", this.pendingPad, h.hole).mesh);

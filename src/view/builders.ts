@@ -36,23 +36,96 @@ export interface WireView {
   dispose(): void;
 }
 
-/** Дуга провода: концы уходят вертикально вверх, высота зависит от длины. */
-export function wireCurve(a: THREE.Vector3, b: THREE.Vector3): THREE.CubicBezierCurve3 {
-  const d = a.distanceTo(b);
-  const h = THREE.MathUtils.clamp(0.8 + d * 0.22, 1, 7);
-  const top = Math.max(a.y, b.y) + h;
+/** Дуга провода: концы уходят вертикально вверх, высота зависит от длины; lift — подъём над другими. */
+export function wireCurve(a: THREE.Vector3, b: THREE.Vector3, lift = 0): THREE.CubicBezierCurve3 {
+  const top = arcTop(a, b) + lift;
   return new THREE.CubicBezierCurve3(a, a.clone().setY(top), b.clone().setY(top), b);
+}
+
+function arcTop(a: THREE.Vector3, b: THREE.Vector3): number {
+  const d = a.distanceTo(b);
+  return Math.max(a.y, b.y) + THREE.MathUtils.clamp(0.8 + d * 0.22, 1, 7);
 }
 
 /** Радиус провода в изоляции, в шагах. */
 const WIRE_R = mm(0.75);
 
+/** Больше стольких проводов друг над другом в одном месте не кладём. */
+export const MAX_WIRE_LAYERS = 4;
+
+export interface WireLayout {
+  id: string;
+  a: THREE.Vector3;
+  b: THREE.Vector3;
+  flat: boolean;
+}
+
+/** Где отрезки ab и cd (на плоскости стола) пересекаются: параметры на каждом, или нет. */
+function crossing(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3): [number, number] | undefined {
+  const r = [b.x - a.x, b.z - a.z], s = [d.x - c.x, d.z - c.z];
+  const den = r[0] * s[1] - r[1] * s[0];
+  if (Math.abs(den) < 1e-9) return undefined;
+  const qp = [c.x - a.x, c.z - a.z];
+  const t = (qp[0] * s[1] - qp[1] * s[0]) / den;
+  const u = (qp[0] * r[1] - qp[1] * r[0]) / den;
+  return t > 0.03 && t < 0.97 && u > 0.03 && u < 0.97 ? [t, u] : undefined;
+}
+
+/** Наименьшее расстояние между отрезками ab и cd на плоскости стола. */
+function segDist(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3): number {
+  if (crossing(a, b, c, d)) return 0;
+  const pt = (p: THREE.Vector3, s0: THREE.Vector3, s1: THREE.Vector3) => {
+    const vx = s1.x - s0.x, vz = s1.z - s0.z;
+    const l2 = vx * vx + vz * vz || 1;
+    const k = THREE.MathUtils.clamp(((p.x - s0.x) * vx + (p.z - s0.z) * vz) / l2, 0, 1);
+    return Math.hypot(p.x - s0.x - k * vx, p.z - s0.z - k * vz);
+  };
+  return Math.min(pt(a, c, d), pt(b, c, d), pt(c, a, b), pt(d, a, b));
+}
+
+/**
+ * Высота проводов, чтобы они не проходили друг сквозь друга: каждый следующий (по порядку в схеме)
+ * ложится поверх тех, что уже лежат на его пути. Перемычка — на этаж выше (этаж — толщина провода),
+ * дуга — выгибается выше в точке пересечения. null — выше четвёртого этажа уже не положить.
+ */
+export function wireLifts(wires: WireLayout[]): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  const level = new Map<string, number>();
+  const clear = 2.2 * WIRE_R;
+  for (let i = 0; i < wires.length; i++) {
+    const w = wires[i];
+    let lvl = 0;
+    let lift = 0;
+    for (let j = 0; j < i; j++) {
+      const o = wires[j];
+      if (o.flat !== w.flat || out.get(o.id) == null) continue;
+      if (w.flat) {
+        // Перемычки лежат на плате: мешает и та, что проходит рядом, и её ножка в отверстии
+        if (segDist(w.a, w.b, o.a, o.b) < 2 * WIRE_R) lvl = Math.max(lvl, level.get(o.id)! + 1);
+        continue;
+      }
+      const x = crossing(w.a, w.b, o.a, o.b);
+      if (!x) continue;
+      lvl = Math.max(lvl, level.get(o.id)! + 1);
+      // Высота той дуги в точке пересечения — наша должна быть выше на толщину провода
+      const [t, u] = x;
+      const other = wireCurve(o.a, o.b, out.get(o.id)!).getPoint(u).y;
+      const mine = wireCurve(w.a, w.b).getPoint(t).y;
+      lift = Math.max(lift, (other + clear - mine) / (3 * t * (1 - t)));
+    }
+    level.set(w.id, lvl);
+    // Пересечение у самого края требовало бы огромной дуги — выше 6 шагов не поднимаем
+    out.set(w.id, lvl >= MAX_WIRE_LAYERS ? null : w.flat ? lvl * 2 * WIRE_R : THREE.MathUtils.clamp(lift, 0, 6));
+  }
+  return out;
+}
+
 /**
  * Прямая перемычка: ножки из отверстий вверх до изоляции, загиб, прямой участок, лежащий
  * на плате, загиб, ножка вниз. a и b — отверстия на поверхности одной платы.
  */
-export function flatWireCurve(a: THREE.Vector3, b: THREE.Vector3): THREE.CurvePath<THREE.Vector3> {
-  const y = a.y + WIRE_R;
+export function flatWireCurve(a: THREE.Vector3, b: THREE.Vector3, lift = 0): THREE.CurvePath<THREE.Vector3> {
+  const y = a.y + WIRE_R + lift;
   const bottom = a.y - 0.2;
   const dir = b.clone().sub(a).setY(0).normalize();
   const bend = Math.min(0.2, a.distanceTo(b) / 4);
@@ -68,10 +141,10 @@ export function flatWireCurve(a: THREE.Vector3, b: THREE.Vector3): THREE.CurvePa
   return path;
 }
 
-export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, color: string, flat = false): WireView {
+export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, color: string, flat = false, lift = 0): WireView {
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.45 });
   if (!flat) {
-    const curve = wireCurve(a, b);
+    const curve = wireCurve(a, b, lift);
     const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 48, WIRE_R, 10, false), mat);
     mesh.castShadow = true;
     mesh.userData.wireId = id;
@@ -86,14 +159,14 @@ export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, co
     };
   }
   // Голая медь по всей длине (видна на ножках) и изоляция на прямом участке
-  const curve = flatWireCurve(a, b);
+  const curve = flatWireCurve(a, b, lift);
   const group = new THREE.Group();
   const copper = new THREE.Mesh(new THREE.TubeGeometry(curve, 64, mm(0.32), 8, false), leadMaterial);
   group.add(copper);
   const dir = b.clone().sub(a).setY(0).normalize();
   const d = a.distanceTo(b);
   const bare = Math.min(0.35, d * 0.2); // у отверстий изоляция срезана
-  const y = a.y + WIRE_R;
+  const y = a.y + WIRE_R + lift;
   const p0 = a.clone().setY(y).addScaledVector(dir, bare);
   const p1 = b.clone().setY(y).addScaledVector(dir, -bare);
   const insulation = new THREE.Mesh(new THREE.CylinderGeometry(WIRE_R, WIRE_R, p0.distanceTo(p1), 14, 1), mat);
