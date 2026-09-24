@@ -7,6 +7,7 @@ import { BOARDS, applyBoards, newChipBoard, type BoardSpec } from "../model/brea
 import { mosfetPin, type Chip, type ChipDef, type Component, type Endpoint, type MosfetRole, type Scene } from "../model/types";
 import { packageChip, packageProblems, chipInner } from "../chips/package";
 import { chipsUsed } from "../chips/registry";
+import { countChip } from "../chips/count";
 import { Simulation, pinNode } from "../sim/simulation";
 import { formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, truth, type KitItem, type Level, type LogicFunc } from "./levels";
@@ -145,7 +146,25 @@ export interface CheckRow {
   inputs: boolean[];
   expected: boolean;
   volts: number;
+  /** Ток от питания в этом состоянии, А. */
+  amps: number;
   ok: boolean;
+}
+
+/**
+ * Цифры сборки: что зависит от решения игрока. Число транзисторов при фиксированном наборе почти
+ * не меняется — оно для сравнения вариантов (КМОП против РТЛ), как и ток покоя.
+ */
+export interface Metrics {
+  /** Охватывающий прямоугольник занятых площадок поля корпуса, площадок. */
+  width: number;
+  height: number;
+  /** Проводов и дорожек внутри корпуса. */
+  links: number;
+  /** Наибольший ток от питания по строкам таблицы, А. */
+  idle: number;
+  /** Транзисторов внутри, с раскрытием вложенных микросхем. */
+  transistors: number;
 }
 
 export interface CheckResult {
@@ -153,6 +172,34 @@ export interface CheckResult {
   problems: string[];
   rows: CheckRow[];
   def?: ChipDef;
+  metrics?: Metrics;
+  /** Какие цифры стали лучше прежних (заполняет приложение, сохраняя результат). */
+  better?: (keyof Metrics)[];
+}
+
+/** Площадка поля корпуса «k:B7» → [столбец, ряд]; выводы корпуса («k:3») и чужие платы — нет. */
+function fieldCell(hole: string): [number, number] | undefined {
+  const m = hole.match(/^k:([A-Z])(\d+)$/);
+  return m ? [Number(m[2]), m[1].charCodeAt(0) - 65] : undefined;
+}
+
+/** Цифры сборки на корпусе (после успешной проверки). */
+export function measure(scene: Scene, rows: CheckRow[], def: ChipDef, chips: Record<string, ChipDef>): Metrics {
+  const cells: [number, number][] = [];
+  for (const c of chipInner(scene)) if (c.placement.mode === "board") cells.push(...c.placement.holes.map(fieldCell).filter((x): x is [number, number] => !!x));
+  const onCase = (h: string) => /^k:/.test(h);
+  const wires = scene.wires.filter((w) => "hole" in w.a && "hole" in w.b && onCase(w.a.hole) && onCase(w.b.hole));
+  const traces = (scene.traces ?? []).filter((t) => onCase(t.a) && onCase(t.b));
+  for (const w of wires) for (const e of [w.a, w.b]) if ("hole" in e) cells.push(...[fieldCell(e.hole)].filter((x): x is [number, number] => !!x));
+  for (const t of traces) cells.push(...[fieldCell(t.a), fieldCell(t.b)].filter((x): x is [number, number] => !!x));
+  const span = (i: 0 | 1) => (cells.length ? Math.max(...cells.map((c) => c[i])) - Math.min(...cells.map((c) => c[i])) + 1 : 0);
+  return {
+    width: span(0),
+    height: span(1),
+    links: wires.length + traces.length,
+    idle: Math.max(0, ...rows.map((r) => r.amps)),
+    transistors: countChip(def, { components: [], wires: [], chips }).transistors,
+  };
 }
 
 /** Уровни логики при питании vcc: единица — не ниже 70 %, ноль — не выше 30 %. */
@@ -196,7 +243,9 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     for (let t = 0; t < 0.4; t += 0.05) if (sim.step(0.05).length) burned = true;
     const volts = (sim.solution.voltage.get(pinNode(u, io.output - 1)) ?? 0) - (sim.solution.voltage.get(pinNode(u, io.gnd - 1)) ?? 0);
     const expected = truth(level.func, inputs);
-    rows.push({ inputs, expected, volts, ok: !burned && (expected ? isHigh(volts, CHECK_VOLTS) : isLow(volts, CHECK_VOLTS)) });
+    // Ток от питания без нагрузки выхода: то, что потребляет сама микросхема
+    const amps = Math.max(0, Math.abs(sim.current(scene.components[0])) - Math.abs(sim.current(scene.components[2])));
+    rows.push({ inputs, expected, volts, amps, ok: !burned && (expected ? isHigh(volts, CHECK_VOLTS) : isLow(volts, CHECK_VOLTS)) });
   }
   return rows;
 }
@@ -209,7 +258,8 @@ export function checkLevel(level: Level, scene: Scene, chips: Record<string, Chi
   def.scene.chips = { ...chipsUsed(scene), ...(scene.chips ?? {}) };
   const rows = truthTable(def, level, { ...chips, ...def.scene.chips });
   const ok = rows.every((r) => r.ok);
-  return { ok, problems: ok ? [] : [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows, def: ok ? def : undefined };
+  if (!ok) return { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows };
+  return { ok, problems: [], rows, def, metrics: measure(scene, rows, def, { ...chips, ...def.scene.chips }) };
 }
 
 /** Строка таблицы для людей: «A=1 B=0 → 4,98 В». */

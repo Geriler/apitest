@@ -1,8 +1,9 @@
 /** Панель «Карьера»: список уровней или, на столе уровня, задание, набор и результат проверки. */
 
-import { kitUsed, rowText, type CheckResult } from "../career/build";
+import { kitUsed, rowText, type CheckResult, type Metrics } from "../career/build";
+import { formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level } from "../career/levels";
-import { isDone } from "../career/session";
+import { bestOf, isDone } from "../career/session";
 import { PIN_ROLES } from "../chips/roles";
 import type { Scene } from "../model/types";
 
@@ -18,6 +19,25 @@ export interface CareerHost {
 }
 
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+
+/**
+ * Цифры сборки: эта (m) и лучшие (best); better — какие только что стали лучше.
+ * Меньше — лучше; звёзд нет, только сравнение с собой.
+ */
+export function metricsHtml(m: Metrics | undefined, best: Metrics | undefined, better: (keyof Metrics)[] = []): string {
+  if (!m && !best) return "";
+  const cell = (x: Metrics | undefined, f: (x: Metrics) => string) => (x ? f(x) : "—");
+  const area = (x: Metrics) => `${x.width} × ${x.height} = ${x.width * x.height}`;
+  const rows: [string, (x: Metrics) => string, keyof Metrics][] = [
+    ["площадь, площадок", area, "width"],
+    ["соединений", (x) => String(x.links), "links"],
+    ["ток покоя", (x) => formatSI(x.idle, "А"), "idle"],
+    ["транзисторов", (x) => String(x.transistors), "transistors"],
+  ];
+  return `<table class="truth metrics"><tr><th></th>${m ? "<th>сейчас</th>" : ""}<th>лучшее</th></tr>${rows
+    .map(([label, f, k]) => `<tr><td>${label}</td>${m ? `<td${better.includes(k) ? ' class="ok"' : ""}>${cell(m, f)}${better.includes(k) ? " ↓" : ""}</td>` : ""}<td>${cell(best, f)}</td></tr>`)
+    .join("")}</table>`;
+}
 
 export class CareerPanel {
   constructor(private host: CareerHost) {}
@@ -54,7 +74,9 @@ export class CareerPanel {
       : "";
     const verdict = check
       ? check.ok
-        ? `<p class="sub"><b>Работает!</b> ${esc(level.part)} открыт: теперь он в группе «Набор» уровней, где нужен, и остаётся вашим — внутри ваша сборка.</p>`
+        ? `<p class="sub"><b>Работает!</b> ${esc(level.part)} открыт: теперь он в группе «Набор» уровней, где нужен, и остаётся вашим — внутри ваша сборка.</p>
+          <div class="eyebrow">цифры сборки</div>${metricsHtml(check.metrics, bestOf(level.id), check.better)}
+          <p class="sub">Меньше — лучше. Площадь — прямоугольник, в который помещается всё на поле корпуса; соединения — провода и дорожки внутри. Ток покоя и число транзисторов показывают разницу между КМОП и РТЛ.</p>`
         : check.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("")
       : "";
     return `<div class="eyebrow">карьера · ${esc(FUNC_NAMES[level.func])}</div><h2>${esc(level.part)}</h2>
@@ -64,7 +86,7 @@ export class CareerPanel {
       <p class="sub">Детали — из группы «Набор» слева, ставьте их на площадки корпуса и соединяйте дорожками (T) или проводами. Для своей проверки можно взять питание и приборы — в микросхему они не входят.</p>
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
       <button class="btn inline" data-career-act="leave">К карте</button></div>
-      ${table}${verdict}`;
+      ${table}${verdict}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;
   }
 
   bind(root: HTMLElement): void {

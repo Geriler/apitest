@@ -4,7 +4,8 @@ import type { ChipDef, Component } from "../src/model/types";
 import { chipInner } from "../src/chips/package";
 import { setLibrary } from "../src/chips/registry";
 import { LEVELS, levelById, type LogicFunc } from "../src/career/levels";
-import { checkLevel, kitIndex, kitUsed, packageRecipe, recipeScene, referenceChips, truthTable } from "../src/career/build";
+import { checkLevel, kitIndex, kitUsed, packageRecipe, recipeScene, referenceChips, truthTable, type Metrics } from "../src/career/build";
+import { bestOf, recordMetrics } from "../src/career/session";
 
 setLibrary([]);
 const refs = referenceChips();
@@ -74,5 +75,44 @@ describe("карьера: уровни", () => {
     applyBoards(scene.boards!);
     const r = checkLevel(level, scene, { ...allChips, ...Object.fromEntries(Object.values(mine).map((d) => [d.id, d])) });
     expect(r.rows.map((x) => x.ok)).toEqual([true, true, true, true]);
+  });
+});
+
+describe("карьера: цифры сборки", () => {
+  const run = (id: string) => {
+    const level = levelById(id)!;
+    const scene = recipeScene(level, chipFor);
+    applyBoards(scene.boards!);
+    return { scene, r: checkLevel(level, scene, allChips) };
+  };
+
+  it("ток покоя: КМОП — почти ноль, РТЛ — миллиамперы; транзисторы по кусочкам; соединения и площадь — по сборке", () => {
+    const cmos = run("not-cmos").r.metrics!;
+    const rtl = run("not-rtl").r.metrics!;
+    expect(cmos.idle).toBeLessThan(1e-6);
+    // Выход в нуле: через резистор 1 кОм от 5 В течёт около 5 мА
+    expect(rtl.idle).toBeGreaterThan(4e-3);
+    expect(rtl.idle).toBeLessThan(6e-3);
+    expect([cmos.transistors, rtl.transistors]).toEqual([2, 1]);
+    const { scene, r } = run("xor");
+    expect(r.metrics!.transistors).toBe(16);
+    // Соединения — все перемычки эталона (они внутри корпуса)
+    expect(r.metrics!.links).toBe(scene.wires.length);
+    expect(r.metrics!.width).toBeGreaterThan(0);
+    expect(r.metrics!.height).toBeGreaterThan(0);
+  });
+
+  it("лучшие цифры: каждая запоминается сама; хуже — не затирает", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: Storage }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    } as Storage;
+    const base: Metrics = { width: 5, height: 4, links: 10, idle: 1e-3, transistors: 2 };
+    expect(recordMetrics("t", base)).toEqual([]);
+    expect(recordMetrics("t", { ...base, width: 3, links: 12 })).toEqual(["width"]);
+    expect(recordMetrics("t", { ...base, links: 8, idle: 2e-3 })).toEqual(["links"]);
+    expect(bestOf("t")).toEqual({ width: 3, height: 4, links: 8, idle: 1e-3, transistors: 2 });
   });
 });

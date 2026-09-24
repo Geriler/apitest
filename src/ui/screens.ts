@@ -4,7 +4,8 @@
  */
 
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level, type LogicFunc } from "../career/levels";
-import { isDone, loadSlot, missing } from "../career/session";
+import { bestOf, isDone, loadSlot, missing } from "../career/session";
+import { metricsHtml } from "./career";
 import { PIN_ROLES } from "../chips/roles";
 
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
@@ -192,6 +193,7 @@ export class CareerMap {
       <p>${esc(l.about)}</p>
       <div class="eyebrow">набор</div>
       <ul class="kitlist">${l.kit.map((k) => `<li>${esc(kitLabel(k))} × ${k.count}</li>`).join("")}</ul>
+      ${bestOf(l.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(l.id))}` : ""}
       <div class="eyebrow">корпус SOT-23-5</div><p class="sub">${esc(pins)}; ${io.inputs.length === 1 ? "один вход" : "два входа"}.</p>
       ${buttons}`;
   }

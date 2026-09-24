@@ -6,7 +6,7 @@
 import type { ChipDef, Scene } from "../model/types";
 import { PARTS, type ToolDef } from "../parts";
 import { chipTool } from "../parts/chip";
-import { chipFunc, kitUsed } from "./build";
+import { chipFunc, kitUsed, type Metrics } from "./build";
 import { FUNC_NAMES, LEVELS, kitLabel, levelById, type KitItem, type Level } from "./levels";
 
 const STORE_KEY = "maketka.career.v1";
@@ -16,6 +16,8 @@ interface Progress {
   defs: Record<string, ChipDef>;
   /** Незаконченные столы: уровень (или «workshop») → сцена, как её оставили. */
   slots?: Record<string, Scene>;
+  /** Лучшие цифры по уровням — каждая сама по себе (меньше — лучше). */
+  best?: Record<string, Metrics>;
 }
 
 function load(): Progress {
@@ -47,6 +49,34 @@ function store(): boolean {
 export function unlock(def: ChipDef, levelId: string): boolean {
   progress = { ...progress, defs: { ...progress.defs, [levelId]: def } };
   return store();
+}
+
+/** Лучшие цифры уровня. */
+export const bestOf = (levelId: string): Metrics | undefined => progress.best?.[levelId];
+
+/** Запомнить цифры сборки; вернуть, какие стали лучше прежних (при первом прохождении — пусто). */
+export function recordMetrics(levelId: string, m: Metrics): (keyof Metrics)[] {
+  const old = progress.best?.[levelId];
+  const area = (x: Metrics) => x.width * x.height;
+  const better: (keyof Metrics)[] = [];
+  let best: Metrics = m;
+  if (old) {
+    best = { ...old };
+    if (area(m) < area(old)) {
+      best.width = m.width;
+      best.height = m.height;
+      better.push("width");
+    }
+    for (const k of ["links", "idle", "transistors"] as const) {
+      if (m[k] < old[k] * (k === "idle" ? 0.99 : 1)) {
+        best[k] = m[k];
+        better.push(k);
+      }
+    }
+  }
+  progress = { ...progress, best: { ...progress.best, [levelId]: best } };
+  store();
+  return better;
 }
 
 /** Стол уровня или мастерской, как его оставили (слот — id уровня или «workshop»). */
