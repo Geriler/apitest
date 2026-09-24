@@ -286,6 +286,15 @@ export interface Potentiometer extends Base {
   position: number;
 }
 
+/** Реле на 5 или 12 В. */
+export type RelayKind = "5V" | "12V";
+
+/** Реле: выводы 0, 1 — катушка; 2 — COM, 3 — NO, 4 — NC. Положение якоря — состояние расчёта. */
+export interface Relay extends Base {
+  type: "relay";
+  kind: RelayKind;
+}
+
 /** Режим мультиметра: вольтметр, миллиамперметр, амперметр, омметр. */
 export type MeterMode = "V" | "mA" | "A" | "ohm";
 
@@ -306,11 +315,11 @@ export interface Oscilloscope extends Base {
   hold?: boolean;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer;
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */
-export type Pin = 0 | 1 | 2;
+export type Pin = 0 | 1 | 2 | 3 | 4;
 export type Endpoint = { hole: string } | { comp: string; pin: Pin };
 
 export interface Wire {

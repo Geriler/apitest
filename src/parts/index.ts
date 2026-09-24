@@ -14,6 +14,7 @@ import { mosfet } from "./mosfet";
 import { multimeter } from "./multimeter";
 import { pot } from "./pot";
 import { psu } from "./psu";
+import { relay } from "./relay";
 import { resistor } from "./resistor";
 import { scope } from "./scope";
 import { switchPart } from "./switch";
@@ -37,6 +38,7 @@ export const PARTS: { [K in Component["type"]]: PartDef<ComponentOf<K>> } = {
   scope,
   button,
   pot,
+  relay,
 };
 
 /** Описание типа этой детали. */

@@ -13,6 +13,7 @@ import type { Component, Pin, Scene, SchematicLayout } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { endpointNode, pinNode, type Simulation } from "../sim/simulation";
 import { part } from "../parts";
+import type { SchematicPart } from "../parts/types";
 
 export interface Netlist {
   /** Узлы расчёта в каждой цепи (только цепи, к которым подключены детали). */
@@ -139,6 +140,8 @@ function netKeys(scene: Scene, count: number, pins: Map<string, number[]>): stri
 
 interface Placed {
   c: Component;
+  /** Имя для ручной раскладки: обозначение детали, у второго обозначения — «K1:contacts». */
+  key: string;
   x: number;
   /** Точки подключения к цепям: [номер цепи, x]. */
   attach: [number, number][];
@@ -177,75 +180,91 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
   const placed: Placed[] = [];
   let x = LEFT;
   for (const c of parts) {
-    const netOf = pins.get(c.id)!;
-    const auto = part(c).pins === 2 ? x : x + COL * 0.4;
-    // Ручной сдвиг детали по горизонтали: остальные остаются на своих местах
-    const px = layout.x?.[c.id] ?? auto;
-    const current = Math.abs(part(c).schematicCurrent?.(c, sim) ?? sim.current(c));
-    const label = (lx: number, ly: number) =>
-      `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(part(c).value(c))}</text>` +
-      `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`;
-    if (part(c).pins === 2) {
-      const [ya, yb] = [Y(netOf[0]), Y(netOf[1])];
-      let top = Math.min(ya, yb);
-      let bottom = Math.max(ya, yb);
-      let extra = "";
-      const attach: [number, number][] = [
-        [netOf[0], px],
-        [netOf[1], px],
-      ];
-      if (ya === yb) {
-        // Оба вывода в одной цепи: деталь висит петлёй под линией
-        bottom = top + ROW * 0.7;
-        extra = `<path d="M${px} ${num(bottom)}H${px + 24}V${num(top)}"/>`;
-        attach[1] = [netOf[1], px + 24];
+    const all = pins.get(c.id)!;
+    const elements: SchematicPart[] = part(c).schematicParts?.(c, sim) ?? [
+      {
+        key: "",
+        pins: Array.from({ length: part(c).pins }, (_, p) => p as Pin),
+        symbol: part(c).symbol?.(c),
+        symbol3: part(c).symbol3?.(c),
+        text: part(c).symbolText?.(c),
+        value: part(c).value(c),
+        current: part(c).schematicCurrent?.(c, sim) ?? sim.current(c),
+      },
+    ];
+    for (const el of elements) {
+      const key = el.key ? `${c.id}:${el.key}` : c.id;
+      const netOf = el.pins.map((p) => all[p]);
+      const auto = el.pins.length === 2 ? x : x + COL * 0.4;
+      // Ручной сдвиг детали по горизонтали: остальные остаются на своих местах
+      const px = layout.x?.[key] ?? auto;
+      const current = Math.abs(el.current);
+      const label = (lx: number, ly: number) =>
+        `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(el.value)}</text>` +
+        `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`;
+      if (el.pins.length === 2) {
+        const [ya, yb] = [Y(netOf[0]), Y(netOf[1])];
+        let top = Math.min(ya, yb);
+        let bottom = Math.max(ya, yb);
+        let extra = "";
+        const attach: [number, number][] = [
+          [netOf[0], px],
+          [netOf[1], px],
+        ];
+        if (ya === yb) {
+          // Оба вывода в одной цепи: деталь висит петлёй под линией
+          bottom = top + ROW * 0.7;
+          extra = `<path d="M${px} ${num(bottom)}H${px + 24}V${num(top)}"/>`;
+          attach[1] = [netOf[1], px + 24];
+        }
+        const yc = (top + bottom) / 2;
+        const flip = ya > yb ? -1 : 1; // вывод 0 внизу — переворачиваем обозначение
+        const svg =
+          // Невидимая область щелчка: обозначение и подпись
+          `<rect class="hit" x="${num(px - 16)}" y="${num(yc - 26)}" width="96" height="52"/>` +
+          `<path d="M${num(px)} ${num(top)}V${num(yc - HALF)}M${num(px)} ${num(yc + HALF)}V${num(bottom)}"/>${extra}` +
+          `<g transform="translate(${num(px)} ${num(yc)}) scale(1 ${flip})">${el.symbol ?? ""}</g>` +
+          (el.text ? `<text x="${num(px)}" y="${num(yc + 4)}" class="sym">${esc(el.text)}</text>` : "") +
+          label(px + 18, yc);
+        placed.push({ c, key, x: px, attach, svg, bottom });
+        x += COL;
+      } else {
+        // Транзистор: основной путь (К–Э или С–И) вертикально, управляющий вывод — слева
+        const sym = el.symbol3!;
+        x += COL * 0.4;
+        const tx = px;
+        const roles = sym.roles;
+        // Роли — номера выводов самой детали
+        const yUp = Y(all[roles.up]);
+        const yDown = Y(all[roles.down]);
+        const swap = yUp > yDown; // коллектор (сток) ниже эмиттера (истока) — рисуем перевёрнутым
+        let top = Math.min(yUp, yDown);
+        let bottom = Math.max(yUp, yDown);
+        let extra = "";
+        const lx = tx + 8;
+        const attach: [number, number][] = [
+          [all[roles.up], lx],
+          [all[roles.down], lx],
+          [all[roles.ctrl], tx - 30],
+        ];
+        if (yUp === yDown) {
+          bottom = top + ROW * 0.8;
+          extra = `<path d="M${num(lx)} ${num(bottom)}H${num(lx + 22)}V${num(top)}"/>`;
+          attach[1] = [all[roles.down], lx + 22];
+        }
+        const yc = (top + bottom) / 2;
+        const yCtrl = Y(all[roles.ctrl]);
+        // Управляющий вывод: от затвора / базы влево и к своей цепи
+        const gx = sym.ctrlX;
+        const svg =
+          `<rect class="hit" x="${num(tx - 22)}" y="${num(yc - 34)}" width="110" height="56"/>` +
+          `<path d="M${num(lx)} ${num(top)}V${num(yc - 17)}M${num(lx)} ${num(yc + 17)}V${num(bottom)}"/>${extra}` +
+          `<path d="M${num(tx + gx)} ${num(yc)}H${num(tx - 30)}V${num(yCtrl)}"/>` +
+          `<g transform="translate(${num(tx)} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${sym.body}</g>` +
+          label(tx + 24, yc - 20);
+        placed.push({ c, key, x: tx, attach, svg, bottom: Math.max(bottom, yCtrl) });
+        x += COL * 1.1;
       }
-      const yc = (top + bottom) / 2;
-      const flip = ya > yb ? -1 : 1; // вывод 0 внизу — переворачиваем обозначение
-      const svg =
-        // Невидимая область щелчка: обозначение и подпись
-        `<rect class="hit" x="${num(px - 16)}" y="${num(yc - 26)}" width="96" height="52"/>` +
-        `<path d="M${num(px)} ${num(top)}V${num(yc - HALF)}M${num(px)} ${num(yc + HALF)}V${num(bottom)}"/>${extra}` +
-        `<g transform="translate(${num(px)} ${num(yc)}) scale(1 ${flip})">${part(c).symbol?.(c) ?? ""}</g>` +
-        (part(c).symbolText ? `<text x="${num(px)}" y="${num(yc + 4)}" class="sym">${esc(part(c).symbolText!(c))}</text>` : "") +
-        label(px + 18, yc);
-      placed.push({ c, x: px, attach, svg, bottom });
-      x += COL;
-    } else {
-      // Транзистор: основной путь (К–Э или С–И) вертикально, управляющий вывод — слева
-      const sym = part(c).symbol3!(c);
-      x += COL * 0.4;
-      const tx = px;
-      const roles = sym.roles;
-      const yUp = Y(netOf[roles.up]);
-      const yDown = Y(netOf[roles.down]);
-      const swap = yUp > yDown; // коллектор (сток) ниже эмиттера (истока) — рисуем перевёрнутым
-      let top = Math.min(yUp, yDown);
-      let bottom = Math.max(yUp, yDown);
-      let extra = "";
-      const lx = tx + 8;
-      const attach: [number, number][] = [
-        [netOf[roles.up], lx],
-        [netOf[roles.down], lx],
-        [netOf[roles.ctrl], tx - 30],
-      ];
-      if (yUp === yDown) {
-        bottom = top + ROW * 0.8;
-        extra = `<path d="M${num(lx)} ${num(bottom)}H${num(lx + 22)}V${num(top)}"/>`;
-        attach[1] = [netOf[roles.down], lx + 22];
-      }
-      const yc = (top + bottom) / 2;
-      const yCtrl = Y(netOf[roles.ctrl]);
-      // Управляющий вывод: от затвора / базы влево и к своей цепи
-      const gx = sym.ctrlX;
-      const svg =
-        `<rect class="hit" x="${num(tx - 22)}" y="${num(yc - 34)}" width="110" height="56"/>` +
-        `<path d="M${num(lx)} ${num(top)}V${num(yc - 17)}M${num(lx)} ${num(yc + 17)}V${num(bottom)}"/>${extra}` +
-        `<path d="M${num(tx + gx)} ${num(yc)}H${num(tx - 30)}V${num(yCtrl)}"/>` +
-        `<g transform="translate(${num(tx)} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${sym.body}</g>` +
-        label(tx + 24, yc - 20);
-      placed.push({ c, x: tx, attach, svg, bottom: Math.max(bottom, yCtrl) });
-      x += COL * 1.1;
     }
   }
 
@@ -274,7 +293,10 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
   const width = Math.max(x, ...placed.map((p) => p.x + 60)) + 110;
   const height = Math.max(...placed.map((p) => p.bottom), ...order.map((n) => Y(n))) + 40;
   const partsSvg = placed
-    .map((p) => `<g class="part${p.c.id === highlight ? " sel" : ""}" data-part="${esc(p.c.id)}" data-x="${num(p.x)}">${p.svg}</g>`)
+    .map(
+      (p) =>
+        `<g class="part${p.c.id === highlight ? " sel" : ""}" data-part="${esc(p.c.id)}" data-x="${num(p.x)}"${p.key === p.c.id ? "" : ` data-key="${esc(p.key)}"`}>${p.svg}</g>`,
+    )
     .join("");
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" class="sch" viewBox="0 0 ${num(width)} ${num(height)}" width="${num(width)}" height="${num(height)}" role="img" aria-label="Принципиальная схема">` +

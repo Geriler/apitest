@@ -100,7 +100,12 @@ export function actualRows(h: PanelHost, c: Component): string {
 export function wirePanel(h: PanelHost, id: string): [string, string] {
   const w = h.scene.wires.find((x) => x.id === id)!;
   const b = h.sim.branch(id);
-  const name = (e: Endpoint) => ("hole" in e ? holeLabel(e.hole) : `вывод ${e.pin + 1} детали ${e.comp}`);
+  const name = (e: Endpoint) => {
+    if ("hole" in e) return holeLabel(e.hole);
+    const c = h.scene.components.find((x) => x.id === e.comp);
+    const label = c && part(c).pinLabels?.[e.pin];
+    return label ? `${label} детали ${e.comp}` : `вывод ${e.pin + 1} детали ${e.comp}`;
+  };
   const sameBoard = isFlatWire({ ...w, shape: "flat" });
   const shapeRow = sameBoard
     ? `<div class="field"><label>Какой провод</label>${shapeButtons(w.shape ?? "arc")}</div>`

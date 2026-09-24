@@ -112,7 +112,7 @@ export class SchematicPanel {
       // Экранных пикселей на единицу чертежа (схема может быть вписана в панель)
       const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width || 1;
       this.drag = part
-        ? { kind: "part", id: part.dataset.part!, base: Number(part.dataset.x), start: e.clientX, scale, value: Number(part.dataset.x), moved: false }
+        ? { kind: "part", id: part.dataset.key ?? part.dataset.part!, base: Number(part.dataset.x), start: e.clientX, scale, value: Number(part.dataset.x), moved: false }
         : { kind: "net", id: net!.dataset.net!, base: Number(net!.dataset.y), start: e.clientY, scale, value: Number(net!.dataset.y), moved: false };
     });
     el.addEventListener("pointermove", (e) => {
