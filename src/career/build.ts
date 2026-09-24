@@ -60,7 +60,7 @@ export function recipeScene(level: Level, chipFor: (func: LogicFunc) => ChipDef)
     scene.components.push(c);
   }
   const hole = (end: string): string => {
-    if (/^P\d$/.test(end)) return `k:${end.slice(1)}`;
+    if (/^P\d+$/.test(end)) return `k:${end.slice(1)}`;
     const [id, pin] = end.split(".");
     const c = scene.components.find((x) => x.id === id)!;
     const holes = (c.placement as { holes: string[] }).holes;
@@ -220,10 +220,41 @@ export function measure(scene: Scene, rows: CheckRow[], def: ChipDef, chips: Rec
 const isHigh = (v: number, vcc: number) => v >= 0.7 * vcc;
 const isLow = (v: number, vcc: number) => v <= 0.3 * vcc;
 
+/** Больше стольких входов таблицу не перебирают целиком, а проверяют набором векторов. */
+const FULL_TABLE_INPUTS = 6;
+
 /**
- * Прогнать микросхему def по таблице истинности функции func: питание 5 В, входы — на питание
- * или на общий, выход нагружен 100 кОм на общий. Выход должен быть чётким нулём или единицей,
- * и ничего внутри не должно сгореть.
+ * Входные наборы для проверки. До FULL_TABLE_INPUTS входов — вся таблица. Больше — как проверяют
+ * настоящие микросхемы: все нули, все единицы, «бегущая» единица и «бегущий» ноль (каждый вход
+ * отдельно) и ещё случайные, но всегда одни и те же наборы — всего 40.
+ */
+export function inputVectors(n: number): boolean[][] {
+  const bits = (m: number) => Array.from({ length: n }, (_, i) => !!(m & (1 << (n - 1 - i))));
+  if (n <= FULL_TABLE_INPUTS) return Array.from({ length: 1 << n }, (_, m) => bits(m));
+  const all = (1 << n) - 1;
+  const seen = new Set<number>();
+  const out: number[] = [];
+  const add = (m: number) => {
+    if (!seen.has(m)) seen.add(m), out.push(m);
+  };
+  add(0);
+  add(all);
+  for (let i = 0; i < n; i++) add(1 << i);
+  for (let i = 0; i < n; i++) add(all ^ (1 << i));
+  // Линейный конгруэнтный генератор с постоянным зерном: наборы одни и те же при каждой проверке
+  let x = 12345;
+  while (out.length < 40) {
+    x = (x * 1103515245 + 12345) & 0x7fffffff;
+    add((x >> 8) & all);
+  }
+  return out.map(bits);
+}
+
+/**
+ * Прогнать микросхему def по таблице истинности функции уровня: питание 5 В, входы — на питание
+ * или на общий, каждый выход нагружен 100 кОм. Нагрузка тянет против нужного уровня (к питанию,
+ * если нужен ноль, и наоборот): выход должен сам удержать чёткий ноль или единицу, и ничего
+ * внутри не должно сгореть.
  */
 export function truthTable(def: ChipDef, level: Level, chips: Record<string, ChipDef>): CheckRow[] {
   const io = gateIo(level);
@@ -234,8 +265,8 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
   const plus: Endpoint = { comp: "G1", pin: 1 };
   const minus: Endpoint = { comp: "G1", pin: 0 };
   const loads = io.outputs.map((_, k) => `RL${k + 1}`);
-  /** Провода стенда: входы inputs, на каждом выходе нагрузка 100 кОм на общий (down) или на питание. */
-  const wiring = (inputs: boolean[], down: boolean) =>
+  /** Провода стенда: входы inputs; нагрузка выхода k — к питанию, если up[k], иначе к общему. */
+  const wiring = (inputs: boolean[], up: boolean[]) =>
     (
       [
         [plus, pin(io.vcc)],
@@ -243,7 +274,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
         ...io.inputs.map((p, i): [Endpoint, Endpoint] => [pin(p), inputs[i] ? plus : minus]),
         ...io.outputs.flatMap((p, k): [Endpoint, Endpoint][] => [
           [pin(p), { comp: loads[k], pin: 0 }],
-          [{ comp: loads[k], pin: 1 }, down ? minus : plus],
+          [{ comp: loads[k], pin: 1 }, up[k] ? plus : minus],
         ]),
       ] as [Endpoint, Endpoint][]
     ).map(([a, b], i) => ({ id: `W${i}`, a, b, color: "" }));
@@ -253,7 +284,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
       u,
       ...loads.map((id): Component => ({ id, type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: { mode: "free", x: 0, z: 0, rot: 0 } })),
     ],
-    wires: wiring(Array(n).fill(false), true),
+    wires: wiring(Array(n).fill(false), io.outputs.map(() => false)),
     boards: [],
     chips: { ...chips, [def.id]: def },
   };
@@ -262,9 +293,8 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
   const sim = new Simulation(scene);
   const inner = innerParts(def, "U1/", scene.chips!);
   /** Один прогон: переключить стенд и дать схеме установиться. */
-  const run = (inputs: boolean[], down: boolean) => {
-    scene.wires = wiring(inputs, down);
-    sim.solve();
+  const run = (inputs: boolean[], up: boolean[]) => {
+    scene.wires = wiring(inputs, up);
     const burnt = new Set<string>();
     for (const c of sim.step(0.01)) if (c.id.startsWith("U1/")) burnt.add(c.id.slice(3));
     // Сгорание в расчёте копится нагревом за секунды, проверка короче — поэтому перегрузка сверх
@@ -280,26 +310,28 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     const amps = Math.max(0, Math.abs(sim.current(scene.components[0])) - loadAmps);
     return { volts, amps, burnt };
   };
-  for (let m = 0; m < 1 << n; m++) {
-    const inputs = Array.from({ length: n }, (_, i) => !!(m & (1 << (n - 1 - i))));
+  for (const inputs of inputVectors(n)) {
     const expected = truth(level.func, inputs);
-    // Выход должен держать уровень сам: и когда нагрузка тянет к общему, и когда к питанию.
-    // «Висящий» выход послушно пойдёт за нагрузкой и провалит один из прогонов.
-    const down = run(inputs, true), up = run(inputs, false);
-    const burnt = [...new Set([...down.burnt, ...up.burnt])];
     const good = (k: number, v: number) => (expected[k] ? isHigh(v, CHECK_VOLTS) : isLow(v, CHECK_VOLTS));
-    // По каждому выходу показываем худший из двух прогонов
-    const volts = expected.map((_, k) => (good(k, down.volts[k]) ? up.volts[k] : down.volts[k]));
-    const each = expected.map((_, k) => good(k, down.volts[k]) && good(k, up.volts[k]));
+    const first = run(inputs, expected.map((e) => !e));
+    const each = expected.map((_, k) => good(k, first.volts[k]));
+    const burnt = new Set(first.burnt);
+    let floating = expected.map(() => false);
+    // Неверный выход: он неправ сам или просто идёт за нагрузкой? Нагрузка в другую сторону покажет
+    if (!each.every(Boolean)) {
+      const second = run(inputs, expected);
+      second.burnt.forEach((c) => burnt.add(c));
+      floating = expected.map((_, k) => !each[k] && good(k, second.volts[k]));
+    }
     rows.push({
       inputs,
       expected,
-      volts,
-      amps: down.amps,
-      burned: burnt,
-      floating: expected.map((_, k) => isLow(down.volts[k], CHECK_VOLTS) && isHigh(up.volts[k], CHECK_VOLTS)),
+      volts: first.volts,
+      amps: first.amps,
+      burned: [...burnt],
+      floating,
       each,
-      ok: !burnt.length && each.every(Boolean),
+      ok: !burnt.size && each.every(Boolean),
     });
   }
   return rows;

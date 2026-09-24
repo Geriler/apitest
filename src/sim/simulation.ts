@@ -10,7 +10,7 @@ import { PARTS, part } from "../parts";
 import { mosfetState, type MosfetState } from "../parts/mosfet";
 import { transistorState, type TransistorState } from "../parts/transistor";
 import { endpointNode } from "./nodes";
-import { solveCircuit, type BranchResult, type Solution } from "./solver";
+import { solveCircuit, type BranchResult, type Solution, type Topology } from "./solver";
 import * as tolerance from "./tolerance";
 import { NO_TOLERANCE, type Tolerance } from "./tolerance";
 import type { Stamp } from "../parts/types";
@@ -183,6 +183,9 @@ export class Simulation {
   /** Текущий шаг по времени, с (для ёмкостей). */
   h = SUBSTEP;
 
+  /** Разбор устройства цепи — общий для итераций, пока цепь та же (решатель сверяет сам). */
+  private topology: { topology?: Topology } = {};
+
   /** Сколько решений не сошлось (для тестов и отладки). */
   nonConverged = 0;
 
@@ -199,7 +202,7 @@ export class Simulation {
       // остаётся прошлое решение, шаг будет повторён мельче
       let solution: Solution;
       try {
-        solution = solveCircuit(out, links, extras);
+        solution = solveCircuit(out, links, extras, this.topology);
       } catch {
         return false;
       }

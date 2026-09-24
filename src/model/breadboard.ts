@@ -69,27 +69,32 @@ export interface BoardSpec {
 /** Назначение вывода корпуса; nc — не подключён. */
 export type ChipPinRole = "nc" | "in" | "out" | "vcc" | "gnd";
 
-/** Вид корпуса: DIP (выводы в два ряда) или SOT-23-5 — крошечный, на переходнике с шагом 2,54 мм. */
-export type ChipPackage = "DIP" | "SOT-23-5";
+/** Вид корпуса: DIP (выводы в два ряда) или SOT-23-5/6 — крошечный, на переходнике с шагом 2,54 мм. */
+export type ChipPackage = "DIP" | "SOT-23-5" | "SOT-23-6";
 
-/** Корпуса, которые можно выбрать: «DIP-4» … «DIP-16», «SOT-23-5». */
-export const PACKAGES = ["DIP-4", "DIP-6", "DIP-8", "DIP-14", "DIP-16", "SOT-23-5"];
+/** Крошечный корпус на переходнике. */
+export const isSot = (pkg: ChipPackage | undefined): pkg is "SOT-23-5" | "SOT-23-6" => pkg === "SOT-23-5" || pkg === "SOT-23-6";
+
+/** Корпуса, которые можно выбрать: «DIP-4» … «DIP-16», «SOT-23-5», «SOT-23-6». */
+export const PACKAGES = ["DIP-4", "DIP-6", "DIP-8", "DIP-14", "DIP-16", "SOT-23-5", "SOT-23-6"];
 
 /** Название корпуса: «DIP-8», «SOT-23-5». */
 export function packageName(pkg: ChipPackage | undefined, pins: number): string {
-  return pkg === "SOT-23-5" ? "SOT-23-5" : `DIP-${pins}`;
+  return isSot(pkg) ? pkg : `DIP-${pins}`;
 }
 
 /** Из названия — вид и число выводов. */
 export function parsePackage(name: string): { package: ChipPackage; pins: number } {
-  return name === "SOT-23-5" ? { package: "SOT-23-5", pins: 5 } : { package: "DIP", pins: Number(name.replace(/\D/g, "")) || 8 };
+  if (name === "SOT-23-5" || name === "SOT-23-6") return { package: name, pins: name === "SOT-23-5" ? 5 : 6 };
+  return { package: "DIP", pins: Number(name.replace(/\D/g, "")) || 8 };
 }
 
 /**
  * Где выводы корпуса относительно вывода 1: [вдоль ряда, поперёк] в шагах 2,54 мм; поперёк 0 —
  * ближний ряд, 3 — дальний. DIP: 1…N/2 по ближнему слева направо, остальные обратно по дальнему.
  * SOT-23-5 на переходнике: 1, 2, 3 по ближнему; 4 — дальний справа, 5 — дальний слева (посередине
- * дальнего ряда ножки нет) — как у самого SOT-23-5.
+ * дальнего ряда ножки нет) — как у самого SOT-23-5. SOT-23-6 — по кругу, как DIP-6: 4 — дальний справа,
+ * 5 — посередине, 6 — слева.
  */
 export function pinOffsets(pkg: ChipPackage | undefined, pins: number): [number, number][] {
   if (pkg === "SOT-23-5") return [[0, 0], [1, 0], [2, 0], [2, 3], [0, 3]];
@@ -99,6 +104,7 @@ export function pinOffsets(pkg: ChipPackage | undefined, pins: number): [number,
 
 /** Словами, где какие выводы: для подсказок и панелей. */
 export function pinLayoutText(pkg: ChipPackage | undefined, pins: number): string {
+  if (pkg === "SOT-23-6") return "выводы 1–3 — по ближнему ряду слева направо, 4–6 — обратно по дальнему (как у SOT-23-6)";
   if (pkg === "SOT-23-5") return "выводы 1–3 — по ближнему ряду слева направо, 4 — дальний справа, 5 — дальний слева (как у SOT-23-5; посередине дальнего ряда ножки нет)";
   return `выводы 1–${pins / 2} — по ближнему ряду слева направо, ${pins / 2 + 1}–${pins} — обратно по дальнему, как у DIP`;
 }

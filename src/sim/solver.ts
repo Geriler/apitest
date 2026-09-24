@@ -49,10 +49,10 @@ export interface BranchResult {
 
 export interface Solution {
   /** Узел после слияния для каждого исходного имени узла. */
-  nodeOf: Map<string, string>;
+  nodeOf: ReadonlyMap<string, string>;
   /** Потенциал каждого исходного узла относительно опорного узла его части цепи, В. */
-  voltage: Map<string, number>;
-  branches: Map<string, BranchResult>;
+  voltage: ReadonlyMap<string, number>;
+  branches: ReadonlyMap<string, BranchResult>;
 }
 
 class UnionFind {
@@ -77,7 +77,41 @@ class UnionFind {
   }
 }
 
-export function solveCircuit(branches: Branch[], links: [string, string][] = [], extras: Extras = {}): Solution {
+/**
+ * Разобранное устройство цепи: какие узлы слиты, какой узел в какой строке матрицы. Между итерациями
+ * Ньютона меняются только сопротивления и ЭДС ветвей, а устройство — нет, поэтому разбор можно
+ * переиспользовать: передайте один и тот же объект cache. Он сверяется с ветвями и связями
+ * при каждом вызове и сам разбирается заново, если цепь изменилась.
+ */
+export interface Topology {
+  ids: string[];
+  as: string[];
+  bs: string[];
+  active: boolean[];
+  links: [string, string][];
+  /** Строки матрицы концов ветвей (−1 — опорный узел или ветвь не в цепи). */
+  ai: Int32Array;
+  bi: Int32Array;
+  /** Имя узла → строка матрицы (−1 — опорный узел). */
+  row: Map<string, number>;
+  /** Имя узла → узел после слияния. */
+  root: Map<string, string>;
+  /** Обозначение ветви → её номер. */
+  pos: Map<string, number>;
+  size: number;
+}
+
+function sameTopology(t: Topology, branches: Branch[], links: [string, string][]): boolean {
+  if (t.ids.length !== branches.length || t.links.length !== links.length) return false;
+  for (let i = 0; i < branches.length; i++) {
+    const br = branches[i];
+    if (t.ids[i] !== br.id || t.as[i] !== br.a || t.bs[i] !== br.b || t.active[i] !== Number.isFinite(br.r)) return false;
+  }
+  for (let i = 0; i < links.length; i++) if (t.links[i][0] !== links[i][0] || t.links[i][1] !== links[i][1]) return false;
+  return true;
+}
+
+function topology(branches: Branch[], links: [string, string][]): Topology {
   const uf = new UnionFind();
   for (const [x, y] of links) uf.union(x, y);
   for (const br of branches) {
@@ -85,10 +119,7 @@ export function solveCircuit(branches: Branch[], links: [string, string][] = [],
     uf.find(br.b);
   }
 
-  const active = branches.filter((br) => Number.isFinite(br.r) && br.r > 0);
-  for (const br of branches) {
-    if (!(br.r > 0)) throw new Error(`Ветвь ${br.id}: сопротивление должно быть > 0`);
-  }
+  const active = branches.filter((br) => Number.isFinite(br.r));
 
   // Связные части цепи по активным ветвям (узлы уже слиты по links).
   const adjacency = new Map<string, string[]>();
@@ -128,23 +159,106 @@ export function solveCircuit(branches: Branch[], links: [string, string][] = [],
     for (const n of component) if (n !== ref) index.set(n, index.size);
   }
 
-  const size = index.size;
+  const row = new Map<string, number>();
+  const root = new Map<string, string>();
+  const name = (n: string) => {
+    if (!row.has(n)) {
+      const r = uf.find(n);
+      root.set(n, r);
+      row.set(n, index.get(r) ?? -1);
+    }
+    return row.get(n)!;
+  };
+  const ai = new Int32Array(branches.length);
+  const bi = new Int32Array(branches.length);
+  const pos = new Map<string, number>();
+  branches.forEach((br, i) => {
+    const on = Number.isFinite(br.r);
+    ai[i] = on ? name(br.a) : (name(br.a), -1);
+    bi[i] = on ? name(br.b) : (name(br.b), -1);
+    pos.set(br.id, i);
+  });
+  for (const [p, q] of links) {
+    name(p);
+    name(q);
+  }
+  return {
+    ids: branches.map((b) => b.id),
+    as: branches.map((b) => b.a),
+    bs: branches.map((b) => b.b),
+    active: branches.map((b) => Number.isFinite(b.r)),
+    links: links.map(([p, q]) => [p, q]),
+    ai,
+    bi,
+    row,
+    root,
+    pos,
+    size: index.size,
+  };
+}
+
+/** Словарь только для чтения, который считает значения по запросу. */
+class LazyMap<V> implements ReadonlyMap<string, V> {
+  constructor(
+    private keysOf: () => Iterable<string>,
+    private has_: (k: string) => boolean,
+    private value: (k: string) => V,
+  ) {}
+  get(k: string): V | undefined {
+    return this.has_(k) ? this.value(k) : undefined;
+  }
+  has(k: string): boolean {
+    return this.has_(k);
+  }
+  get size(): number {
+    return [...this.keysOf()].length;
+  }
+  *keys(): MapIterator<string> {
+    yield* this.keysOf();
+  }
+  *values(): MapIterator<V> {
+    for (const k of this.keysOf()) yield this.value(k);
+  }
+  *entries(): MapIterator<[string, V]> {
+    for (const k of this.keysOf()) yield [k, this.value(k)];
+  }
+  [Symbol.iterator](): MapIterator<[string, V]> {
+    return this.entries();
+  }
+  forEach(f: (v: V, k: string, m: ReadonlyMap<string, V>) => void): void {
+    for (const k of this.keysOf()) f(this.value(k), k, this);
+  }
+}
+
+export function solveCircuit(branches: Branch[], links: [string, string][] = [], extras: Extras = {}, cache?: { topology?: Topology }): Solution {
+  for (const br of branches) {
+    if (!(br.r > 0)) throw new Error(`Ветвь ${br.id}: сопротивление должно быть > 0`);
+  }
+  let t = cache?.topology;
+  if (!t || !sameTopology(t, branches, links)) {
+    t = topology(branches, links);
+    if (cache) cache.topology = t;
+  }
+
+  const size = t.size;
   const G = Array.from({ length: size }, () => new Float64Array(size));
   const I = new Float64Array(size);
-  for (const br of active) {
-    const a = index.get(uf.find(br.a));
-    const b = index.get(uf.find(br.b));
+  for (let i = 0; i < branches.length; i++) {
+    const br = branches[i];
+    if (!t.active[i]) continue;
+    const a = t.ai[i];
+    const b = t.bi[i];
     const g = 1 / br.r;
     const src = (br.emf ?? 0) * g; // ток источника Нортона, втекает в b
-    if (a !== undefined) {
+    if (a >= 0) {
       G[a][a] += g;
       I[a] -= src;
     }
-    if (b !== undefined) {
+    if (b >= 0) {
       G[b][b] += g;
       I[b] += src;
     }
-    if (a !== undefined && b !== undefined) {
+    if (a >= 0 && b >= 0) {
       G[a][b] -= g;
       G[b][a] -= g;
     }
@@ -152,12 +266,13 @@ export function solveCircuit(branches: Branch[], links: [string, string][] = [],
 
   // Узлы, которые связаны только через управляемые источники, решателю не видны как связные.
   // Для транзистора это не случается: переходы база–эмиттер и база–коллектор — обычные ветви.
-  const idx = (n: string) => index.get(uf.find(n));
+  // Узел, которого нет среди ветвей и связей, — ни в одной строке.
+  const idx = (n: string) => t.row.get(n) ?? -1;
   for (const src of extras.currents ?? []) {
     const a = idx(src.a);
     const b = idx(src.b);
-    if (a !== undefined) I[a] -= src.j;
-    if (b !== undefined) I[b] += src.j;
+    if (a >= 0) I[a] -= src.j;
+    if (b >= 0) I[b] += src.j;
   }
   for (const s of extras.vccs ?? []) {
     const a = idx(s.a);
@@ -166,44 +281,29 @@ export function solveCircuit(branches: Branch[], links: [string, string][] = [],
     const cn = idx(s.cn);
     // Уходящий из a ток g·(Vcp − Vcn) — в левую часть уравнения узла a, с обратным знаком для b
     for (const [row, sign] of [[a, 1], [b, -1]] as const) {
-      if (row === undefined) continue;
-      if (cp !== undefined) G[row][cp] += sign * s.g;
-      if (cn !== undefined) G[row][cn] -= sign * s.g;
+      if (row < 0) continue;
+      if (cp >= 0) G[row][cp] += sign * s.g;
+      if (cn >= 0) G[row][cn] -= sign * s.g;
     }
   }
 
   const x = gaussianSolve(G, I);
-  const potential = (n: string) => {
-    const i = index.get(uf.find(n));
-    return i === undefined ? 0 : x[i];
-  };
+  const topo = t;
+  const at = (r: number) => (r < 0 ? 0 : x[r]);
+  const potential = (n: string) => at(topo.row.get(n)!);
 
-  const nodeOf = new Map<string, string>();
-  const voltage = new Map<string, number>();
-  for (const br of branches) {
-    for (const n of [br.a, br.b]) {
-      nodeOf.set(n, uf.find(n));
-      voltage.set(n, potential(n));
-    }
-  }
-  for (const [p, q] of links) {
-    for (const n of [p, q]) {
-      nodeOf.set(n, uf.find(n));
-      voltage.set(n, potential(n));
-    }
-  }
-
-  const results = new Map<string, BranchResult>();
-  for (const br of branches) {
+  const nodeOf = new LazyMap<string>(() => topo.row.keys(), (k) => topo.row.has(k), (k) => topo.root.get(k)!);
+  const voltage = new LazyMap<number>(() => topo.row.keys(), (k) => topo.row.has(k), potential);
+  const branchResult = (id: string): BranchResult => {
+    const i = topo.pos.get(id)!;
+    const br = branches[i];
     const va = potential(br.a);
     const vb = potential(br.b);
-    if (!Number.isFinite(br.r)) {
-      results.set(br.id, { current: 0, voltage: vb - va, power: 0 });
-      continue;
-    }
+    if (!Number.isFinite(br.r)) return { current: 0, voltage: vb - va, power: 0 };
     const current = (va - vb + (br.emf ?? 0)) / br.r;
-    results.set(br.id, { current, voltage: vb - va, power: current * current * br.r });
-  }
+    return { current, voltage: vb - va, power: current * current * br.r };
+  };
+  const results = new LazyMap<BranchResult>(() => topo.pos.keys(), (k) => topo.pos.has(k), branchResult);
 
   return { nodeOf, voltage, branches: results };
 }

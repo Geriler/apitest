@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { HOLE_BY_ID, holeLabel, packageName, pinLayoutText, pinOffsets } from "../model/breadboard";
+import { HOLE_BY_ID, holeLabel, isSot, packageName, pinLayoutText, pinOffsets } from "../model/breadboard";
 import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
 import { resolveChip, toolChips } from "../chips/registry";
@@ -27,7 +27,7 @@ export function chipTool(def: ChipDef) {
     settings: {},
     name: () => def.name,
     note: () =>
-      `<p class="sub">${packageName(def.package, def.pins)}${def.package === "SOT-23-5" ? " на переходнике" : ""}: ${def.pinNames.map((_, i) => `${i + 1} ${chipPinName(def, i)}`).join(", ")}. Встаёт поперёк центральной канавки макетки: ${pinLayoutText(def.package, def.pins)}.</p>`,
+      `<p class="sub">${packageName(def.package, def.pins)}${isSot(def.package) ? " на переходнике" : ""}: ${def.pinNames.map((_, i) => `${i + 1} ${chipPinName(def, i)}`).join(", ")}. Встаёт поперёк центральной канавки макетки: ${pinLayoutText(def.package, def.pins)}.</p>`,
     editor: () => "",
     set() {},
     create: () => ({ type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins }),
@@ -165,7 +165,7 @@ function chipView(c: Chip): ComponentView {
     group.position.set(c.placement.x, 0, c.placement.z);
     group.rotation.y = c.placement.rot;
   }
-  if (c.package === "SOT-23-5") return sotView(c, group, base, pins);
+  if (isSot(c.package)) return sotView(c, group, base, pins);
   const Hs = base[0].y; // поверхность платы (или стола)
   const center = base.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / base.length);
   const u = base[k - 1].clone().sub(base[0]).setY(0).normalize(); // вдоль ряда выводов 1…k
@@ -198,10 +198,10 @@ function chipView(c: Chip): ComponentView {
   };
 }
 
-// ─── 3D: SOT-23-5 на переходнике ─────────────────────────────────────────────
+// ─── 3D: SOT-23-5/6 на переходнике ─────────────────────────────────────────────
 
-/** Шелкография и медь переходника: дорожки от площадок SOT-23-5 к штырькам, номера, название. */
-function adapterTexture(name: string): THREE.CanvasTexture {
+/** Шелкография и медь переходника: дорожки от площадок SOT-23 к штырькам (5 или 6), номера, название. */
+function adapterTexture(name: string, n: number): THREE.CanvasTexture {
   const P = 96;
   const canvas = document.createElement("canvas");
   canvas.width = 3.3 * P;
@@ -211,9 +211,9 @@ function adapterTexture(name: string): THREE.CanvasTexture {
   const Z = (z: number) => (z + 2.15) * P;
   g.fillStyle = "#1d4f9c";
   g.fillRect(0, 0, canvas.width, canvas.height);
-  // Площадки SOT-23-5: 1–3 — к ближнему ряду, 4 — справа у дальнего, 5 — слева у дальнего
-  const sot: [number, number][] = [[-mm(0.95), mm(1.2)], [0, mm(1.2)], [mm(0.95), mm(1.2)], [mm(0.95), -mm(1.2)], [-mm(0.95), -mm(1.2)]];
-  const header: [number, number][] = [[-1, 1.5], [0, 1.5], [1, 1.5], [1, -1.5], [-1, -1.5]];
+  // Площадки SOT-23: 1–3 — к ближнему ряду, дальше по кругу по дальнему (у SOT-23-5 посередине пусто)
+  const sot = sotPads(n).map(([x, z]): [number, number] => [x * mm(0.95), z * mm(1.2)]);
+  const header = sotPads(n).map(([x, z]): [number, number] => [x, z * 1.5]);
   g.strokeStyle = "#d9a441";
   g.lineWidth = P * 0.12;
   g.lineCap = "round";
@@ -227,7 +227,7 @@ function adapterTexture(name: string): THREE.CanvasTexture {
     g.stroke();
   });
   // Штырьки: лужёные кольца (средний дальний — не подключён)
-  for (const [hx, hz] of [...header, [0, -1.5] as [number, number]]) {
+  for (const [hx, hz] of n === 5 ? [...header, [0, -1.5] as [number, number]] : header) {
     g.fillStyle = "#d4d6d8";
     g.beginPath();
     g.arc(X(hx), Z(hz), P * 0.3, 0, Math.PI * 2);
@@ -240,21 +240,28 @@ function adapterTexture(name: string): THREE.CanvasTexture {
   header.forEach(([hx, hz], i) => g.fillText(String(i + 1), X(hx) + P * 0.42, Z(hz) + (hz > 0 ? -P * 0.42 : P * 0.42)));
   g.font = `600 ${P * 0.24}px "IBM Plex Mono", ui-monospace, monospace`;
   g.fillText(name.slice(0, 14), canvas.width / 2, P * 0.95);
-  g.fillText("SOT-23-5", canvas.width / 2, canvas.height - P * 0.95);
+  g.fillText(`SOT-23-${n}`, canvas.width / 2, canvas.height - P * 0.95);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
   return tex;
 }
 
+/** Выводы SOT-23 по порядку: [вдоль, поперёк] в долях — 1…3 снизу слева направо, дальше обратно сверху. */
+function sotPads(n: number): [number, number][] {
+  return n === 5
+    ? [[-1, 1], [0, 1], [1, 1], [1, -1], [-1, -1]]
+    : [[-1, 1], [0, 1], [1, 1], [1, -1], [0, -1], [-1, -1]];
+}
+
 /**
- * Переходник SOT-23-5 → 2,54 мм: синяя плата на двух рядах штырьков (через 7,62 мм, как DIP-6),
- * сверху — сама микросхема 2,9 × 1,6 мм. base — отверстия выводов 1…5 (или точки на столе).
+ * Переходник SOT-23-5/6 → 2,54 мм: синяя плата на двух рядах штырьков (через 7,62 мм, как DIP-6),
+ * сверху — сама микросхема 2,9 × 1,6 мм. base — отверстия выводов (или точки на столе).
  */
 function sotView(c: Chip, group: THREE.Group, base: THREE.Vector3[], pins: THREE.Vector3[]): ComponentView {
   const Hs = base[0].y;
   const u = base[2].clone().sub(base[0]).setY(0).normalize(); // вдоль ближнего ряда: 1 → 3
-  const v = base[0].clone().sub(base[4]).setY(0).normalize(); // от дальнего ряда к ближнему
+  const v = base[0].clone().sub(base[base.length - 1]).setY(0).normalize(); // от дальнего ряда к ближнему
   const center = base[0].clone().addScaledVector(u, 1).addScaledVector(v, -1.5).setY(Hs);
   const spacer = mm(2.5), T = mm(1.6);
   const body = new THREE.Group();
@@ -267,7 +274,7 @@ function sotView(c: Chip, group: THREE.Group, base: THREE.Vector3[], pins: THREE
     body.add(bar);
   }
   // Плата переходника
-  const top = new THREE.MeshStandardMaterial({ map: adapterTexture(c.name), roughness: 0.5 });
+  const top = new THREE.MeshStandardMaterial({ map: adapterTexture(c.name, base.length), roughness: 0.5 });
   const edge = new THREE.MeshStandardMaterial({ color: 0x1d4f9c, roughness: 0.5 });
   const board = new THREE.Mesh(new THREE.BoxGeometry(3.3, T, 4.3), [edge, edge, top, edge, edge, edge]);
   board.position.y = spacer + T / 2;
@@ -279,12 +286,12 @@ function sotView(c: Chip, group: THREE.Group, base: THREE.Vector3[], pins: THREE
     pin.position.set(x, (spacer + T + mm(1.2)) / 2 - 0.2, z);
     body.add(pin);
   }
-  // SOT-23-5: корпус 2,9 × 1,6 × 1,1 мм и пять ножек «крылом чайки»
+  // SOT-23: корпус 2,9 × 1,6 × 1,1 мм и пять или шесть ножек «крылом чайки»
   const chipTop = spacer + T;
   const sot = new THREE.Mesh(new THREE.BoxGeometry(mm(2.9), mm(1.1), mm(1.6)), blackPlastic);
   sot.position.y = chipTop + mm(0.15) + mm(0.55);
   body.add(sot);
-  for (const [x, side] of [[-mm(0.95), 1], [0, 1], [mm(0.95), 1], [mm(0.95), -1], [-mm(0.95), -1]]) {
+  for (const [x, side] of sotPads(base.length).map(([a, b]) => [a * mm(0.95), b])) {
     const leg = new THREE.Mesh(new THREE.BoxGeometry(mm(0.4), mm(0.15), mm(0.6)), metal);
     leg.position.set(x, chipTop + mm(0.1), side * mm(1.1));
     body.add(leg);
