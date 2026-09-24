@@ -24,7 +24,7 @@ export function countParts(list: Component[], scene: Scene): PartCount {
   const out: PartCount = { total: 0, transistors: 0, byKind: new Map(), chips: new Map() };
   const walk = (items: Component[], lookup: Scene, depth: number, top: boolean) => {
     for (const c of items) {
-      if (c.type === "chippin" || excludedFromChip(c)) continue;
+      if (c.type === "chipcase" || excludedFromChip(c)) continue;
       if (c.type === "chip") {
         const def = resolveChip(scene, c.def) ?? resolveChip(lookup, c.def);
         if (top) out.chips.set(def?.name ?? c.name, (out.chips.get(def?.name ?? c.name) ?? 0) + 1);

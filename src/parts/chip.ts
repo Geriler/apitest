@@ -1,19 +1,19 @@
 import * as THREE from "three";
 import { HOLE_BY_ID, holeLabel } from "../model/breadboard";
-import type { Chip, ChipDef, ChipPinRole } from "../model/types";
+import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
 import { libraryChips, resolveChip } from "../chips/registry";
 import { pinNode } from "../sim/nodes";
 import { formatSI } from "../sim/resistorCodes";
 import { type ComponentView, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
 import { kv, pill } from "../view/panel";
-import { PIN_ROLES } from "./chippin";
+import { PIN_ROLES } from "./chipcase";
 import { toolFor, type PartDef } from "./types";
 
 /** Подпись вывода корпуса: имя, у неподключённого — NC. */
 export function chipPinName(def: ChipDef, i: number): string {
   const role = def.pinRoles?.[i] ?? "nc";
-  return role === "nc" ? "NC" : def.pinNames[i] || PIN_ROLES[role as ChipPinRole].name;
+  return role === "nc" ? "NC" : def.pinNames[i] || PIN_ROLES[role].name;
 }
 
 /** Инструмент установки микросхемы из библиотеки. */

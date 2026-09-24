@@ -8,7 +8,7 @@ import { battery } from "./battery";
 import { button } from "./button";
 import { capacitor } from "./capacitor";
 import { chip } from "./chip";
-import { chipPin } from "./chippin";
+import { chipCase } from "./chipcase";
 import { diode } from "./diode";
 import { lamp } from "./lamp";
 import { led } from "./led";
@@ -41,7 +41,7 @@ export const PARTS: { [K in Component["type"]]: PartDef<ComponentOf<K>> } = {
   button,
   pot,
   relay,
-  chippin: chipPin,
+  chipcase: chipCase,
   chip,
 };
 

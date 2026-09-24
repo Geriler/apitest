@@ -1,7 +1,7 @@
 /** Панель «Проекты»: несколько схем в браузере и файл .json для обмена. */
 
-import type { ChipDef, ChipPin, Scene } from "../model/types";
-import { PIN_ROLES, pinTitle } from "../parts/chippin";
+import type { ChipCase, ChipDef, Scene } from "../model/types";
+import { PIN_ROLES, casePinName } from "../parts/chipcase";
 import { countChip, countChips, countDetails, countShort, type PartCount } from "../chips/count";
 import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "../projects";
 
@@ -13,7 +13,7 @@ export interface ProjectsHost {
   /** Перерисовать панель справа. */
   refreshInspector(): void;
   /** Раздел «Микросхема»: выводы открытой схемы, что мешает упаковать, библиотека. */
-  chipInfo(): { pins: ChipPin[]; problems: string[]; size: number; space: number; count: PartCount; editing?: ChipDef; library: ChipDef[] };
+  chipInfo(): { box?: ChipCase; problems: string[]; size: number; space: number; count: PartCount; editing?: ChipDef; library: ChipDef[] };
   packageChip(name: string, update: boolean): boolean;
   openChip(id: string): void;
   deleteChip(id: string): void;
@@ -69,12 +69,13 @@ export class ProjectsPanel {
   private chipSection(esc: (t: string) => string): string {
     const info = this.host.chipInfo();
     const name = this.chipDraft ?? info.editing?.name ?? "";
-    const pins = info.pins.length
-      ? `<ul class="list">${info.pins
-          .map((p) => `<li><span><b>${p.number}</b> ${esc(pinTitle(p))}</span><span>${PIN_ROLES[p.role].label}</span></li>`)
+    const box = info.box;
+    const pins = box
+      ? `<ul class="list">${box.roles
+          .map((r, i) => (r === "nc" ? "" : `<li><span><b>${i + 1}</b> ${esc(casePinName(box, i))}</span><span>${PIN_ROLES[r].label}</span></li>`))
           .join("")}</ul>`
-      : `<p class="sub">Поставьте детали «Вывод» (группа «Микросхемы» слева) в точки, которые выйдут наружу: входы, выходы, питание и общий.</p>`;
-    const problems = info.pins.length ? info.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("") : "";
+      : `<p class="sub">Начните с «Корпуса» (группа «Микросхемы» слева): выберите DIP, положите его на стол и подведите провода от схемы к площадкам. Назначение выводов — в панели корпуса.</p>`;
+    const problems = box ? info.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("") : "";
     const can = !info.problems.length;
     const lib = info.library
       .map(
@@ -86,13 +87,13 @@ export class ProjectsPanel {
     return `<div class="board-section"><div class="eyebrow">микросхема</div>
       <h3>${info.editing ? `Схема микросхемы «${esc(info.editing.name)}»` : "Упаковать эту схему в DIP"}</h3>
       ${info.count.total ? `<div class="kv"><span>Внутри</span><span>${countShort(info.count)}</span></div><p class="sub">${esc(countDetails(info.count))}${info.count.chips.size ? `; из своих микросхем: ${esc(countChips(info.count))}` : ""}</p>` : ""}
-      ${pins}${info.pins.length ? `<div class="kv"><span>Место в DIP-${info.size}</span><span>${info.space} из ${2 * info.size} клеток</span></div>` : ""}${problems}
+      ${pins}${box ? `<div class="kv"><span>Место в DIP-${info.size}</span><span>${info.space} из ${2 * info.size} клеток</span></div>` : ""}${problems}
       <p class="sub">Батареи, блоки питания и приборы в микросхему не входят — это обвязка для проверки. Внутри всё считается честно, детали греются и горят.</p>
       <div class="field"><label for="f-chip-name">Название</label>
         <input id="f-chip-name" class="btn" type="text" maxlength="24" placeholder="Например, мой NAND" value="${esc(name)}" /></div>
       <div class="row">
         ${info.editing ? `<button class="btn inline" data-proj-act="chipUpdate" ${can ? "" : "disabled"}>Обновить микросхему</button>` : ""}
-        <button class="btn inline" data-proj-act="chipPack" ${can ? "" : "disabled"}>${info.editing ? "Как новую" : `Упаковать в DIP-${info.size}`}</button>
+        <button class="btn inline" data-proj-act="chipPack" ${can ? "" : "disabled"}>${info.editing ? "Как новую" : info.size ? `Упаковать в DIP-${info.size}` : "Упаковать"}</button>
       </div>
       ${lib ? `<div class="eyebrow">свои микросхемы</div><ul class="list projects">${lib}</ul>` : ""}
     </div>`;

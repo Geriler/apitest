@@ -298,14 +298,18 @@ export interface Relay extends Base {
 /** Назначение вывода микросхемы: вход, выход, питание, общий. */
 export type ChipPinRole = "in" | "out" | "vcc" | "gnd";
 
-/** Метка «Вывод»: эта точка схемы станет выводом микросхемы с номером number. */
-export interface ChipPin extends Base {
-  type: "chippin";
-  role: ChipPinRole;
-  /** Номер вывода корпуса, с 1. */
-  number: number;
-  /** Имя для подписей: VCC, GND, A, Y… (может быть пустым). */
-  name: string;
+/**
+ * Корпус будущей микросхемы: лежит на столе, площадки выводов 1…pins — по местам настоящего DIP.
+ * Место площадок не меняется, только назначение и имя вывода.
+ */
+export interface ChipCase extends Base {
+  type: "chipcase";
+  /** Выводов (DIP: 4, 6, 8, 14, 16). */
+  pins: number;
+  /** Назначение выводов 1…pins; "nc" — не подключён. */
+  roles: (ChipPinRole | "nc")[];
+  /** Имена для подписей: A, B, Y… (пусто — по назначению). */
+  names: string[];
 }
 
 /** Микросхема, собранная из своей схемы. Что внутри — ChipDef по def. */
@@ -365,7 +369,7 @@ export interface Oscilloscope extends Base {
   hold?: boolean;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay | ChipPin | Chip;
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay | ChipCase | Chip;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */

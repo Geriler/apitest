@@ -36,7 +36,7 @@ import { PARTS, part, pinLabelOf, pinsOf } from "./parts";
 import type { World } from "./view/world";
 import { ProjectsPanel } from "./ui/projects";
 import { loadLibrary, saveLibrary } from "./chips/library";
-import { chipPins, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
+import { caseOf, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
 import { chipsUsed, libraryChips, resolveChip, setLibrary } from "./chips/registry";
 import { countParts } from "./chips/count";
 import { TOOL_KEYS, placeTools, renderToolButtons, type PlaceTool, type Tool } from "./ui/tools";
@@ -693,7 +693,7 @@ export class App {
   /** Сведения для раздела «Микросхема» в панели проектов. */
   chipInfo() {
     return {
-      pins: chipPins(this.scene),
+      box: caseOf(this.scene),
       problems: packageProblems(this.scene),
       size: dipSize(this.scene),
       space: spaceUsed(this.scene),
@@ -1553,8 +1553,11 @@ export class App {
     const h = this.hover;
     const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
     const boardOk = part(sample).onBoard(sample);
+    const refused = placeTools().get(tool)!.def.refuse?.(this.scene);
+    if (refused) return this.setHint(refused);
+    if (!boardOk && (h.hole || h.overBoard)) return this.setHint(placeTools().get(tool)!.def.boardRefusal ?? "");
 
-    // Одновыводная метка — в одно отверстие; DIP — поперёк канавки
+    // Одновыводная деталь — в одно отверстие; DIP — поперёк канавки
     if (pinsOf(sample) === 1 && h.hole) {
       const owner = this.occupied().get(h.hole.id);
       if (owner) return this.setHint(`Отверстие <b>${holeLabel(h.hole.id)}</b> занято (${owner}).`);
@@ -1677,7 +1680,9 @@ export class App {
     }
     if (!this.isPlaceTool(this.tool)) return this.clearGhost();
     const tool = this.tool;
-    const n = pinsOf(this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 }));
+    const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
+    const n = pinsOf(sample);
+    if (!part(sample).onBoard(sample) && (h.hole || h.overBoard)) return this.clearGhost();
     if (n === 1 && h.hole) return this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes: [h.hole.id] })).group);
     if (n >= 4 && h.hole) {
       const holes = this.dipHoles(h.hole, n);
@@ -1943,7 +1948,16 @@ export class App {
       this.updateGhost();
       return;
     }
+    const before = JSON.stringify(c);
     part(c).edit?.(c, field, value);
+    // Выводов стало меньше, а к пропавшим подведены провода — не меняем
+    const lost = [...new Set(this.scene.wires.flatMap((w) => [w.a, w.b]).filter((e) => "comp" in e && e.comp === c.id && e.pin >= pinsOf(c)).map((e) => ("comp" in e ? e.pin + 1 : 0)))].sort((a, b) => a - b);
+    if (lost.length) {
+      Object.assign(c, JSON.parse(before));
+      this.inspectorHtml = "";
+      this.refreshInspector();
+      return this.toast("Не уменьшить", `К ${lost.length > 1 ? "выводам" : "выводу"} ${lost.join(", ")} подведены провода. Сначала уберите их.`);
+    }
     // Поменяли номинал — значит, поставили новую деталь
     this.sim.repair(c.id);
     this.burnedAt.delete(c.id);
