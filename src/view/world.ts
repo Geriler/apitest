@@ -4,8 +4,8 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { BOARDS, HOLES, boardSize, boardsBounds, type BoardSpec, type Hole } from "../model/breadboard";
-import { breadboardTexture, matTexture, pcbTexture, puffTexture } from "./textures";
+import { BOARDS, HOLES, boardRect, boardSize, boardsBounds, type BoardSpec, type Hole } from "../model/breadboard";
+import { breadboardTexture, chipTexture, matTexture, pcbTexture, puffTexture } from "./textures";
 
 const MAX_DOTS = 3000;
 const MAX_PUFFS = 240;
@@ -208,6 +208,8 @@ export class World {
   // ─── Платы ─────────────────────────────────────────────────────────────
 
   private texture(b: BoardSpec): THREE.CanvasTexture {
+    // Корпус у каждого свой (подписи выводов), его текстура живёт, пока живёт плата
+    if (b.kind === "chip") return chipTexture(b);
     const key = b.kind === "breadboard" ? "bb" : `pcb${b.cols}x${b.rows}`;
     let t = this.textures.get(key);
     if (!t) {
@@ -228,16 +230,23 @@ export class World {
       const m = o as THREE.Mesh;
       if (!m.isMesh && !(o as THREE.LineSegments).isLineSegments) return;
       m.geometry.dispose();
-      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+        // Текстура корпуса у каждого своя — уходит вместе с ним; остальные общие, из кэша
+        if (mat.userData.ownMap) (mat as THREE.MeshStandardMaterial).map?.dispose();
+        mat.dispose();
+      }
     });
     this.boardGroup = new THREE.Group();
     this.boardMeshes = [];
     for (const b of BOARDS) {
       const size = boardSize(b);
       const top = new THREE.MeshStandardMaterial(
-        b.kind === "breadboard" ? { map: this.texture(b), roughness: 0.75 } : { map: this.texture(b), roughness: 0.45, metalness: 0.05 },
+        b.kind === "breadboard" ? { map: this.texture(b), roughness: 0.75 } : { map: this.texture(b), roughness: b.kind === "chip" ? 0.6 : 0.45, metalness: 0.05 },
       );
-      const side = new THREE.MeshStandardMaterial(b.kind === "breadboard" ? { color: 0xece9e0, roughness: 0.7 } : { color: 0x2c6e47, roughness: 0.55 });
+      top.userData.ownMap = b.kind === "chip";
+      const side = new THREE.MeshStandardMaterial(
+        b.kind === "breadboard" ? { color: 0xece9e0, roughness: 0.7 } : b.kind === "chip" ? { color: 0x1c1e21, roughness: 0.6 } : { color: 0x2c6e47, roughness: 0.55 },
+      );
       const body = new THREE.Mesh(new THREE.BoxGeometry(size.width, size.height, size.depth), [side, side, top, side, side, side]);
       body.position.set(b.x, size.height / 2, b.z);
       body.castShadow = true;
@@ -245,6 +254,7 @@ export class World {
       body.userData.boardId = b.id;
       this.boardMeshes.push(body);
       this.boardGroup.add(body);
+      if (b.kind === "chip") this.boardGroup.add(chipLegs(b, size.height));
       if (b.id === this.highlightId) {
         const frame = new THREE.LineSegments(
           new THREE.EdgesGeometry(new THREE.BoxGeometry(size.width + 0.3, size.height + 0.3, size.depth + 0.3)),
@@ -464,4 +474,23 @@ export class World {
       }
     });
   }
+}
+
+/** Ножки корпуса: от площадок выводов через край корпуса наружу и вниз, к столу. */
+function chipLegs(b: BoardSpec, height: number): THREE.Group {
+  const legs = new THREE.Group();
+  const metal = new THREE.MeshStandardMaterial({ color: 0xc9ccd1, metalness: 0.85, roughness: 0.3 });
+  const r = boardRect(b);
+  for (const h of HOLES) {
+    if (h.boardId !== b.id || !h.pin) continue;
+    const near = h.z > b.z;
+    const edge = near ? r.z1 : r.z0;
+    const s = near ? 1 : -1;
+    const flat = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.7), metal);
+    flat.position.set(h.x, height * 0.55, edge + s * 0.35);
+    const down = new THREE.Mesh(new THREE.BoxGeometry(0.5, height * 0.55 + 0.04, 0.08), metal);
+    down.position.set(h.x, (height * 0.55) / 2, edge + s * 0.68);
+    legs.add(flat, down);
+  }
+  return legs;
 }

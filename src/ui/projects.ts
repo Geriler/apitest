@@ -1,7 +1,8 @@
 /** Панель «Проекты»: несколько схем в браузере и файл .json для обмена. */
 
-import type { ChipCase, ChipDef, Scene } from "../model/types";
-import { PIN_ROLES, casePinName } from "../parts/chipcase";
+import { DIP_SIZES, chipPinName, type BoardSpec } from "../model/breadboard";
+import type { ChipDef, Scene } from "../model/types";
+import { PIN_ROLES } from "../chips/roles";
 import { countChip, countChips, countDetails, countShort, type PartCount } from "../chips/count";
 import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "../projects";
 
@@ -13,9 +14,11 @@ export interface ProjectsHost {
   /** Перерисовать панель справа. */
   refreshInspector(): void;
   /** Раздел «Микросхема»: выводы открытой схемы, что мешает упаковать, библиотека. */
-  chipInfo(): { box?: ChipCase; problems: string[]; size: number; space: number; count: PartCount; editing?: ChipDef; library: ChipDef[] };
+  chipInfo(): { box?: BoardSpec; problems: string[]; size: number; space: number; count: PartCount; editing?: ChipDef; library: ChipDef[] };
   packageChip(name: string, update: boolean): boolean;
   openChip(id: string): void;
+  /** Новая микросхема: пустая сцена с корпусом DIP-pins (вверху — путь и «Вернуться»). */
+  newChip(pins: number): void;
   deleteChip(id: string): void;
 }
 
@@ -28,6 +31,8 @@ export class ProjectsPanel {
   private confirmDelete?: string;
   /** Имя будущей микросхемы, пока его набирают. */
   private chipDraft?: string;
+  /** Корпус новой микросхемы. */
+  private newPins = 8;
 
   constructor(private host: ProjectsHost) {}
 
@@ -68,14 +73,17 @@ export class ProjectsPanel {
   /** Раздел «Микросхема»: упаковать эту схему в DIP и библиотека своих микросхем. */
   private chipSection(esc: (t: string) => string): string {
     const info = this.host.chipInfo();
-    const name = this.chipDraft ?? info.editing?.name ?? "";
     const box = info.box;
+    const name = this.chipDraft ?? (box?.label || info.editing?.name || "");
     const pins = box
-      ? `<ul class="list">${box.roles
-          .map((r, i) => (r === "nc" ? "" : `<li><span><b>${i + 1}</b> ${esc(casePinName(box, i))}</span><span>${PIN_ROLES[r].label}</span></li>`))
+      ? `<ul class="list">${(box.roles ?? [])
+          .map((r, i) => (r === "nc" ? "" : `<li><span><b>${i + 1}</b> ${esc(chipPinName(box, i))}</span><span>${PIN_ROLES[r].label}</span></li>`))
           .join("")}</ul>`
-      : `<p class="sub">Начните с «Корпуса» (группа «Микросхемы» слева): выберите DIP, положите его на стол и подведите провода от схемы к площадкам. Назначение выводов — в панели корпуса.</p>`;
+      : "";
     const problems = box ? info.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("") : "";
+    const create = `<div class="field"><label for="f-chip-new">Корпус</label>
+        <select id="f-chip-new">${DIP_SIZES.map((n) => `<option value="${n}"${n === this.newPins ? " selected" : ""}>DIP-${n}</option>`).join("")}</select></div>
+      <div class="row"><button class="btn inline" data-proj-act="chipNew">Новая микросхема</button></div>`;
     const can = !info.problems.length;
     const lib = info.library
       .map(
@@ -84,17 +92,22 @@ export class ProjectsPanel {
           <button class="btn inline danger" data-proj-act="chipDelete" data-name="${esc(d.id)}">${this.confirmDelete === `chip:${d.id}` ? "Точно?" : "Удалить"}</button></span></li>`,
       )
       .join("");
-    return `<div class="board-section"><div class="eyebrow">микросхема</div>
-      <h3>${info.editing ? `Схема микросхемы «${esc(info.editing.name)}»` : "Упаковать эту схему в DIP"}</h3>
+    const packing = box
+      ? `<h3>${info.editing ? `Схема микросхемы «${esc(info.editing.name)}»` : `Своя микросхема в DIP-${info.size}`}</h3>
       ${info.count.total ? `<div class="kv"><span>Внутри</span><span>${countShort(info.count)}</span></div><p class="sub">${esc(countDetails(info.count))}${info.count.chips.size ? `; из своих микросхем: ${esc(countChips(info.count))}` : ""}</p>` : ""}
-      ${pins}${box ? `<div class="kv"><span>Место в DIP-${info.size}</span><span>${info.space} из ${2 * info.size} клеток</span></div>` : ""}${problems}
-      <p class="sub">Батареи, блоки питания и приборы в микросхему не входят — это обвязка для проверки. Внутри всё считается честно, детали греются и горят.</p>
+      ${pins}<div class="kv"><span>Место в DIP-${info.size}</span><span>${info.space} из ${2 * info.size} клеток</span></div>${problems}
+      <p class="sub">В микросхему входит то, что стоит на корпусе. Питание и приборы на столе — обвязка для проверки: подключайте их к площадкам выводов. Назначение выводов — в панели корпуса (нажмите на него).</p>
       <div class="field"><label for="f-chip-name">Название</label>
         <input id="f-chip-name" class="btn" type="text" maxlength="24" placeholder="Например, мой NAND" value="${esc(name)}" /></div>
       <div class="row">
         ${info.editing ? `<button class="btn inline" data-proj-act="chipUpdate" ${can ? "" : "disabled"}>Обновить микросхему</button>` : ""}
-        <button class="btn inline" data-proj-act="chipPack" ${can ? "" : "disabled"}>${info.editing ? "Как новую" : info.size ? `Упаковать в DIP-${info.size}` : "Упаковать"}</button>
-      </div>
+        <button class="btn inline" data-proj-act="chipPack" ${can ? "" : "disabled"}>${info.editing ? "Как новую" : "Упаковать"}</button>
+      </div>`
+      : `<h3>Своя микросхема</h3>
+      <p class="sub">Выберите корпус: откроется стол с ним. Выводы уже стоят по местам, как у настоящего DIP; им остаётся назначить вход, выход, питание или общий. Схему собирайте прямо на корпусе, а проверяйте — подключив питание и приборы к выводам.</p>
+      ${create}`;
+    return `<div class="board-section"><div class="eyebrow">микросхема</div>
+      ${packing}
       ${lib ? `<div class="eyebrow">свои микросхемы</div><ul class="list projects">${lib}</ul>` : ""}
     </div>`;
   }
@@ -165,6 +178,8 @@ export class ProjectsPanel {
     });
     const chipName = root.querySelector<HTMLInputElement>("#f-chip-name");
     chipName?.addEventListener("input", () => (this.chipDraft = chipName.value));
+    const newPins = root.querySelector<HTMLSelectElement>("#f-chip-new");
+    newPins?.addEventListener("change", () => (this.newPins = Number(newPins.value)));
     const file = root.querySelector<HTMLInputElement>("#f-proj-file");
     file?.addEventListener("change", () => {
       if (file.files?.[0]) void this.importFile(file.files[0]);
@@ -206,6 +221,9 @@ export class ProjectsPanel {
           case "chipUpdate":
             this.host.packageChip((this.chipDraft ?? "").trim(), btn.dataset.projAct === "chipUpdate");
             this.chipDraft = undefined;
+            return;
+          case "chipNew":
+            this.host.newChip(this.newPins);
             return;
           case "chipOpen":
             this.host.openChip(name);

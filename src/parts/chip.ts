@@ -7,7 +7,7 @@ import { pinNode } from "../sim/nodes";
 import { formatSI } from "../sim/resistorCodes";
 import { type ComponentView, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
 import { kv, pill } from "../view/panel";
-import { PIN_ROLES } from "./chipcase";
+import { PIN_ROLES } from "../chips/roles";
 import { toolFor, type PartDef } from "./types";
 
 /** Подпись вывода корпуса: имя, у неподключённого — NC. */

@@ -9,6 +9,9 @@
  * Печатная плата лежит перед макетками: площадки изначально ни с чем не соединены — соединяют
  * медные дорожки. Размер выбирается; растёт вправо и вниз, левый верхний угол на месте.
  *
+ * Корпус микросхемы — площадки, как у печатной платы, внутри контура DIP и выводы 1…N по краям,
+ * на своих местах. На нём собирают свою микросхему.
+ *
  * Раскладка меняется через applyLayout: HOLES и HOLE_BY_ID перестраиваются на месте,
  * поэтому все, кто их импортировал, видят новые отверстия.
  */
@@ -21,13 +24,15 @@ export interface Hole {
   z: number;
   /** Электрический узел: все отверстия с одинаковым node соединены внутри платы. */
   node: string;
-  /** main и rail — макетка; pad — площадка печатной платы. */
+  /** main и rail — макетка; pad — площадка печатной платы или корпуса. */
   kind: "main" | "rail" | "pad";
   board: "breadboard" | "pcb";
   /** Плата, на которой отверстие: «BB1», «PCB1»… */
   boardId: string;
   /** Для шин: знак, чтобы подсветить + и − цветом. */
   polarity?: "+" | "-";
+  /** Площадка вывода корпуса: номер вывода (с 1). */
+  pin?: number;
 }
 
 export const COLUMNS = 30;
@@ -41,14 +46,35 @@ export const BOARD = {
 
 /** Плата на столе (сохраняется вместе со схемой). x, z — центр платы. */
 export interface BoardSpec {
-  /** «BB1», «BB2»… — макетки, «PCB1», «PCB2»… — печатные платы. */
+  /** «BB1», «BB2»… — макетки, «PCB1», «PCB2»… — печатные платы, «K1» — корпус микросхемы. */
   id: string;
-  kind: "breadboard" | "pcb";
+  kind: "breadboard" | "pcb" | "chip";
   x: number;
   z: number;
   /** Только у печатной платы: число столбцов и рядов площадок. */
   cols?: number;
   rows?: number;
+  /** Только у корпуса: число выводов (DIP: 4…16), их назначение и имена, название микросхемы. */
+  pins?: number;
+  roles?: ChipPinRole[];
+  names?: string[];
+  label?: string;
+}
+
+/** Назначение вывода корпуса; nc — не подключён. */
+export type ChipPinRole = "nc" | "in" | "out" | "vcc" | "gnd";
+
+/** Корпуса DIP, которые можно выбрать. */
+export const DIP_SIZES = [4, 6, 8, 14, 16];
+
+/** Поле площадок корпуса DIP-pins: по 4 столбца на пару выводов, 8 рядов. */
+export function chipField(pins: number): { cols: number; rows: number } {
+  return { cols: 2 * pins + 1, rows: 8 };
+}
+
+/** Новый корпус: все выводы не подключены. */
+export function newChipBoard(pins: number, x = 0, z = 0, id = "K1"): BoardSpec {
+  return { id, kind: "chip", x, z, pins, roles: Array(pins).fill("nc"), names: Array(pins).fill(""), label: "" };
 }
 
 /** Старый формат (до того, как платы стали отдельными предметами): число макеток и размер печатной. */
@@ -79,6 +105,11 @@ export const DEFAULT_BOARDS: BoardSpec[] = [
 
 /** Размер платы в шагах (у печатной — площадки плюс поля по 1,5 шага). */
 export function boardSize(b: BoardSpec): { width: number; depth: number; height: number } {
+  if (b.kind === "chip") {
+    // Поле, по два шага до рядов выводов и по полтора — поля
+    const f = chipField(b.pins ?? 8);
+    return { width: f.cols + 3, depth: f.rows + 6, height: PCB_HEIGHT };
+  }
   return b.kind === "breadboard"
     ? { ...BOARD }
     : { width: (b.cols ?? 24) + 3, depth: (b.rows ?? 14) + 3, height: PCB_HEIGHT };
@@ -100,7 +131,7 @@ export function boardsOverlap(a: BoardSpec, b: BoardSpec): boolean {
 
 /** Следующий свободный номер: «BB2», «PCB1»… */
 export function nextBoardId(kind: BoardSpec["kind"], boards: readonly BoardSpec[]): string {
-  const p = kind === "breadboard" ? "BB" : "PCB";
+  const p = kind === "breadboard" ? "BB" : kind === "chip" ? "K" : "PCB";
   for (let n = 1; ; n++) if (!boards.some((b) => b.id === `${p}${n}`)) return `${p}${n}`;
 }
 
@@ -111,6 +142,7 @@ function boardNumber(b: BoardSpec): number {
 
 /** Человекочитаемое имя: «макетка 2», «печатная плата 1». */
 export function boardName(b: BoardSpec): string {
+  if (b.kind === "chip") return `корпус DIP-${b.pins}`;
   return `${b.kind === "breadboard" ? "макетка" : "печатная плата"} ${boardNumber(b)}`;
 }
 
@@ -121,16 +153,34 @@ export function boardName(b: BoardSpec): string {
 function prefixes(b: BoardSpec): { id: string; node: string } {
   const n = boardNumber(b);
   if (b.kind === "breadboard") return n === 1 ? { id: "", node: "" } : { id: `${n}:`, node: `bb${n}:` };
+  if (b.kind === "chip") return { id: n === 1 ? "k:" : `k${n}:`, node: "" };
   return n === 1 ? { id: "p", node: "" } : { id: `p${n}:`, node: "" };
 }
 
-/** Координата X площадки в столбце col (1…) на печатной плате b. */
+/** Координата X площадки в столбце col (1…) на печатной плате или корпусе b. */
 export function padX(b: BoardSpec, col: number): number {
   return boardRect(b).x0 + 1.5 + (col - 1);
 }
-/** Координата Z площадки в ряду rowIndex (0…) на печатной плате b. */
+/** Координата Z площадки в ряду rowIndex (0…) на печатной плате или корпусе b. */
 export function padZ(b: BoardSpec, rowIndex: number): number {
-  return boardRect(b).z0 + 1.5 + rowIndex;
+  return boardRect(b).z0 + (b.kind === "chip" ? 3.5 : 1.5) + rowIndex;
+}
+
+/** Id площадки вывода n (с 1) корпуса b: «k:3», у второго корпуса — «k2:3». */
+export function chipPinHole(b: BoardSpec, n: number): string {
+  return `${prefixes(b).id}${n}`;
+}
+
+/**
+ * Где площадка вывода i (с 0) корпуса b: выводы 1…N/2 — по ближнему краю слева направо,
+ * остальные — обратно по дальнему, как у настоящего DIP.
+ */
+export function chipPinAt(b: BoardSpec, i: number): { x: number; z: number } {
+  const n = b.pins ?? 8;
+  const k = n / 2;
+  const along = i < k ? i : n - 1 - i;
+  const { rows } = chipField(n);
+  return { x: padX(b, 4 * along + 3), z: i < k ? padZ(b, rows - 1) + 2 : padZ(b, 0) - 2 };
 }
 
 function rowZ(rowIndex: number): number {
@@ -181,6 +231,21 @@ export function boardHoles(b: BoardSpec): Hole[] {
           });
         }
       }
+    }
+    return holes;
+  }
+  if (b.kind === "chip") {
+    const f = chipField(b.pins ?? 8);
+    for (let r = 0; r < f.rows; r++) {
+      for (let c = 1; c <= f.cols; c++) {
+        const id = `${px.id}${LETTERS[r]}${c}`;
+        holes.push({ id, x: padX(b, c), y: PCB_HEIGHT, z: padZ(b, r), node: `pad:${id}`, kind: "pad", board: "pcb", boardId: b.id });
+      }
+    }
+    for (let i = 0; i < (b.pins ?? 8); i++) {
+      const id = `${px.id}${i + 1}`;
+      const at = chipPinAt(b, i);
+      holes.push({ id, x: at.x, y: PCB_HEIGHT, z: at.z, node: `pad:${id}`, kind: "pad", board: "pcb", boardId: b.id, pin: i + 1 });
     }
     return holes;
   }
@@ -272,6 +337,8 @@ export function describeNode(node: string): string {
 export function holeLabel(id: string): string {
   const h = HOLE_BY_ID.get(id);
   if (!h) return id;
+  if (h.pin) return `вывод ${h.pin} ${chipPinName(boardById(h.boardId), h.pin - 1)}`;
+  if (h.kind === "pad" && id.startsWith("k")) return `корпус, площадка ${id.slice(id.indexOf(":") + 1)}`;
   if (h.kind === "pad") {
     const m = id.match(/^p(?:(\d+):)?(.*)$/)!;
     return `${m[1] ? `плата ${m[1]}, ` : ""}площадка ${m[2]}`;
@@ -283,6 +350,14 @@ export function holeLabel(id: string): string {
   const r = local.match(/^(top|bot)([+-])(\d+)$/)!;
   return `${prefix}шина ${r[2] === "+" ? "+" : "−"} ${r[1] === "top" ? "сверху" : "снизу"}, ${r[3]}`;
 }
+
+/** Подпись вывода i (с 0) корпуса: своё имя или по назначению; неподключённый — NC. */
+export function chipPinName(b: BoardSpec | undefined, i: number): string {
+  const role = b?.roles?.[i] ?? "nc";
+  return role === "nc" ? "NC" : b?.names?.[i]?.trim() || ROLE_NAMES[role];
+}
+
+const ROLE_NAMES: Record<ChipPinRole, string> = { nc: "NC", in: "IN", out: "OUT", vcc: "VCC", gnd: "GND" };
 
 /**
  * Площадки печатной платы, через которые проходит отрезок от a до b (включая концы), по порядку.

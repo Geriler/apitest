@@ -8,7 +8,8 @@
  * Пересечение линий без точки — не соединение, точка — соединение.
  */
 
-import { HOLE_BY_ID } from "../model/breadboard";
+import { HOLE_BY_ID, chipPinHole, chipPinName } from "../model/breadboard";
+import { PIN_ROLES } from "../chips/roles";
 import type { Component, Pin, Scene, SchematicLayout } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { endpointNode, pinNode, type Simulation } from "../sim/simulation";
@@ -76,6 +77,17 @@ export function buildNetlist(scene: Scene): Netlist {
   return { nets, pins };
 }
 
+/** Флажок вывода микросхемы с подписью над линией цепи. */
+function flagSvg(px: number, y: number, text: string, color: string): string {
+  const w = 12 + text.length * 6.6;
+  return (
+    `<rect class="hit" x="${num(px - 6)}" y="${num(y - 34)}" width="${num(w + 12)}" height="38"/>` +
+    `<path d="M${num(px)} ${num(y)}V${num(y - 12)}"/>` +
+    `<rect x="${num(px)}" y="${num(y - 28)}" width="${num(w)}" height="16" rx="2" style="fill:${color};stroke:none"/>` +
+    `<text x="${num(px + 6)}" y="${num(y - 16)}" class="flag">${esc(text)}</text>`
+  );
+}
+
 const ROW = 92;
 const COL = 112;
 const LEFT = 78;
@@ -139,7 +151,8 @@ function netKeys(scene: Scene, count: number, pins: Map<string, number[]>): stri
 }
 
 interface Placed {
-  c: Component;
+  /** Деталь (или корпус, у выводов которого флажки). */
+  id: string;
   /** Имя для ручной раскладки: обозначение детали, у второго обозначения — «K1:contacts». */
   key: string;
   x: number;
@@ -205,13 +218,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
       if (el.flag) {
         // Вывод микросхемы: флажок с номером над линией своей цепи
         const y = Y(netOf[0]);
-        const w = 12 + el.flag.text.length * 6.6;
-        const svg =
-          `<rect class="hit" x="${num(px - 6)}" y="${num(y - 34)}" width="${num(w + 12)}" height="38"/>` +
-          `<path d="M${num(px)} ${num(y)}V${num(y - 12)}"/>` +
-          `<rect x="${num(px)}" y="${num(y - 28)}" width="${num(w)}" height="16" rx="2" style="fill:${el.flag.color};stroke:none"/>` +
-          `<text x="${num(px + 6)}" y="${num(y - 16)}" class="flag">${esc(el.flag.text)}</text>`;
-        placed.push({ c, key, x: px, attach: [[netOf[0], px]], svg, bottom: y });
+        placed.push({ id: c.id, key, x: px, attach: [[netOf[0], px]], svg: flagSvg(px, y, el.flag.text, el.flag.color), bottom: y });
         x += COL * 0.6;
         continue;
       }
@@ -239,7 +246,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
           `<rect class="hit" x="${num(px - 14)}" y="${num(top)}" width="${num(W + 28)}" height="${num(bottom - top + 30)}"/>` +
           `<rect x="${num(px)}" y="${num(top)}" width="${W}" height="${num(bottom - top)}" class="chipbox"/>${pinsSvg}` +
           `<text x="${num(px)}" y="${num(bottom + 14)}" class="ref">${esc(c.id)}</text><text x="${num(px)}" y="${num(bottom + 27)}">${esc(el.value)}</text>`;
-        placed.push({ c, key, x: px, attach, svg, bottom: bottom + 30 });
+        placed.push({ id: c.id, key, x: px, attach, svg, bottom: bottom + 30 });
         x += COL * 1.4;
         continue;
       }
@@ -267,7 +274,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
           `<g transform="translate(${num(px)} ${num(yc)}) scale(1 ${flip})">${el.symbol ?? ""}</g>` +
           (el.text ? `<text x="${num(px)}" y="${num(yc + 4)}" class="sym">${esc(el.text)}</text>` : "") +
           label(px + 18, yc);
-        placed.push({ c, key, x: px, attach, svg, bottom });
+        placed.push({ id: c.id, key, x: px, attach, svg, bottom });
         x += COL;
       } else {
         // Транзистор: основной путь (К–Э или С–И) вертикально, управляющий вывод — слева
@@ -303,10 +310,25 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
           `<path d="M${num(tx + gx)} ${num(yc)}H${num(tx - 30)}V${num(yCtrl)}"/>` +
           `<g transform="translate(${num(tx)} ${num(yc)}) scale(1 ${swap ? -1 : 1})">${sym.body}</g>` +
           label(tx + 24, yc - 20);
-        placed.push({ c, key, x: tx, attach, svg, bottom: Math.max(bottom, yCtrl) });
+        placed.push({ id: c.id, key, x: tx, attach, svg, bottom: Math.max(bottom, yCtrl) });
         x += COL * 1.1;
       }
     }
+  }
+
+  // Выводы корпуса своей микросхемы: флажок назначенного вывода на линии его цепи
+  for (const b of scene.boards ?? []) {
+    if (b.kind !== "chip") continue;
+    (b.roles ?? []).forEach((role, i) => {
+      if (role === "nc") return;
+      const net = nets.findIndex((n) => n.includes(`pad:${chipPinHole(b, i + 1)}`));
+      if (net < 0 || !row.has(net)) return;
+      const key = `${b.id}:${i + 1}`;
+      const px = layout.x?.[key] ?? x;
+      const y = Y(net);
+      placed.push({ id: b.id, key, x: px, attach: [[net, px]], svg: flagSvg(px, y, `${i + 1} ${chipPinName(b, i)}`, PIN_ROLES[role].color), bottom: y });
+      x += COL * 0.6;
+    });
   }
 
   // Линии цепей: от крайней левой до крайней правой точки подключения; точки — в T-соединениях.
@@ -336,7 +358,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
   const partsSvg = placed
     .map(
       (p) =>
-        `<g class="part${p.c.id === highlight ? " sel" : ""}" data-part="${esc(p.c.id)}" data-x="${num(p.x)}"${p.key === p.c.id ? "" : ` data-key="${esc(p.key)}"`}>${p.svg}</g>`,
+        `<g class="part${p.id === highlight ? " sel" : ""}" data-part="${esc(p.id)}" data-x="${num(p.x)}"${p.key === p.id ? "" : ` data-key="${esc(p.key)}"`}>${p.svg}</g>`,
     )
     .join("");
   return (

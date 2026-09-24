@@ -3,12 +3,13 @@
  * Только строки HTML по текущему состоянию; события навешивает app.ts.
  */
 
-import { BOARDS, HOLE_BY_ID, PCB_SIZES, boardById, boardName, boardSize, describeNode, holeLabel, type BoardSpec, type Hole } from "../model/breadboard";
+import { BOARDS, DIP_SIZES, HOLE_BY_ID, PCB_SIZES, boardById, boardName, boardSize, describeNode, holeLabel, type BoardSpec, type ChipPinRole, type Hole } from "../model/breadboard";
 import { isFlatWire, type Component, type Endpoint, type Scene, type WireShape } from "../model/types";
 import { part, pinLabelOf } from "../parts";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
 import { heatThreshold, traceResistance, wireResistance, type Simulation } from "../sim/simulation";
 import { pill, readout, selectField } from "../view/panel";
+import { PIN_ROLES } from "../chips/roles";
 
 /** Что панели нужно знать о приложении. */
 export interface PanelHost {
@@ -226,6 +227,7 @@ export function traceToolPanel(): [string, string] {
 
 /** Раздел панели о плате: название, размер, что можно сделать. */
 export function boardSection(b: BoardSpec): string {
+  if (b.kind === "chip") return chipSection(b);
   const size = boardSize(b);
   const mmSize = `${Math.round(size.width * 2.54)} × ${Math.round(size.depth * 2.54)} мм`;
   const sizeRow =
@@ -238,6 +240,30 @@ export function boardSection(b: BoardSpec): string {
     ${sizeRow}
     <p class="sub">Чтобы передвинуть, тащите плату мышью — детали, провода и дорожки поедут вместе с ней.</p>
     <div class="row"><button class="btn inline danger" data-board-act="remove">Убрать плату</button></div>
+  </div>`;
+}
+
+/** Панель корпуса своей микросхемы: размер, название, назначение и имена выводов. */
+function chipSection(b: BoardSpec): string {
+  const n = b.pins ?? 8;
+  const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+  const rows = Array.from({ length: n }, (_, i) => {
+    const role = b.roles?.[i] ?? "nc";
+    const opts = (Object.keys(PIN_ROLES) as ChipPinRole[])
+      .map((r) => `<option value="${r}"${r === role ? " selected" : ""}>${PIN_ROLES[r].short}</option>`)
+      .join("");
+    return `<div class="pinrow"><b style="border-color:${PIN_ROLES[role].color}">${i + 1}</b>
+      <select data-field="chipRole:${i}" aria-label="Назначение вывода ${i + 1}">${opts}</select>
+      <input class="btn" type="text" maxlength="8" data-field="chipName:${i}" aria-label="Имя вывода ${i + 1}" placeholder="${PIN_ROLES[role].name}" value="${esc(b.names?.[i] ?? "")}" ${role === "nc" ? "disabled" : ""} /></div>`;
+  }).join("");
+  return `<div class="board-section">
+    <div class="eyebrow">корпус микросхемы</div>
+    <h3>${b.label ? esc(b.label) : "Своя микросхема"}, DIP-${n}</h3>
+    ${selectField("chipPins", "Корпус", DIP_SIZES.map((k): [string, string] => [String(k), `DIP-${k} — ${2 * k} клеток места`]), String(n))}
+    <div class="field"><label for="f-chipLabel">Название</label><input id="f-chipLabel" class="btn" type="text" maxlength="24" data-field="chipLabel" placeholder="Например, мой NAND" value="${esc(b.label ?? "")}" /></div>
+    <p class="sub">Детали ставьте на площадки корпуса и соединяйте дорожками (T) или проводами. Выводы 1…${n / 2} — по ближнему краю слева направо, ${n / 2 + 1}…${n} — обратно по дальнему, как у настоящего DIP; место выводов не меняется, только для чего они. Питание и приборы — на столе, подключайте их к выводам.</p>
+    <div class="eyebrow">выводы: назначение и имя</div><div class="pinrows">${rows}</div>
+    <div class="row"><button class="btn inline danger" data-board-act="remove">Убрать корпус</button></div>
   </div>`;
 }
 

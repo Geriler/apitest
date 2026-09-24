@@ -5,11 +5,10 @@
 
 import type { ChipDef, Component, Scene } from "../model/types";
 import { part } from "../parts";
-import { excludedFromChip } from "./package";
 import { resolveChip } from "./registry";
 
 export interface PartCount {
-  /** Всего деталей (после раскрытия вложенных микросхем; выводы и обвязка не считаются). */
+  /** Всего деталей (после раскрытия вложенных микросхем; обвязка не считается). */
   total: number;
   /** Из них транзисторов (биполярных и полевых). */
   transistors: number;
@@ -24,7 +23,8 @@ export function countParts(list: Component[], scene: Scene): PartCount {
   const out: PartCount = { total: 0, transistors: 0, byKind: new Map(), chips: new Map() };
   const walk = (items: Component[], lookup: Scene, depth: number, top: boolean) => {
     for (const c of items) {
-      if (c.type === "chipcase" || excludedFromChip(c)) continue;
+      // Питание и приборы — обвязка, не состав
+      if (part(c).source || c.type === "meter" || c.type === "scope") continue;
       if (c.type === "chip") {
         const def = resolveChip(scene, c.def) ?? resolveChip(lookup, c.def);
         if (top) out.chips.set(def?.name ?? c.name, (out.chips.get(def?.name ?? c.name) ?? 0) + 1);

@@ -106,8 +106,8 @@ async function start(): Promise<void> {
       const head = g.querySelector("summary")!;
       head.classList.toggle("active", !!chosen);
       head.title = chosen?.title ?? head.querySelector(".gname")!.textContent!;
-      const icon = (chosen ?? g.querySelector<HTMLElement>(".group-body [data-tool]"))!.querySelector("svg")!.cloneNode(true);
-      head.querySelector("svg")!.replaceWith(icon);
+      const icon = (chosen ?? g.querySelector<HTMLElement>(".group-body [data-tool]"))?.querySelector("svg")?.cloneNode(true);
+      if (icon) head.querySelector("svg")!.replaceWith(icon);
     }
   };
   app.onTool(app.tool);

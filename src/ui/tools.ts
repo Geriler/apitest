@@ -32,4 +32,6 @@ export function renderToolButtons(tools: HTMLElement): void {
       </button>`,
     );
   }
+  // Пустую группу не показываем (например, «Микросхемы», пока своих нет)
+  tools.querySelectorAll<HTMLElement>("details[data-group]").forEach((g) => (g.hidden = !g.querySelector(".group-body [data-tool]")));
 }

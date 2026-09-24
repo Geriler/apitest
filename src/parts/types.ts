@@ -66,8 +66,6 @@ export interface ToolDef<C extends Component = Component, S = any> {
   adjust?(c: C, scene: Scene): void;
   /** Подсказка внизу экрана; pending — отверстие, где уже стоит первый вывод. */
   hint(s: S, pending?: string): string;
-  /** Почему эту деталь сейчас нельзя поставить вовсе (например, второй корпус). */
-  refuse?(scene: Scene): string | undefined;
   /** Почему нельзя поставить в плату (если деталь не встаёт в плату). */
   boardRefusal?: string;
 }

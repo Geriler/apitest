@@ -1,6 +1,7 @@
 /** Модель песочницы: что стоит на столе и как соединено. Без Three.js. */
 
-import { DEFAULT_BOARDS, HOLE_BY_ID, boardsFromLayout, holeIdsFor, type BoardSpec, type Layout } from "./breadboard";
+import { DEFAULT_BOARDS, HOLE_BY_ID, boardsFromLayout, holeIdsFor, type BoardSpec, type ChipPinRole, type Layout } from "./breadboard";
+export type { ChipPinRole } from "./breadboard";
 
 export type SmdSize = "1206" | "0805" | "0603" | "0402";
 
@@ -295,23 +296,6 @@ export interface Relay extends Base {
   kind: RelayKind;
 }
 
-/** Назначение вывода микросхемы: вход, выход, питание, общий. */
-export type ChipPinRole = "in" | "out" | "vcc" | "gnd";
-
-/**
- * Корпус будущей микросхемы: лежит на столе, площадки выводов 1…pins — по местам настоящего DIP.
- * Место площадок не меняется, только назначение и имя вывода.
- */
-export interface ChipCase extends Base {
-  type: "chipcase";
-  /** Выводов (DIP: 4, 6, 8, 14, 16). */
-  pins: number;
-  /** Назначение выводов 1…pins; "nc" — не подключён. */
-  roles: (ChipPinRole | "nc")[];
-  /** Имена для подписей: A, B, Y… (пусто — по назначению). */
-  names: string[];
-}
-
 /** Микросхема, собранная из своей схемы. Что внутри — ChipDef по def. */
 export interface Chip extends Base {
   type: "chip";
@@ -336,7 +320,7 @@ export interface ChipDef {
   /** Имена выводов 1…pins ("" — без имени, "NC" — не подключён). */
   pinNames: string[];
   /** Назначение выводов 1…pins; "nc" — вывод не подключён. */
-  pinRoles: (ChipPinRole | "nc")[];
+  pinRoles: ChipPinRole[];
   /** Сколько места занимает начинка, клеток (вместимость DIP — 2 клетки на вывод). */
   space?: number;
   /** Детали внутри (все — «на столе»: соединения задаёт nets). */
@@ -369,7 +353,7 @@ export interface Oscilloscope extends Base {
   hold?: boolean;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay | ChipCase | Chip;
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay | Chip;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */

@@ -11,9 +11,11 @@ import {
   holeAt,
   holeLabel,
   holesOnNode,
+  newChipBoard,
   nextBoardId,
   padsAlong,
   type BoardSpec,
+  type ChipPinRole,
   type Hole,
 } from "./model/breadboard";
 import {
@@ -36,7 +38,7 @@ import { PARTS, part, pinLabelOf, pinsOf } from "./parts";
 import type { World } from "./view/world";
 import { ProjectsPanel } from "./ui/projects";
 import { loadLibrary, saveLibrary } from "./chips/library";
-import { caseOf, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
+import { caseOf, chipInner, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
 import { chipsUsed, libraryChips, resolveChip, setLibrary } from "./chips/registry";
 import { countParts } from "./chips/count";
 import { TOOL_KEYS, placeTools, renderToolButtons, type PlaceTool, type Tool } from "./ui/tools";
@@ -697,7 +699,7 @@ export class App {
       problems: packageProblems(this.scene),
       size: dipSize(this.scene),
       space: spaceUsed(this.scene),
-      count: countParts(this.scene.components, this.scene),
+      count: countParts(chipInner(this.scene), this.scene),
       editing: this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined,
       library: libraryChips(),
     };
@@ -715,12 +717,23 @@ export class App {
       this.toast("Не обновить", `У «${old.name}» DIP-${old.pins}, а сейчас выводов на DIP-${dipSize(this.scene)}. Уже стоящие микросхемы не встанут в свои отверстия — упакуйте как новую.`);
       return false;
     }
-    const def = packageChip(this.scene, name || old?.name || "", old?.id);
+    const box = caseOf(this.scene)!;
+    if (name && name !== box.label) {
+      // Название видно на корпусе
+      box.label = name;
+      applyBoards(this.scene.boards ?? []);
+      this.world.rebuildBoards();
+    }
+    const def = packageChip(this.scene, name || box.label || old?.name || "", old?.id);
     const lib = loadLibrary().filter((d) => d.id !== def.id);
     lib.push(def);
     if (!saveLibrary(lib)) this.toast("Библиотека не сохранилась", "Хранилище браузера недоступно: микросхема будет только в этом проекте.");
     setLibrary(lib);
+    // Новая микросхема в пути получает своё обозначение
+    const top = this.chipStack.at(-1);
+    if (top && top.id === this.scene.editingChip) top.id = def.id;
     this.scene.editingChip = def.id;
+    this.saveChipStack();
     renderToolButtons(this.ui.tools);
     this.save();
     this.record();
@@ -750,6 +763,62 @@ export class App {
     this.chipStack.at(-1)!.opened = JSON.stringify(this.scene);
     this.saveChipStack();
     this.renderChipBar();
+  }
+
+  /** Новая микросхема: пустой стол с корпусом DIP-pins; вверху — путь и «Вернуться». */
+  newChip(pins: number): void {
+    const here = this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip)?.name : undefined;
+    const id = `new:${Date.now().toString(36)}`;
+    this.chipStack.push({ id, scene: JSON.stringify(this.scene), projectName: this.projects.name, title: here ?? (this.projects.name || "Стол"), opened: "" });
+    this.replaceScene({ components: [], wires: [], boards: [newChipBoard(pins)], editingChip: id });
+    this.chipStack.at(-1)!.opened = JSON.stringify(this.scene);
+    this.saveChipStack();
+    this.renderChipBar();
+    this.setProjectsOpen(false);
+    this.selectedBoard = "K1";
+    this.inspectorHtml = "";
+    this.renderInspector();
+  }
+
+  /** Сменить корпус: выводы сохраняют номера (и провода на них), поле растёт вправо. */
+  resizeChip(id: string, pins: number): boolean {
+    const b = boardById(id);
+    if (!b || b.kind !== "chip" || b.pins === pins) return false;
+    const r = boardRect(b);
+    const grown: BoardSpec = {
+      ...b,
+      pins,
+      roles: Array.from({ length: pins }, (_, i) => b.roles?.[i] ?? "nc"),
+      names: Array.from({ length: pins }, (_, i) => b.names?.[i] ?? ""),
+    };
+    const size = boardSize(grown);
+    const next: BoardSpec = { ...grown, x: r.x0 + size.width / 2, z: r.z0 + size.depth / 2 };
+    const boards = (this.scene.boards ?? []).map((x) => (x.id === id ? next : x));
+    const conflicts = boardConflicts(this.scene, boards);
+    if (conflicts.length) {
+      this.refuse("Не помещается", conflicts, "Они стоят на выводах или площадках, которых в меньшем корпусе нет. Уберите их — потом меняйте корпус.");
+      return false;
+    }
+    const problem = this.boardProblem(next);
+    if (problem) {
+      this.toast("Не помещается", `${problem} Сдвиньте корпус или то, что рядом.`);
+      return false;
+    }
+    this.scene.boards = boards;
+    this.boardsChanged();
+    return true;
+  }
+
+  /** Назначение, имя вывода или название на корпусе. */
+  private editChip(id: string, field: string, value: string): void {
+    const b = (this.scene.boards ?? []).find((x) => x.id === id);
+    if (!b || b.kind !== "chip") return;
+    const [what, n] = field.split(":");
+    const i = Number(n);
+    if (what === "chipRole") (b.roles ??= [])[i] = value as ChipPinRole;
+    if (what === "chipName") (b.names ??= [])[i] = value.trim().slice(0, 8);
+    if (what === "chipLabel") b.label = value.trim().slice(0, 24);
+    this.boardsChanged();
   }
 
   /** Вернуться туда, откуда открыли микросхему; update — сначала обновить её по правкам. */
@@ -819,10 +888,11 @@ export class App {
       return;
     }
     const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-    const here = resolveChip(this.scene, top.id)?.name ?? "микросхема";
+    const fresh = top.id.startsWith("new:");
+    const here = resolveChip(this.scene, top.id)?.name ?? (caseOf(this.scene)?.label || "Новая микросхема");
     const path = [...this.chipStack.map((x) => x.title), here].map(esc).join(" › ");
     this.chipBar.innerHTML = `<span class="path"><small>внутри микросхемы</small> ${path}</span>
-      <button class="btn inline" data-chip-bar="update">Обновить и вернуться</button>
+      <button class="btn inline" data-chip-bar="update">${fresh ? "Упаковать и вернуться" : "Обновить и вернуться"}</button>
       <button class="btn inline${this.confirmLeave ? " danger" : ""}" data-chip-bar="leave">${this.confirmLeave ? "Точно? Правки пропадут" : "Вернуться"}</button>`;
   }
 
@@ -1553,8 +1623,6 @@ export class App {
     const h = this.hover;
     const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
     const boardOk = part(sample).onBoard(sample);
-    const refused = placeTools().get(tool)!.def.refuse?.(this.scene);
-    if (refused) return this.setHint(refused);
     if (!boardOk && (h.hole || h.overBoard)) return this.setHint(placeTools().get(tool)!.def.boardRefusal ?? "");
 
     // Одновыводная деталь — в одно отверстие; DIP — поперёк канавки
@@ -1931,6 +1999,14 @@ export class App {
       this.updateGhost();
       return;
     }
+    if (field === "chipPins" || field.startsWith("chipRole:") || field.startsWith("chipName:") || field === "chipLabel") {
+      const id = this.selectedHole?.boardId ?? this.selectedBoard;
+      if (id && field === "chipPins") this.resizeChip(id, Number(value));
+      else if (id) this.editChip(id, field, value);
+      this.inspectorHtml = "";
+      this.renderInspector();
+      return;
+    }
     if (field === "boardSize") {
       const id = this.selectedHole?.boardId ?? this.selectedBoard;
       const [cols, rows] = value.split("x").map(Number);
@@ -1948,16 +2024,7 @@ export class App {
       this.updateGhost();
       return;
     }
-    const before = JSON.stringify(c);
     part(c).edit?.(c, field, value);
-    // Выводов стало меньше, а к пропавшим подведены провода — не меняем
-    const lost = [...new Set(this.scene.wires.flatMap((w) => [w.a, w.b]).filter((e) => "comp" in e && e.comp === c.id && e.pin >= pinsOf(c)).map((e) => ("comp" in e ? e.pin + 1 : 0)))].sort((a, b) => a - b);
-    if (lost.length) {
-      Object.assign(c, JSON.parse(before));
-      this.inspectorHtml = "";
-      this.refreshInspector();
-      return this.toast("Не уменьшить", `К ${lost.length > 1 ? "выводам" : "выводу"} ${lost.join(", ")} подведены провода. Сначала уберите их.`);
-    }
     // Поменяли номинал — значит, поставили новую деталь
     this.sim.repair(c.id);
     this.burnedAt.delete(c.id);

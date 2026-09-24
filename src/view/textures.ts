@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { BOARD, COLUMNS, ROWS, boardHoles, boardSize, padX, padZ, type BoardSpec } from "../model/breadboard";
+import { BOARD, COLUMNS, ROWS, boardHoles, boardSize, chipField, chipPinName, padX, padZ, type BoardSpec } from "../model/breadboard";
+import { PIN_ROLES } from "../chips/roles";
 
 /** Пикселей на единицу длины (шаг 2,54 мм) в текстуре платы. */
 const PX = 48;
@@ -183,6 +184,82 @@ export function pcbTexture(cols: number, rows: number): THREE.CanvasTexture {
     g.arc(cx, cz, PX * 0.16, 0, Math.PI * 2);
     g.fill();
   }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+/**
+ * Корпус своей микросхемы: чёрный пластик, посередине — поле площадок (как кристалл),
+ * по краям — площадки выводов с номерами и назначением, ключ у вывода 1, название.
+ */
+export function chipTexture(b: BoardSpec): THREE.CanvasTexture {
+  const spec: BoardSpec = { ...b, x: 0, z: 0 };
+  const size = boardSize(spec);
+  const f = chipField(spec.pins ?? 8);
+  const w = size.width * PX;
+  const h = size.depth * PX;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext("2d")!;
+  const X = (x: number) => (x + size.width / 2) * PX;
+  const Z = (z: number) => (z + size.depth / 2) * PX;
+  g.fillStyle = "#1c1e21";
+  g.fillRect(0, 0, w, h);
+  // Поле начинки — светлее, как кристалл
+  const fx0 = X(padX(spec, 1)) - PX * 0.7, fx1 = X(padX(spec, f.cols)) + PX * 0.7;
+  const fz0 = Z(padZ(spec, 0)) - PX * 0.7, fz1 = Z(padZ(spec, f.rows - 1)) + PX * 0.7;
+  g.fillStyle = "#34383d";
+  g.fillRect(fx0, fz0, fx1 - fx0, fz1 - fz0);
+  g.strokeStyle = "#5b6168";
+  g.lineWidth = 2;
+  g.strokeRect(fx0, fz0, fx1 - fx0, fz1 - fz0);
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  const n = spec.pins ?? 8;
+  for (const hole of boardHoles(spec)) {
+    const cx = X(hole.x);
+    const cz = Z(hole.z);
+    if (hole.pin) {
+      const i = hole.pin - 1;
+      const role = spec.roles?.[i] ?? "nc";
+      const near = i < n / 2;
+      // Площадка вывода — золочёная, с полоской цвета назначения к краю корпуса
+      g.fillStyle = PIN_ROLES[role].color === "#1b1d20" ? "#e8e9eb" : PIN_ROLES[role].color;
+      g.fillRect(cx - PX * 0.42, near ? cz + PX * 0.45 : cz - PX * 0.75, PX * 0.84, PX * 0.3);
+      g.fillStyle = "#d4a24a";
+      g.fillRect(cx - PX * 0.42, cz - PX * 0.42, PX * 0.84, PX * 0.84);
+      g.fillStyle = "#15191a";
+      g.beginPath();
+      g.arc(cx, cz, PX * 0.16, 0, Math.PI * 2);
+      g.fill();
+      // Номер и имя — между площадкой и полем
+      g.fillStyle = role === "nc" ? "#8a8f96" : "#e8e9eb";
+      g.font = `700 ${PX * 0.42}px "IBM Plex Mono", ui-monospace, monospace`;
+      const label = `${hole.pin} ${chipPinName(spec, i)}`;
+      g.fillText(label, cx, cz + (near ? -1 : 1) * PX * 0.95);
+      continue;
+    }
+    g.fillStyle = "#b9bcb4";
+    g.beginPath();
+    g.arc(cx, cz, PX * 0.34, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#15191a";
+    g.beginPath();
+    g.arc(cx, cz, PX * 0.15, 0, Math.PI * 2);
+    g.fill();
+  }
+  // Ключ — точка у вывода 1 (левый ближний угол)
+  g.fillStyle = "#5b6168";
+  g.beginPath();
+  g.arc(PX * 0.75, h - PX * 0.75, PX * 0.3, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = "#c9ccd1";
+  g.font = `600 ${PX * 0.42}px "IBM Plex Mono", ui-monospace, monospace`;
+  g.textAlign = "left";
+  g.fillText(`${spec.label || "СВОЯ МИКРОСХЕМА"} · DIP-${n}`, PX * 0.6, PX * 0.55);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
