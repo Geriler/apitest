@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import {
-  BOARDS,
   HOLE_BY_ID,
   TABLE_LIMIT,
   applyBoards,
@@ -316,18 +315,11 @@ export class App {
     if (!on) this.world.setDots([]);
   }
 
-  /** Надпись в шапке панели инструментов: сколько точек на всех макетках. */
-  private updateBrand(): void {
-    const el = this.ui.tools.querySelector(".brand-points");
-    if (el) el.textContent = `${BOARDS.filter((b) => b.kind === "breadboard").length * 400} точек`;
-  }
-
   /** Платы сцены (старая раскладка превращается в платы) → отверстия. */
   private adoptBoards(): void {
     this.scene.boards = sceneBoards(this.scene);
     delete this.scene.layout;
     applyBoards(this.scene.boards);
-    this.updateBrand();
   }
 
   /**
@@ -357,7 +349,6 @@ export class App {
   private boardsChanged(): void {
     applyBoards(this.scene.boards ?? []);
     this.world.rebuildBoards();
-    this.updateBrand();
     if (this.selectedHole) this.selectedHole = HOLE_BY_ID.get(this.selectedHole.id);
     if (this.selectedBoard && !boardById(this.selectedBoard)) this.selectedBoard = undefined;
     this.changed();
