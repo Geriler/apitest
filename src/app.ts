@@ -32,6 +32,7 @@ import {
   type Pin,
   type Scene,
   type Wire,
+  type WireBend,
   type WireShape,
 } from "./model/types";
 import { formatSI } from "./sim/resistorCodes";
@@ -539,7 +540,7 @@ export class App {
     }
     const lifts = this.wireLifts(this.scene.wires);
     for (const w of this.scene.wires) {
-      const wv = buildWireView(w.id, this.endpointPos(w.a), this.endpointPos(w.b), w.color, isFlatWire(w), lifts.get(w.id) ?? 0);
+      const wv = buildWireView(w.id, this.endpointPos(w.a), this.endpointPos(w.b), w.color, isFlatWire(w), lifts.get(w.id) ?? 0, w.bend);
       this.wireViews.set(w.id, wv);
       this.world.wireLayer.add(wv.mesh);
     }
@@ -1464,7 +1465,27 @@ export class App {
     });
   }
 
+  /** Форма новой перемычки, если концы не на одной линии: буквой Г (сначала вдоль ряда или столбца) или прямо. */
+  private wireBend: WireBend = "x";
+
   private rotate(): void {
+    if (this.tool === "wire") {
+      this.wireBend = NEXT_BEND[this.wireBend];
+      this.updateGhost();
+      return this.setHint(`Перемычка: ${BEND_NAMES[this.wireBend]}. R — другая форма.`);
+    }
+    const wire = this.scene.wires.find((w) => w.id === (this.selected ?? this.picked));
+    if (wire) {
+      if (!isFlatWire(wire)) return;
+      const was = wire.bend;
+      wire.bend = NEXT_BEND[wire.bend ?? "none"];
+      if (this.wireLifts(this.scene.wires).get(wire.id) === null) {
+        wire.bend = was;
+        return this.setHint(`Так не ляжет: там уже ${MAX_WIRE_LAYERS} перемычки друг над другом.`);
+      }
+      this.changed();
+      return this.setHint(`Перемычка: ${BEND_NAMES[wire.bend]}. R — другая форма.`);
+    }
     if (this.isPlaceTool(this.tool)) {
       this.ghostRot = (this.ghostRot + Math.PI / 2) % (Math.PI * 2);
       this.updateGhost();
@@ -1791,8 +1812,9 @@ export class App {
     }
     if (sameEndpoint(this.pendingEnd, end)) return this.cancelPending();
     const wire: Wire = { id: this.nextWireId(), a: this.pendingEnd, b: end, color: this.pickWireColor(this.pendingEnd, end), shape: this.defaults.wireShape };
+    if (isFlatWire(wire)) wire.bend = this.wireBend;
     if (this.wireLifts([...this.scene.wires, wire]).get(wire.id) === null) {
-      return this.setHint(`Здесь уже ${MAX_WIRE_LAYERS} провода друг над другом — ещё один не ляжет. Проведите в обход.`);
+      return this.setHint(`Здесь уже ${MAX_WIRE_LAYERS} перемычки друг над другом — ещё одна не ляжет. Проведите в обход, другой формой (R) или гибким проводом.`);
     }
     this.scene.wires.push(wire);
     this.pendingEnd = undefined;
@@ -2040,6 +2062,7 @@ export class App {
         a: this.endpointPos(w.a),
         b: last && i === wires.length - 1 ? last : this.endpointPos(w.b),
         flat: isFlatWire(w),
+        bend: w.bend,
       })),
     );
   }
@@ -2053,10 +2076,10 @@ export class App {
       const b: Endpoint = h.pin ? { comp: h.pin.comp, pin: h.pin.pin } : h.hole ? { hole: h.hole.id } : { hole: "" };
       const flat = !!h.hole && !h.pin && isFlatWire({ a: this.pendingEnd, b, shape: this.defaults.wireShape });
       // Призрак — на той высоте, где ляжет провод (над теми, что на пути)
-      const ghost: Wire = { id: "ghost", a: this.pendingEnd, b, color: "", shape: this.defaults.wireShape };
+      const ghost: Wire = { id: "ghost", a: this.pendingEnd, b, color: "", shape: this.defaults.wireShape, bend: this.wireBend };
       const lift = h.hole || h.pin ? this.wireLifts([...this.scene.wires, ghost], target).get("ghost") : 0;
       if (lift === null) return this.clearGhost();
-      return this.showGhost(buildWireView("ghost", a, target, "#ffffff", flat, lift ?? 0).mesh);
+      return this.showGhost(buildWireView("ghost", a, target, "#ffffff", flat, lift ?? 0, this.wireBend).mesh);
     }
     if (this.tool === "trace" && this.pendingPad && h.hole?.boardId === this.pendingPad.boardId && h.hole.id !== this.pendingPad.id) {
       return this.showGhost(buildTraceView("ghost", this.pendingPad, h.hole).mesh);
@@ -2120,7 +2143,7 @@ export class App {
     clearTimeout(this.hintTimer);
     const t = this.tool;
     let s = "";
-    if (t === "wire") s = this.pendingEnd ? "Второй конец: <b>отверстие</b> или <b>вывод</b> детали. Esc — отмена." : "Первый конец провода: <b>отверстие</b> или <b>вывод</b> детали на столе.";
+    if (t === "wire") s = this.pendingEnd ? `Второй конец: <b>отверстие</b> или <b>вывод</b> детали. Перемычка не по прямой — ${BEND_NAMES[this.wireBend]}, R — другая форма. Esc — отмена.` : "Первый конец провода: <b>отверстие</b> или <b>вывод</b> детали на столе.";
     else if (t === "bb") s = "Нажмите на свободное место на столе — туда ляжет макетка на 400 точек.";
     else if (t === "pcb") s = "Нажмите на свободное место на столе — туда ляжет печатная плата. Размер — в панели справа.";
     else if (t === "trace") s = this.pendingPad
@@ -2372,3 +2395,7 @@ function turn(dx: number, dz: number, turns: number): [number, number] {
   for (let i = 0; i < ((turns % 4) + 4) % 4; i++) [dx, dz] = [dz, -dx];
   return [dx, dz];
 }
+
+/** Формы перемычки по кругу (R) и их названия для подсказки. */
+const NEXT_BEND: Record<WireBend, WireBend> = { x: "z", z: "none", none: "x" };
+const BEND_NAMES: Record<WireBend, string> = { x: "буквой Г, сначала вдоль ряда", z: "буквой Г, сначала вдоль столбца", none: "прямо наискосок" };

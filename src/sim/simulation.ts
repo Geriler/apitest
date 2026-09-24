@@ -4,7 +4,7 @@
  */
 
 import { HOLE_BY_ID } from "../model/breadboard";
-import { FLAT_WIRE_EXTRA, TRACE_OHM_PER_MM, WIRE_OHM_PER_MM, isFlatWire, type Component, type ComponentState, type Endpoint, type Mosfet, type Scene, type Transistor, type WireShape } from "../model/types";
+import { FLAT_WIRE_EXTRA, TRACE_OHM_PER_MM, WIRE_OHM_PER_MM, isFlatWire, jumperPoints, type Component, type ComponentState, type Endpoint, type Mosfet, type Scene, type Transistor, type WireBend, type WireShape } from "../model/types";
 import { resolveChip } from "../chips/registry";
 import { PARTS, part } from "../parts";
 import { mosfetState, type MosfetState } from "../parts/mosfet";
@@ -38,11 +38,16 @@ function endpointXZ(scene: Scene, e: Endpoint): [number, number] {
  * Дуга: концы поднимаются над платой на 1–7 шагов. Прямая перемычка: расстояние плюс два
  * загнутых конца.
  */
-export function wireResistance(scene: Scene, w: { a: Endpoint; b: Endpoint; shape?: WireShape }): number {
+export function wireResistance(scene: Scene, w: { a: Endpoint; b: Endpoint; shape?: WireShape; bend?: WireBend }): number {
   const [ax, az] = endpointXZ(scene, w.a);
   const [bx, bz] = endpointXZ(scene, w.b);
   const d = Math.hypot(ax - bx, az - bz);
-  if (isFlatWire(w)) return (d + FLAT_WIRE_EXTRA) * 2.54 * WIRE_OHM_PER_MM;
+  if (isFlatWire(w)) {
+    // Г-образная — по двум сторонам угла
+    const pts = jumperPoints([ax, az], [bx, bz], w.bend);
+    const len = pts.slice(1).reduce((sum, p, i) => sum + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0);
+    return (len + FLAT_WIRE_EXTRA) * 2.54 * WIRE_OHM_PER_MM;
+  }
   const rise = Math.min(7, Math.max(1, 0.8 + d * 0.22));
   return (d + 2 * rise) * 2.54 * WIRE_OHM_PER_MM;
 }

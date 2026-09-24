@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { HOLE_BY_ID, type Hole } from "../model/breadboard";
-import { TRACE_WIDTH_MM, type Component } from "../model/types";
+import { TRACE_WIDTH_MM, jumperPoints, type Component, type WireBend } from "../model/types";
 import { part } from "../parts";
 import { Y, leadMaterial, mm, type ComponentView } from "./kit";
 
@@ -50,14 +50,22 @@ function arcTop(a: THREE.Vector3, b: THREE.Vector3): number {
 /** Радиус провода в изоляции, в шагах. */
 const WIRE_R = mm(0.75);
 
-/** Больше стольких проводов друг над другом в одном месте не кладём. */
-export const MAX_WIRE_LAYERS = 4;
+/** Больше стольких перемычек друг над другом в одном месте не кладём (гибкие провода — без предела). */
+export const MAX_WIRE_LAYERS = 3;
 
 export interface WireLayout {
   id: string;
   a: THREE.Vector3;
   b: THREE.Vector3;
   flat: boolean;
+  /** Загиб перемычки (Г-образная — два отрезка). */
+  bend?: WireBend;
+}
+
+/** Отрезки провода на плоскости стола: у Г-образной перемычки — два. */
+function segments(w: WireLayout): [THREE.Vector3, THREE.Vector3][] {
+  const c = w.flat ? jumperCorner(w.a, w.b, w.bend) : undefined;
+  return c ? [[w.a, c], [c, w.b]] : [[w.a, w.b]];
 }
 
 /** Где отрезки ab и cd (на плоскости стола) пересекаются: параметры на каждом, или нет. */
@@ -86,7 +94,7 @@ function segDist(a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.
 /**
  * Высота проводов, чтобы они не проходили друг сквозь друга: каждый следующий (по порядку в схеме)
  * ложится поверх тех, что уже лежат на его пути. Перемычка — на этаж выше (этаж — толщина провода),
- * дуга — выгибается выше в точке пересечения. null — выше четвёртого этажа уже не положить.
+ * дуга — выгибается выше в точке пересечения. null — перемычку выше третьего этажа уже не положить.
  */
 export function wireLifts(wires: WireLayout[]): Map<string, number | null> {
   const out = new Map<string, number | null>();
@@ -101,7 +109,8 @@ export function wireLifts(wires: WireLayout[]): Map<string, number | null> {
       if (o.flat !== w.flat || out.get(o.id) == null) continue;
       if (w.flat) {
         // Перемычки лежат на плате: мешает и та, что проходит рядом, и её ножка в отверстии
-        if (segDist(w.a, w.b, o.a, o.b) < 2 * WIRE_R) lvl = Math.max(lvl, level.get(o.id)! + 1);
+        const near = segments(w).some(([p, q]) => segments(o).some(([r, t]) => segDist(p, q, r, t) < 2 * WIRE_R));
+        if (near) lvl = Math.max(lvl, level.get(o.id)! + 1);
         continue;
       }
       const x = crossing(w.a, w.b, o.a, o.b);
@@ -115,33 +124,50 @@ export function wireLifts(wires: WireLayout[]): Map<string, number | null> {
     }
     level.set(w.id, lvl);
     // Пересечение у самого края требовало бы огромной дуги — выше 6 шагов не поднимаем
-    out.set(w.id, lvl >= MAX_WIRE_LAYERS ? null : w.flat ? lvl * 2 * WIRE_R : THREE.MathUtils.clamp(lift, 0, 6));
+    out.set(w.id, w.flat ? (lvl >= MAX_WIRE_LAYERS ? null : lvl * 2 * WIRE_R) : THREE.MathUtils.clamp(lift, 0, 6));
   }
   return out;
 }
 
 /**
- * Прямая перемычка: ножки из отверстий вверх до изоляции, загиб, прямой участок, лежащий
- * на плате, загиб, ножка вниз. a и b — отверстия на поверхности одной платы.
+ * Перемычка: ножки из отверстий вверх до изоляции, загиб, участок, лежащий на плате (прямой или
+ * буквой Г через corner), загиб, ножка вниз. a и b — отверстия на поверхности одной платы.
  */
-export function flatWireCurve(a: THREE.Vector3, b: THREE.Vector3, lift = 0): THREE.CurvePath<THREE.Vector3> {
+export function flatWireCurve(a: THREE.Vector3, b: THREE.Vector3, lift = 0, corner?: THREE.Vector3): THREE.CurvePath<THREE.Vector3> {
   const y = a.y + WIRE_R + lift;
   const bottom = a.y - 0.2;
-  const dir = b.clone().sub(a).setY(0).normalize();
+  const pts = [a, ...(corner ? [corner] : []), b].map((p) => p.clone().setY(y));
+  const first = pts[1].clone().sub(pts[0]).setY(0).normalize();
+  const last = pts.at(-1)!.clone().sub(pts.at(-2)!).setY(0).normalize();
   const bend = Math.min(0.2, a.distanceTo(b) / 4);
-  const corner = (p: THREE.Vector3, sign: number) => [p.clone().setY(y - bend), p.clone().setY(y), p.clone().setY(y).addScaledVector(dir, sign * bend)] as const;
-  const [a0, a1, a2] = corner(a, 1);
-  const [b0, b1, b2] = corner(b, -1);
   const path = new THREE.CurvePath<THREE.Vector3>();
+  // Ножка a вверх и загиб на плату
+  const a0 = a.clone().setY(y - bend), a2 = pts[0].clone().addScaledVector(first, bend);
   path.add(new THREE.LineCurve3(a.clone().setY(bottom), a0));
-  path.add(new THREE.QuadraticBezierCurve3(a0, a1, a2));
-  path.add(new THREE.LineCurve3(a2, b2));
-  path.add(new THREE.QuadraticBezierCurve3(b2, b1, b0));
+  path.add(new THREE.QuadraticBezierCurve3(a0, pts[0], a2));
+  let from = a2;
+  if (corner) {
+    // Скруглённый угол Г
+    const r = Math.min(0.35, pts[0].distanceTo(pts[1]) / 3, pts[1].distanceTo(pts[2]) / 3);
+    const c0 = pts[1].clone().addScaledVector(first, -r), c1 = pts[1].clone().addScaledVector(last, r);
+    path.add(new THREE.LineCurve3(from, c0));
+    path.add(new THREE.QuadraticBezierCurve3(c0, pts[1], c1));
+    from = c1;
+  }
+  const b2 = pts.at(-1)!.clone().addScaledVector(last, -bend), b0 = b.clone().setY(y - bend);
+  path.add(new THREE.LineCurve3(from, b2));
+  path.add(new THREE.QuadraticBezierCurve3(b2, pts.at(-1)!, b0));
   path.add(new THREE.LineCurve3(b0, b.clone().setY(bottom)));
   return path;
 }
 
-export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, color: string, flat = false, lift = 0): WireView {
+/** Угол Г-образной перемычки (или нет) по её концам и загибу. */
+export function jumperCorner(a: THREE.Vector3, b: THREE.Vector3, bend: WireBend | undefined): THREE.Vector3 | undefined {
+  const pts = jumperPoints([a.x, a.z], [b.x, b.z], bend);
+  return pts.length === 3 ? new THREE.Vector3(pts[1][0], a.y, pts[1][1]) : undefined;
+}
+
+export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, color: string, flat = false, lift = 0, bend?: WireBend): WireView {
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.45 });
   if (!flat) {
     const curve = wireCurve(a, b, lift);
@@ -158,21 +184,35 @@ export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, co
       },
     };
   }
-  // Голая медь по всей длине (видна на ножках) и изоляция на прямом участке
-  const curve = flatWireCurve(a, b, lift);
+  // Голая медь по всей длине (видна на ножках) и изоляция на участках, лежащих на плате
+  const corner = jumperCorner(a, b, bend);
+  const curve = flatWireCurve(a, b, lift, corner);
   const group = new THREE.Group();
-  const copper = new THREE.Mesh(new THREE.TubeGeometry(curve, 64, mm(0.32), 8, false), leadMaterial);
+  const copper = new THREE.Mesh(new THREE.TubeGeometry(curve, corner ? 96 : 64, mm(0.32), 8, false), leadMaterial);
   group.add(copper);
-  const dir = b.clone().sub(a).setY(0).normalize();
-  const d = a.distanceTo(b);
-  const bare = Math.min(0.35, d * 0.2); // у отверстий изоляция срезана
   const y = a.y + WIRE_R + lift;
-  const p0 = a.clone().setY(y).addScaledVector(dir, bare);
-  const p1 = b.clone().setY(y).addScaledVector(dir, -bare);
-  const insulation = new THREE.Mesh(new THREE.CylinderGeometry(WIRE_R, WIRE_R, p0.distanceTo(p1), 14, 1), mat);
-  insulation.position.copy(p0).add(p1).multiplyScalar(0.5);
-  insulation.quaternion.setFromUnitVectors(Y, dir);
-  group.add(insulation);
+  const pts = [a, ...(corner ? [corner] : []), b].map((p) => p.clone().setY(y));
+  const bare = Math.min(0.35, a.distanceTo(b) * 0.2); // у отверстий изоляция срезана
+  const geoms: THREE.BufferGeometry[] = [];
+  for (let k = 0; k < pts.length - 1; k++) {
+    const dir = pts[k + 1].clone().sub(pts[k]).normalize();
+    const p0 = pts[k].clone().addScaledVector(dir, k === 0 ? bare : 0);
+    const p1 = pts[k + 1].clone().addScaledVector(dir, k === pts.length - 2 ? -bare : 0);
+    const geo = new THREE.CylinderGeometry(WIRE_R, WIRE_R, p0.distanceTo(p1), 14, 1);
+    const seg = new THREE.Mesh(geo, mat);
+    seg.position.copy(p0).add(p1).multiplyScalar(0.5);
+    seg.quaternion.setFromUnitVectors(Y, dir);
+    group.add(seg);
+    geoms.push(geo);
+  }
+  if (corner) {
+    // Изоляция на изгибе
+    const geo = new THREE.SphereGeometry(WIRE_R, 14, 10);
+    const knee = new THREE.Mesh(geo, mat);
+    knee.position.copy(pts[1]);
+    group.add(knee);
+    geoms.push(geo);
+  }
   group.traverse((o) => {
     o.userData.wireId = id;
     o.castShadow = true;
@@ -183,7 +223,7 @@ export function buildWireView(id: string, a: THREE.Vector3, b: THREE.Vector3, co
     length: curve.getLength(),
     dispose() {
       copper.geometry.dispose();
-      insulation.geometry.dispose();
+      for (const g of geoms) g.dispose();
       mat.dispose();
     },
   };

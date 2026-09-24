@@ -372,9 +372,25 @@ export interface Wire {
    * в отверстиях одной платы, иначе провод идёт дугой. «arc» или нет (старые схемы) — гибкий провод дугой.
    */
   shape?: WireShape;
+  /**
+   * Только у перемычки, если концы не на одной линии: «x» — сначала вдоль ряда, потом вдоль
+   * столбца (буквой Г), «z» — наоборот, «none» — прямо наискосок. Нет (старые схемы) — прямо.
+   */
+  bend?: WireBend;
 }
 
 export type WireShape = "flat" | "arc";
+export type WireBend = "x" | "z" | "none";
+
+/**
+ * Точки перемычки на плоскости стола: концы и, у Г-образной, угол между ними.
+ * Если концы на одной линии — угла нет.
+ */
+export function jumperPoints(a: [number, number], b: [number, number], bend: WireBend | undefined): [number, number][] {
+  const aligned = Math.abs(a[0] - b[0]) < 1e-6 || Math.abs(a[1] - b[1]) < 1e-6;
+  if (aligned || !bend || bend === "none") return [a, b];
+  return [a, bend === "z" ? [a[0], b[1]] : [b[0], a[1]], b];
+}
 
 /** Насколько прямая перемычка длиннее расстояния между отверстиями: два загнутых конца, в шагах. */
 export const FLAT_WIRE_EXTRA = 1;

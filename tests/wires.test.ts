@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_BOARDS, applyBoards } from "../src/model/breadboard";
-import { WIRE_OHM_PER_MM, isFlatWire, type Scene, type Wire } from "../src/model/types";
+import { WIRE_OHM_PER_MM, isFlatWire, jumperPoints, type Scene, type Wire } from "../src/model/types";
 import { wireResistance } from "../src/sim/simulation";
 import * as THREE from "three";
 import { MAX_WIRE_LAYERS, wireCurve, wireLifts } from "../src/view/builders";
@@ -35,14 +35,17 @@ const v = (x: number, z: number, y = 0.6) => new THREE.Vector3(x, y, z);
 const R = 0.75 / 2.54;
 
 describe("провода друг над другом", () => {
-  it("перемычки крестом: каждая следующая на этаж выше; пятая в том же месте не ложится", () => {
+  it("перемычки крестом: каждая следующая на этаж выше; четвёртая в том же месте не ложится", () => {
     // Четыре перемычки через одну точку (0, 0) под разными углами и пятая
     const dirs = [[1, 0], [0, 1], [1, 1], [1, -1], [2, 1]];
     const wires = dirs.map(([dx, dz], i) => ({ id: `W${i}`, a: v(-3 * dx, -3 * dz), b: v(3 * dx, 3 * dz), flat: true }));
     const lifts = wireLifts(wires);
-    expect([0, 1, 2, 3].map((i) => lifts.get(`W${i}`))).toEqual([0, 1, 2, 3].map((k) => k * 2 * R));
-    expect(MAX_WIRE_LAYERS).toBe(4);
-    expect(lifts.get("W4")).toBeNull();
+    expect([0, 1, 2].map((i) => lifts.get(`W${i}`))).toEqual([0, 1, 2].map((k) => k * 2 * R));
+    expect(MAX_WIRE_LAYERS).toBe(3);
+    expect(lifts.get("W3")).toBeNull();
+    // Гибкие провода — без предела: пятая дуга крест-накрест всё равно ложится выше
+    const arcs = wireLifts(dirs.map(([dx, dz], i) => ({ id: `A${i}`, a: v(-3 * dx, -3 * dz), b: v(3 * dx, 3 * dz), flat: false })));
+    expect(arcs.get("A4")).not.toBeNull();
   });
 
   it("соседние параллельные перемычки не мешают; через ножку другой — поднимается", () => {
@@ -67,5 +70,30 @@ describe("провода друг над другом", () => {
     expect(yb - ya).toBeGreaterThanOrEqual(2 * R);
     // Не пересекаются — не поднимается
     expect(wireLifts([a, { id: "C", a: v(-4, 5), b: v(4, 5), flat: false }]).get("C")).toBe(0);
+  });
+});
+
+describe("Г-образная перемычка", () => {
+  it("угол: сначала вдоль ряда или столбца; на одной линии и в старых схемах — прямо", () => {
+    expect(jumperPoints([0, 0], [3, 2], "x")).toEqual([[0, 0], [3, 0], [3, 2]]);
+    expect(jumperPoints([0, 0], [3, 2], "z")).toEqual([[0, 0], [0, 2], [3, 2]]);
+    expect(jumperPoints([0, 0], [3, 2], "none")).toEqual([[0, 0], [3, 2]]);
+    expect(jumperPoints([0, 0], [3, 2], undefined)).toEqual([[0, 0], [3, 2]]);
+    expect(jumperPoints([0, 0], [5, 0], "x")).toEqual([[0, 0], [5, 0]]);
+  });
+
+  it("сопротивление — по двум сторонам угла; этажи — по обоим отрезкам", () => {
+    // pA1 → pD5: 4 столбца и 3 ряда — Г длиной 7 шагов против диагонали 5
+    const bent = wireResistance(scene, { a: { hole: "pA1" }, b: { hole: "pD5" }, shape: "flat", bend: "x" });
+    const straight = wireResistance(scene, { a: { hole: "pA1" }, b: { hole: "pD5" }, shape: "flat", bend: "none" });
+    expect(bent / straight).toBeCloseTo((7 + 1) / (5 + 1), 6);
+    // Вторая перемычка пересекает только вертикальную сторону Г
+    const lifts = wireLifts([
+      { id: "L", a: v(0, 0), b: v(4, 3), flat: true, bend: "x" },
+      { id: "S", a: v(3, 1.5), b: v(6, 1.5), flat: true },
+      { id: "F", a: v(-2, 1.5), b: v(1, 1.5), flat: true },
+    ]);
+    expect(lifts.get("S")).toBeGreaterThan(0);
+    expect(lifts.get("F")).toBe(0);
   });
 });
