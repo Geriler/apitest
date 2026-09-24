@@ -46,7 +46,7 @@ export interface ToolDef<C extends Component = Component, S = any> {
   /** Имя инструмента (data-tool): "tht", "cap"… */
   id: string;
   /** Группа кнопок на панели слева; без группы кнопки нет (инструмент скрыт). */
-  group?: "passive" | "semi" | "load" | "power" | "instruments" | "chips";
+  group?: "passive" | "semi" | "load" | "power" | "instruments" | "chips" | "kit";
   /** Значок: содержимое <svg viewBox="0 0 30 18">. */
   icon: string;
   /** Подпись кнопки и всплывающая подсказка. */

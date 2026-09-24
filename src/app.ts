@@ -43,9 +43,13 @@ import type { World } from "./view/world";
 import { ProjectsPanel } from "./ui/projects";
 import { loadLibrary, saveLibrary } from "./chips/library";
 import { caseOf, chipInner, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
-import { chipsUsed, libraryChips, resolveChip, setLibrary } from "./chips/registry";
+import { chipsUsed, libraryChips, resolveChip, setCareerChips, setLibrary, setReference } from "./chips/registry";
+import { checkLevel, levelScene, referenceChips, type CheckResult } from "./career/build";
+import { levelById, type Level } from "./career/levels";
+import { activeLevel, careerDefs, kitTools, missing, toolAllowed, unlock } from "./career/session";
+import { CareerPanel } from "./ui/career";
 import { countParts } from "./chips/count";
-import { TOOL_KEYS, placeTools, renderToolButtons, type PlaceTool, type Tool } from "./ui/tools";
+import { TOOL_KEYS, placeTools, renderToolButtons, setKitTools, setToolFilter, type PlaceTool, type Tool } from "./ui/tools";
 import { SchematicPanel } from "./ui/schematicPanel";
 import { boardPanel, boardToolPanel, componentPanel, holePanel, overviewPanel, traceToolPanel, tracePanel, wirePanel, wireToolPanel } from "./ui/panels";
 
@@ -54,6 +58,8 @@ const WIRE_COLORS = ["#e3b21c", "#2f9e5a", "#2f6fd1", "#e2762a", "#8e4cc9", "#e9
 /** Самые длинные выводы, которые можно согнуть между двумя отверстиями (в шагах). */
 const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
+/** Куда вернуться из уровня карьеры: стол и имя проекта до него. */
+const CAREER_RETURN_KEY = "maketka.career.return.v1";
 const TOLERANCE_KEY = "maketka.tolerance.v1";
 const CURRENT_KEY = "maketka.showCurrent.v1";
 /** Путь внутрь открытых микросхем (чтобы вернуться и после перезагрузки). */
@@ -148,6 +154,11 @@ export class App {
     const gone = dropUnknownParts(initial);
     this.scene = initial;
     setLibrary(loadLibrary());
+    // Заводские компоненты карьеры (для песочницы) и открытые игроком
+    setReference(referenceChips());
+    setCareerChips(careerDefs());
+    setToolFilter((t) => toolAllowed(this.scene, t));
+    setKitTools(kitTools(this.scene));
     this.adoptChips(initial);
     this.loadChipStack();
     renderToolButtons(this.ui.tools);
@@ -175,6 +186,7 @@ export class App {
     this.setTool("select");
     // Открыли страницу внутри микросхемы — вернуть полоску пути (или забыть устаревший путь)
     this.syncChipStack();
+    this.syncCareer();
     this.reportDropped(gone);
     // Если кадры редкие, физика догоняет сама
     setInterval(() => this.tick(), 50);
@@ -227,6 +239,7 @@ export class App {
     this.save();
     this.record();
     this.inspectorHtml = "";
+    if (this.scene.career) this.refreshKit();
   }
 
   // ─── Отмена и возврат ──────────────────────────────────────────────────
@@ -294,6 +307,7 @@ export class App {
     this.renderInspector();
     this.onHistory?.();
     this.syncChipStack();
+    this.syncCareer();
   }
 
   private save(): void {
@@ -372,6 +386,10 @@ export class App {
   removeBoard(id: string): boolean {
     const b = boardById(id);
     if (!b) return false;
+    if (b.fixed) {
+      this.toast("Корпус уровня", "Его не убрать: на нём собирают компонент уровня. Выйти из уровня — «Выйти» вверху.");
+      return false;
+    }
     const rest = (this.scene.boards ?? []).filter((x) => x.id !== id);
     const conflicts = boardConflicts(this.scene, rest);
     if (conflicts.length) {
@@ -473,6 +491,7 @@ export class App {
     this.changed();
     this.confirmLeave = false;
     this.syncChipStack();
+    this.syncCareer();
     this.reportDropped(gone);
   }
 
@@ -693,6 +712,8 @@ export class App {
     const lib = new Map(loadLibrary().map((d) => [d.id, d]));
     let added = false;
     for (const d of Object.values(s.chips ?? {})) {
+      // Заводские и карьерные — не в библиотеку своих микросхем
+      if (/^(ref|career):/.test(d.id)) continue;
       const old = lib.get(d.id);
       if (!old || old.updatedAt < d.updatedAt) {
         lib.set(d.id, d);
@@ -720,12 +741,21 @@ export class App {
 
   /** Упаковать текущую схему. update — обновить ту, чью схему открыли (все её экземпляры станут новыми). */
   packageChip(name: string, update: boolean): boolean {
+    if (this.scene.career) {
+      this.toast("Это уровень карьеры", "Здесь компонент открывается проверкой: «Проверить» вверху.");
+      return false;
+    }
     const problems = packageProblems(this.scene);
     if (problems.length) {
       this.toast("Не упаковать", problems.join(" "));
       return false;
     }
-    const old = update && this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined;
+    let old = update && this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined;
+    // Заводские и открытые в карьере не переписываются — правка становится своей микросхемой
+    if (old && /^(ref|career):/.test(old.id)) {
+      this.toast("Упакована как своя", `«${old.name}» — ${old.id.startsWith("ref:") ? "заводская" : "из карьеры"}, её не изменить; ваша правка — новая микросхема в библиотеке.`);
+      old = undefined;
+    }
     const now = caseOf(this.scene);
     if (old && (old.pins !== dipSize(this.scene) || (old.package ?? "DIP") !== (now?.package ?? "DIP"))) {
       this.toast("Не обновить", `У «${old.name}» корпус ${packageName(old.package, old.pins)}, а сейчас — ${packageName(now?.package, dipSize(this.scene))}. Уже стоящие микросхемы не встанут в свои отверстия — упакуйте как новую.`);
@@ -973,6 +1003,10 @@ export class App {
     if (this.projectsOpen === open) return;
     this.projectsOpen = open;
     this.projects.reset();
+    if (open && this.careerOpen) {
+      this.careerOpen = false;
+      this.onCareer?.();
+    }
     if (open) this.setTool("select");
     this.inspectorHtml = "";
     this.renderInspector();
@@ -981,6 +1015,119 @@ export class App {
 
   /** Панель «Проекты»: имя, сохранение, список, файл. */
   readonly projects = new ProjectsPanel(this);
+
+  // ─── Карьера ───────────────────────────────────────────────────────────
+
+  /** Открыта ли панель «Карьера». */
+  careerOpen = false;
+  onCareer?: () => void;
+  readonly career = new CareerPanel(this);
+  /** Последняя проверка уровня (сбрасывается при смене стола). */
+  lastCheck?: CheckResult;
+  private careerBar?: HTMLElement;
+
+  setCareerOpen(open: boolean): void {
+    if (this.careerOpen === open) return;
+    this.careerOpen = open;
+    if (open) {
+      this.setProjectsOpen(false);
+      this.setTool("select");
+      this.selected = undefined;
+      this.selectedBoard = undefined;
+    }
+    this.refreshInspector();
+    this.onCareer?.();
+  }
+
+  careerLevel(): Level | undefined {
+    return activeLevel(this.scene);
+  }
+
+  /** Взяться за уровень: стол с корпусом уровня; прежний стол вернётся по «Выйти». */
+  startLevel(id: string): void {
+    const level = levelById(id);
+    if (!level) return;
+    const need = missing(level);
+    if (need.length) return this.toast("Пока закрыто", `Сначала откройте: ${need.join(", ")}.`);
+    if (!this.scene.career) {
+      try {
+        localStorage.setItem(CAREER_RETURN_KEY, JSON.stringify({ scene: this.scene, name: this.projects.name }));
+      } catch {
+        /* вернуться будет некуда — останется пустой стол */
+      }
+    }
+    this.replaceScene(levelScene(level));
+    this.setCareerOpen(true);
+  }
+
+  /** Проверить сборку уровня; получилось — компонент открыт. */
+  checkLevel(): void {
+    const level = this.careerLevel();
+    if (!level) return;
+    const chips = Object.fromEntries(careerDefs().map((d) => [d.id, d]));
+    this.lastCheck = checkLevel(level, this.scene, chips);
+    if (this.lastCheck.ok && this.lastCheck.def) {
+      const first = !careerDefs().some((d) => d.id === this.lastCheck!.def!.id);
+      if (!unlock(this.lastCheck.def, level.id)) this.toast("Прогресс не сохранился", "Хранилище браузера недоступно: открытое пропадёт после перезагрузки.");
+      setCareerChips(careerDefs());
+      this.toast(first ? `Открыт ${level.part}!` : `${level.part} обновлён`, "Таблица истинности сошлась. Внутри — ваша сборка; компонент появится в наборах следующих уровней.");
+    }
+    this.careerOpen = true;
+    this.onCareer?.();
+    this.refreshInspector();
+  }
+
+  /** Выйти из уровня на прежний стол. */
+  leaveLevel(): void {
+    let back: { scene: Scene; name: string } | undefined;
+    try {
+      back = JSON.parse(localStorage.getItem(CAREER_RETURN_KEY) ?? "null") ?? undefined;
+      localStorage.removeItem(CAREER_RETURN_KEY);
+    } catch {
+      back = undefined;
+    }
+    this.replaceScene(back?.scene ?? { components: [], wires: [], boards: [{ id: "BB1", kind: "breadboard", x: 0, z: 0 }] });
+    if (back) this.projects.name = back.name;
+    this.setCareerOpen(true);
+  }
+
+  /** Инструменты набора пересчитать (остаток в подписях) и перерисовать. */
+  private refreshKit(): void {
+    setKitTools(kitTools(this.scene));
+    renderToolButtons(this.ui.tools);
+    this.onTool?.(this.tool);
+  }
+
+  /** Стол сменился: инструменты по уровню, полоска вверху, проверка — заново. */
+  private syncCareer(): void {
+    const key = this.scene.career?.level;
+    if (key !== this.careerKey) this.lastCheck = undefined;
+    this.careerKey = key;
+    this.refreshKit();
+    if (!toolAllowed(this.scene, this.tool)) this.setTool("select");
+    if (!this.careerBar) {
+      this.careerBar = document.createElement("div");
+      this.careerBar.className = "chip-bar career-bar";
+      this.careerBar.setAttribute("role", "navigation");
+      this.careerBar.setAttribute("aria-label", "Уровень карьеры");
+      this.careerBar.addEventListener("click", (e) => {
+        const act = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-career-bar]")?.dataset.careerBar;
+        if (act === "check") this.checkLevel();
+        if (act === "leave") this.leaveLevel();
+        if (act === "task") this.setCareerOpen(true);
+      });
+      document.body.appendChild(this.careerBar);
+    }
+    const level = this.careerLevel();
+    this.careerBar.hidden = !level;
+    if (level) {
+      this.careerBar.innerHTML = `<span class="path"><small>карьера</small> ${level.part} · ${level.title}</span>
+        <button class="btn inline" data-career-bar="task">Задание</button>
+        <button class="btn inline" data-career-bar="check">Проверить</button>
+        <button class="btn inline" data-career-bar="leave">Выйти</button>`;
+    }
+  }
+  private careerKey?: string;
 
   /** Имя текущего проекта (под ним он сохранён или открыт). */
   get projectName(): string {
@@ -994,11 +1141,16 @@ export class App {
   }
 
   setTool(tool: Tool): void {
+    if (!toolAllowed(this.scene, tool)) tool = "select";
     this.tool = tool;
     this.onTool?.(tool);
     if (tool !== "select" && this.projectsOpen) {
       this.projectsOpen = false;
       this.onProjects?.();
+    }
+    if (tool !== "select" && this.careerOpen) {
+      this.careerOpen = false;
+      this.onCareer?.();
     }
     this.cancelPending();
     this.ghostRot = 0;
@@ -1667,6 +1819,8 @@ export class App {
 
   private clickPlace(tool: PlaceTool): void {
     const h = this.hover;
+    const kit = tool.startsWith("kit:") ? kitTools(this.scene).find((k) => k.id === tool) : undefined;
+    if (kit && kit.left <= 0) return this.setHint("Эти детали из набора уже все стоят. Уберите одну, чтобы поставить в другое место, или перетащите.");
     const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
     const boardOk = part(sample).onBoard(sample);
     if (!boardOk && (h.hole || h.overBoard)) return this.setHint(placeTools().get(tool)!.def.boardRefusal ?? "");
@@ -1859,7 +2013,9 @@ export class App {
     const target = this.selected;
     let html: string;
     let key: string;
-    if (this.projectsOpen) {
+    if (this.careerOpen) {
+      [key, html] = this.career.render();
+    } else if (this.projectsOpen) {
       [key, html] = this.projects.render();
     } else if (target && this.component(target)) {
       [key, html] = componentPanel(this, this.component(target)!, true);
@@ -1895,6 +2051,7 @@ export class App {
     this.ui.inspector.innerHTML = html;
     this.bindInspector();
     if (key === "p") this.projects.bind(this.ui.inspector);
+    if (key === "cl" || key === "cc") this.career.bind(this.ui.inspector);
   }
 
 

@@ -86,7 +86,7 @@ export function packageProblems(scene: Scene): string[] {
     if (why) out.push(`${c.id} не может быть внутри: ${why}.`);
   }
   const space = spaceUsed(scene);
-  const room = spaceOf(box.pins ?? 0);
+  const room = box.room ?? spaceOf(box.pins ?? 0);
   if (space > room) {
     out.push(`Не помещается в ${packageName(box.package, box.pins ?? 0)}: начинка занимает ${space} клеток из ${room}. Уберите детали или возьмите корпус больше.`);
   }
@@ -111,7 +111,7 @@ export function packageChip(scene: Scene, name: string, id: string = newChipId()
   roles.forEach((r, i) => r !== "nc" && net(pinNet[i] ?? -1 - i).pins.push(i + 1));
   const pinNames = roles.map((r, i) => (r === "nc" ? "NC" : box.names?.[i]?.trim() ?? ""));
   const pinRoles = roles.map((r) => (r === "nc" ? "nc" : r));
-  const source: Scene = JSON.parse(JSON.stringify({ ...scene, editingChip: undefined }));
+  const source: Scene = JSON.parse(JSON.stringify({ ...scene, editingChip: undefined, career: undefined }));
   source.chips = chipsUsed(scene);
   return {
     id,

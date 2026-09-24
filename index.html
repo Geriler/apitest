@@ -297,6 +297,13 @@
   .pill.bad { color: var(--danger); background: var(--danger-soft); }
   .sub.bad { color: var(--danger); }
   details.group[hidden] { display: none; }
+  .truth { width: 100%; border-collapse: collapse; font: 500 12px var(--mono); margin: 6px 0 10px; }
+  .truth th, .truth td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: center; }
+  .truth td.ok { color: #2f9e5a; font-weight: 700; }
+  .truth td.bad { color: #c8261f; font-weight: 700; }
+  .levels li.done b::after { content: " ✓"; color: #2f9e5a; }
+  .levels li.locked { opacity: 0.6; }
+  .kitlist { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; }
   .pinrows { display: grid; gap: 4px; margin-top: 6px; }
   .pinrow { display: grid; grid-template-columns: 26px minmax(0, 1.3fr) minmax(0, 1fr) 54px; gap: 6px; align-items: center; }
   .pinrow b { font: 600 12px var(--mono); text-align: center; border-left: 3px solid; padding-left: 2px; }
@@ -449,6 +456,11 @@
         </button>
       </div>
     </details>
+    <details class="group" data-group="kit" hidden>
+      <summary class="tool group-head" title="Набор деталей уровня"><svg viewBox="0 0 30 18"><rect x="4" y="5" width="22" height="11" rx="1.5" /><path d="M11 5V2h8v3M4 10h22" /></svg><span class="gname">Набор</span><span class="chev" aria-hidden="true">›</span></summary>
+      <div class="group-body panel">
+      </div>
+    </details>
     <details class="group" data-group="passive">
       <summary class="tool group-head" title="Пассивные"><svg viewBox="0 0 30 18"><path d="M1 9h7M22 9h7" /><rect x="8" y="5" width="14" height="8" /></svg><span class="gname">Пассивные</span><span class="chev" aria-hidden="true">›</span></summary>
       <div class="group-body panel">
@@ -500,6 +512,7 @@
     <button class="btn" id="btn-redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть" disabled>↷</button>
     <button class="btn" id="btn-clear">Очистить</button>
     <button class="btn" id="btn-schematic" aria-pressed="false" title="Принципиальная схема сборки">Схема</button>
+    <button class="btn" id="btn-career" aria-pressed="false" title="Открывать компоненты, собирая их из выданного набора">Карьера</button>
     <button class="btn" id="btn-projects" aria-pressed="false" title="Сохранить, открыть, скачать файлом">Проекты</button>
     <details class="menu" id="settings-menu">
       <summary class="btn" title="Допуски, ток, замена сгоревших">Настройки</summary>

@@ -1,0 +1,111 @@
+/**
+ * Карьера в приложении: что открыто (хранится в браузере), какой уровень сейчас собирают и какие
+ * инструменты при этом доступны — только детали набора (с остатком) и приборы для проверки.
+ */
+
+import type { ChipDef, Scene } from "../model/types";
+import { PARTS, type ToolDef } from "../parts";
+import { chipTool } from "../parts/chip";
+import { chipFunc, kitUsed } from "./build";
+import { FUNC_NAMES, LEVELS, kitLabel, levelById, type KitItem, type Level } from "./levels";
+
+const STORE_KEY = "maketka.career.v1";
+
+interface Progress {
+  /** Открытые компоненты: уровень → микросхема, собранная игроком. */
+  defs: Record<string, ChipDef>;
+}
+
+function load(): Progress {
+  try {
+    const p = JSON.parse(localStorage.getItem(STORE_KEY) ?? "null") as Progress | null;
+    if (p && typeof p.defs === "object") return p;
+  } catch {
+    /* нет сохранённого */
+  }
+  return { defs: {} };
+}
+
+let progress: Progress = load();
+
+/** Открытые игроком микросхемы. */
+export const careerDefs = (): ChipDef[] => Object.values(progress.defs);
+export const isDone = (id: string) => !!progress.defs[id];
+
+/** Открыть компонент: сохранить собранную микросхему. false — хранилище недоступно. */
+export function unlock(def: ChipDef, levelId: string): boolean {
+  progress = { defs: { ...progress.defs, [levelId]: def } };
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(progress));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Чего не хватает, чтобы взяться за уровень: функции микросхем набора, которые ещё не открыты. */
+export function missing(level: Level): string[] {
+  return level.kit
+    .filter((k): k is Extract<KitItem, { part: "chip" }> => k.part === "chip")
+    .filter((k) => !careerDefs().some((d) => chipFunc(d.id) === k.func))
+    .map((k) => FUNC_NAMES[k.func]);
+}
+
+// ─── Текущий уровень ─────────────────────────────────────────────────────────
+
+/** Уровень, который собирают на столе (по сцене). */
+export const activeLevel = (scene: Scene): Level | undefined => (scene.career ? levelById(scene.career.level) : undefined);
+
+/** Приборы и питание — для проверки на столе; в микросхему они не входят. */
+const TEST_TOOLS = new Set(["psu", "battery", "meter", "scope", "switch", "button"]);
+const BUILTIN = new Set(["select", "wire", "trace", "delete", "bb", "pcb"]);
+
+/** Можно ли пользоваться инструментом в этой сцене. */
+export function toolAllowed(scene: Scene, tool: string): boolean {
+  if (!scene.career) return !tool.startsWith("kit:");
+  return BUILTIN.has(tool) || TEST_TOOLS.has(tool) || tool.startsWith("kit:");
+}
+
+/** Базовый инструмент детали набора и её фиксированные настройки. */
+function baseTool(k: KitItem): { tool: ToolDef; preset: Record<string, unknown> }[] {
+  const find = (id: string) => Object.values(PARTS).flatMap((p) => p.tools as ToolDef[]).find((t) => t.id === id)!;
+  if (k.part === "mosfet") return [{ tool: find("fet"), preset: { kind: k.kind } }];
+  if (k.part === "bjt") return [{ tool: find("bjt"), preset: { kind: k.kind } }];
+  if (k.part === "resistor") return [{ tool: find("tht"), preset: { ohms: k.ohms, watts: 0.25 } }];
+  return careerDefs()
+    .filter((d) => chipFunc(d.id) === k.func)
+    .map((d) => ({ tool: chipTool(d) as ToolDef, preset: {} }));
+}
+
+/**
+ * Инструменты набора уровня: по кнопке на деталь (у микросхем — на каждую открытую нужной функции),
+ * с остатком в подписи. Настройки не меняются — номинал задан набором.
+ */
+export function kitTools(scene: Scene): { id: string; type: string; def: ToolDef; row: number; left: number }[] {
+  const level = activeLevel(scene);
+  if (!level) return [];
+  const used = kitUsed(level.kit, scene);
+  return level.kit.flatMap((k, row) =>
+    baseTool(k).map(({ tool, preset }, j) => {
+      const left = k.count - used[row];
+      const settings = { ...structuredClone(tool.settings ?? {}), ...preset };
+      const label = k.part === "chip" ? tool.label : kitLabel(k);
+      const def: ToolDef = {
+        ...tool,
+        id: `kit:${row}:${j}`,
+        group: "kit",
+        label: `${label} · ${left > 0 ? `осталось ${left}` : "всё поставлено"}`,
+        title: `Из набора: ${kitLabel(k)}, ${k.count} шт.`,
+        settings,
+        editor: () => "",
+        set() {},
+        create: () => tool.create(settings),
+        note: (s) => `${tool.note(s)}<p class="sub">Из набора уровня: ${kitLabel(k)} — ${k.count} шт., осталось ${left}. Номинал задан набором.</p>`,
+      };
+      const type = k.part === "mosfet" ? "mosfet" : k.part === "bjt" ? "transistor" : k.part === "resistor" ? "resistor" : "chip";
+      return { id: def.id, type, def, row, left };
+    }),
+  );
+}
+
+export { LEVELS };

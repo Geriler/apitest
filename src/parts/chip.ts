@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { HOLE_BY_ID, holeLabel, packageName, pinLayoutText, pinOffsets } from "../model/breadboard";
 import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
-import { libraryChips, resolveChip } from "../chips/registry";
+import { libraryChips, referenceList, resolveChip } from "../chips/registry";
 import { pinNode } from "../sim/nodes";
 import { formatSI } from "../sim/resistorCodes";
 import { type ComponentView, blackPlastic, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
@@ -17,13 +17,13 @@ export function chipPinName(def: ChipDef, i: number): string {
 }
 
 /** Инструмент установки микросхемы из библиотеки. */
-function chipTool(def: ChipDef) {
+export function chipTool(def: ChipDef) {
   return toolFor<Chip>()({
     id: `chip:${def.id}`,
     group: "chips",
     icon: `<rect x="7" y="4" width="16" height="10" rx="1" /><path d="M9 4V1M13 4V1M17 4V1M21 4V1M9 14v3M13 14v3M17 14v3M21 14v3" /><circle cx="9.5" cy="11.5" r="1" />`,
     label: def.name,
-    title: `${def.name} — ${packageName(def.package, def.pins)}, собрана вами`,
+    title: `${def.name} — ${packageName(def.package, def.pins)}, ${def.id.startsWith("ref:") ? "заводская" : "собрана вами"}`,
     settings: {},
     name: () => def.name,
     note: () =>
@@ -51,9 +51,9 @@ export const chip: PartDef<Chip> = {
   },
   where: (_c, holes) => holes.map((h, i) => `${i + 1} ${holeLabel(h)}`).join(", "),
   onBoard: () => true,
-  // Инструменты — по одному на микросхему библиотеки
+  // Инструменты — заводские компоненты карьеры и по одному на свою микросхему библиотеки
   get tools() {
-    return libraryChips().map(chipTool);
+    return [...referenceList(), ...libraryChips()].map(chipTool);
   },
   polar: () => true,
   label: (c) => `${c.name} (${packageName(c.package, c.pins)})`,
@@ -112,7 +112,7 @@ export const chip: PartDef<Chip> = {
         <p class="sub">${countDetails(k)}${k.chips.size ? `. Собрана из своих микросхем: ${countChips(k)}` : ""}.</p>
         ${burned.length ? kv("Сгорело внутри", burned.join(", ")) : ""}
         <div class="eyebrow">выводы (потенциал)</div>${rows}
-        <p class="sub">Собрана вами. Расчёт — полный, как если бы схема стояла на макетке: детали внутри греются и горят как обычно.</p>`,
+        <p class="sub">${def.id.startsWith("ref:") ? "Заводская: внутри эталонная сборка из карьеры." : def.id.startsWith("career:") ? "Открыта в карьере: внутри ваша сборка." : "Собрана вами."} Расчёт — полный, как если бы схема стояла на макетке: детали внутри греются и горят как обычно.</p>`,
       editor: `<div class="row"><button class="btn inline" data-act="openChip" id="btn-open-chip">Открыть схему</button></div>`,
     };
   },

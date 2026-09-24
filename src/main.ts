@@ -149,6 +149,9 @@ async function start(): Promise<void> {
   });
 
   // «Проекты» — панель справа
+  const careerBtn = $("btn-career");
+  app.onCareer = () => careerBtn.setAttribute("aria-pressed", String(app.careerOpen));
+  careerBtn.addEventListener("click", () => app.setCareerOpen(!app.careerOpen));
   const projBtn = $("btn-projects");
   app.onProjects = () => projBtn.setAttribute("aria-pressed", String(app.projectsOpen));
   projBtn.addEventListener("click", () => app.setProjectsOpen(!app.projectsOpen));

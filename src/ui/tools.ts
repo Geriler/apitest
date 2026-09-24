@@ -9,7 +9,21 @@ export type PlaceTool = string;
 
 /** Инструменты установки деталей из реестра: id → тип детали и описание инструмента. Список меняется (микросхемы библиотеки). */
 export function placeTools(): Map<PlaceTool, { type: Component["type"]; def: ToolDef }> {
-  return new Map(Object.values(PARTS).flatMap((p) => p.tools.map((t) => [t.id, { type: p.type, def: t as ToolDef }] as const)));
+  const all = new Map(Object.values(PARTS).flatMap((p) => p.tools.map((t) => [t.id, { type: p.type, def: t as ToolDef }] as const)));
+  for (const k of kit) all.set(k.id, { type: k.type as Component["type"], def: k.def });
+  return all;
+}
+
+/** Инструменты набора уровня карьеры (приложение обновляет их при каждом изменении схемы). */
+let kit: { id: string; type: string; def: ToolDef }[] = [];
+export function setKitTools(list: typeof kit): void {
+  kit = list;
+}
+
+/** Какие инструменты показывать (в карьере — только набор и приборы). */
+let visible: (tool: string) => boolean = () => true;
+export function setToolFilter(f: (tool: string) => boolean): void {
+  visible = f;
 }
 /** Горячие клавиши инструментов (в латинской и в русской раскладке). Детали выбираются только кнопками. */
 export const TOOL_KEYS: Record<string, Tool> = {
@@ -23,7 +37,7 @@ export function renderToolButtons(tools: HTMLElement): void {
   // Перерисовка (библиотека микросхем поменялась): сначала убрать прежние кнопки деталей
   tools.querySelectorAll(".group-body [data-part-tool]").forEach((b) => b.remove());
   for (const { def } of placeTools().values()) {
-    if (!def.group) continue;
+    if (!def.group || !visible(def.id)) continue;
     const body = tools.querySelector(`details[data-group="${def.group}"] .group-body`);
     body?.insertAdjacentHTML(
       "beforeend",
@@ -32,6 +46,8 @@ export function renderToolButtons(tools: HTMLElement): void {
       </button>`,
     );
   }
+  // Встроенные инструменты (выбор, провод, платы…) — тоже по фильтру
+  tools.querySelectorAll<HTMLElement>(".tool[data-tool]:not([data-part-tool])").forEach((b) => (b.hidden = !visible(b.dataset.tool!)));
   // Пустую группу не показываем (например, «Микросхемы», пока своих нет)
   tools.querySelectorAll<HTMLElement>("details[data-group]").forEach((g) => (g.hidden = !g.querySelector(".group-body [data-tool]")));
 }

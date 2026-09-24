@@ -19,12 +19,32 @@ export function libraryChips(): ChipDef[] {
   return [...library.values()].sort((a, b) => a.name.localeCompare(b.name, "ru"));
 }
 
+/** Эталонные («заводские») компоненты карьеры — в песочнице доступны сразу. */
+const reference = new Map<string, ChipDef>();
+/** Компоненты, открытые игроком в карьере (его собственные сборки). */
+const career = new Map<string, ChipDef>();
+
+export function setReference(defs: Iterable<ChipDef>): void {
+  reference.clear();
+  for (const d of defs) reference.set(d.id, d);
+}
+
+export function setCareerChips(defs: Iterable<ChipDef>): void {
+  career.clear();
+  for (const d of defs) career.set(d.id, d);
+}
+
+/** Эталонные компоненты, по обозначению. */
+export function referenceList(): ChipDef[] {
+  return [...reference.values()].sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+
 /** Описание микросхемы для схемы scene. */
 export function resolveChip(scene: Scene, id: string): ChipDef | undefined {
   const a = library.get(id);
   const b = scene.chips?.[id];
   if (a && b) return a.updatedAt >= b.updatedAt ? a : b;
-  return a ?? b;
+  return a ?? b ?? career.get(id) ?? reference.get(id);
 }
 
 /** Все описания, нужные схеме (с вложенными микросхемами), — чтобы положить их в Scene.chips. */

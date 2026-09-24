@@ -95,7 +95,7 @@ export class ProjectsPanel {
     const packing = box
       ? `<h3>${info.editing ? `Схема микросхемы «${esc(info.editing.name)}»` : `Своя микросхема в ${packageName(box?.package, info.size)}`}</h3>
       ${info.count.total ? `<div class="kv"><span>Внутри</span><span>${countShort(info.count)}</span></div><p class="sub">${esc(countDetails(info.count))}${info.count.chips.size ? `; из своих микросхем: ${esc(countChips(info.count))}` : ""}</p>` : ""}
-      ${pins}<div class="kv"><span>Место в ${packageName(box?.package, info.size)}</span><span>${info.space} из ${2 * info.size} клеток</span></div>${problems}
+      ${pins}<div class="kv"><span>Место в ${packageName(box?.package, info.size)}</span><span>${info.space} из ${box?.room ?? 2 * info.size} клеток</span></div>${problems}
       <p class="sub">В микросхему входит то, что стоит на корпусе. Питание и приборы на столе — обвязка для проверки: подключайте их к площадкам выводов. Назначение выводов — в панели корпуса (нажмите на него).</p>
       <div class="field"><label for="f-chip-name">Название</label>
         <input id="f-chip-name" class="btn" type="text" maxlength="24" placeholder="Например, мой NAND" value="${esc(name)}" /></div>
