@@ -297,6 +297,10 @@
   .pill.warn { color: var(--warn); }
   .pill.bad { color: var(--danger); background: var(--danger-soft); }
   .sub.bad { color: var(--danger); }
+  .chip-bar { position: fixed; z-index: 25; top: 64px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 32px); padding: 6px 8px 6px 14px; border-radius: 10px; background: var(--paper); border: 1px solid var(--copper); box-shadow: var(--shadow); }
+  .chip-bar .path { font: 600 13px var(--sans); color: var(--ink); }
+  .chip-bar .path small { display: block; font: 500 10px var(--mono); color: var(--copper); text-transform: uppercase; letter-spacing: 0.06em; }
+  .chip-bar[hidden] { display: none; }
   .pin-tip { position: fixed; z-index: 30; pointer-events: none; padding: 4px 8px; border-radius: 6px; background: var(--paper); color: var(--ink); border: 1px solid var(--line); box-shadow: var(--shadow); font: 500 12px var(--mono); white-space: nowrap; }
   .pin-tip b { color: var(--copper); }
   .pin-tip span { margin-left: 6px; font-weight: 600; }

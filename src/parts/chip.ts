@@ -132,7 +132,7 @@ function nameTexture(text: string, pinsHalf: number): THREE.CanvasTexture {
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillText(text, canvas.width / 2, 84);
-  // Ключ: точка у вывода 1 (левый нижний угол)
+  // Ключ — точка у вывода 1 (левый нижний угол)
   g.beginPath();
   g.arc(26, 128, 11, 0, Math.PI * 2);
   g.fillStyle = "#34373b";
@@ -176,11 +176,6 @@ function chipView(c: Chip): ComponentView {
   const side = new THREE.MeshStandardMaterial({ color: 0x1c1e21, roughness: 0.55 });
   const box = new THREE.Mesh(new THREE.BoxGeometry(L, T, W), [side, side, top, side, side, side]);
   body.add(box);
-  // Выемка-ключ у торца с выводом 1
-  const notch = new THREE.Mesh(new THREE.CylinderGeometry(mm(1), mm(1), mm(0.4), 16, 1, false, 0, Math.PI), new THREE.MeshStandardMaterial({ color: 0x0c0d0e }));
-  notch.position.set(-L / 2, T / 2, 0);
-  notch.rotation.y = Math.PI / 2;
-  body.add(notch);
   const y = Hs + mm(1) + T / 2;
   body.position.set(center.x, y, center.z);
   // Локальная +X — вдоль u, локальная +Z — вдоль v

@@ -51,6 +51,8 @@ const MAX_LEAD_SPAN = 12;
 const STORAGE_KEY = "maketka.scene.v1";
 const TOLERANCE_KEY = "maketka.tolerance.v1";
 const CURRENT_KEY = "maketka.showCurrent.v1";
+/** Путь внутрь открытых микросхем (чтобы вернуться и после перезагрузки). */
+const CHIP_STACK_KEY = "maketka.chipstack.v1";
 /** Сколько шагов можно отменить. */
 const HISTORY_LIMIT = 100;
 /** Сколько времени расчёт может занять за один такт, мс. */
@@ -141,6 +143,7 @@ export class App {
     this.scene = initial;
     setLibrary(loadLibrary());
     this.adoptChips(initial);
+    this.loadChipStack();
     renderToolButtons(this.ui.tools);
     this.schematic = new SchematicPanel(this.ui.schematic, {
       scene: () => this.scene,
@@ -164,6 +167,8 @@ export class App {
     this.snapshot = JSON.stringify(this.scene);
     this.bindInput();
     this.setTool("select");
+    // Открыли страницу внутри микросхемы — вернуть полоску пути (или забыть устаревший путь)
+    this.syncChipStack();
     // Если кадры редкие, физика догоняет сама
     setInterval(() => this.tick(), 50);
   }
@@ -281,6 +286,7 @@ export class App {
     this.inspectorHtml = "";
     this.renderInspector();
     this.onHistory?.();
+    this.syncChipStack();
   }
 
   private save(): void {
@@ -465,6 +471,8 @@ export class App {
     this.burnedAt.clear();
     this.cancelPending();
     this.changed();
+    this.confirmLeave = false;
+    this.syncChipStack();
   }
 
   // ─── Сборка 3D ─────────────────────────────────────────────────────────
@@ -705,12 +713,16 @@ export class App {
   }
 
   /** Упаковать текущую схему. update — обновить ту, чью схему открыли (все её экземпляры станут новыми). */
-  packageChip(name: string, update: boolean): void {
+  packageChip(name: string, update: boolean): boolean {
     const problems = packageProblems(this.scene);
-    if (problems.length) return this.toast("Не упаковать", problems.join(" "));
+    if (problems.length) {
+      this.toast("Не упаковать", problems.join(" "));
+      return false;
+    }
     const old = update && this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined;
     if (old && old.pins !== dipSize(this.scene)) {
-      return this.toast("Не обновить", `У «${old.name}» DIP-${old.pins}, а сейчас выводов на DIP-${dipSize(this.scene)}. Уже стоящие микросхемы не встанут в свои отверстия — упакуйте как новую.`);
+      this.toast("Не обновить", `У «${old.name}» DIP-${old.pins}, а сейчас выводов на DIP-${dipSize(this.scene)}. Уже стоящие микросхемы не встанут в свои отверстия — упакуйте как новую.`);
+      return false;
     }
     const def = packageChip(this.scene, name || old?.name || "", old?.id);
     const lib = loadLibrary().filter((d) => d.id !== def.id);
@@ -723,16 +735,104 @@ export class App {
     this.record();
     this.toast(old ? "Микросхема обновлена" : "Микросхема упакована", `«${def.name}», DIP-${def.pins} — в группе «Микросхемы» слева.${old ? " Все её экземпляры теперь такие же." : ""}`);
     this.refreshInspector();
+    return true;
   }
 
-  /** Открыть схему микросхемы, чтобы поправить: как открыть проект (Ctrl+Z вернёт прежнюю схему). */
+  /**
+   * Путь внутрь микросхем: откуда пришли (схема до «Открыть схему»), чтобы вернуться, не теряя
+   * её и не откатываясь. Хранится и в браузере — перезагрузка внутри микросхемы не теряет внешнюю схему.
+   */
+  private chipStack: { id: string; scene: string; projectName: string; title: string; opened: string }[] = [];
+  /** «Вернуться» при несохранённых правках: второе нажатие подтверждает. */
+  private confirmLeave = false;
+  private chipBar?: HTMLElement;
+
+  /** Открыть схему микросхемы, чтобы поправить: вверху появится путь и «Вернуться». */
   openChip(id: string): void {
     const def = resolveChip(this.scene, id);
     if (!def) return this.toast("Нет описания", "Этой микросхемы нет ни в библиотеке, ни в проекте.");
+    const here = this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip)?.name : undefined;
+    this.chipStack.push({ id: def.id, scene: JSON.stringify(this.scene), projectName: this.projects.name, title: here ?? (this.projects.name || "Стол"), opened: "" });
     const s: Scene = JSON.parse(JSON.stringify(def.scene));
     s.editingChip = def.id;
     this.replaceScene(s);
-    this.toast(`Схема «${def.name}»`, "Поправьте и нажмите «Проекты» → «Обновить микросхему». Ctrl+Z вернёт прежнюю схему.");
+    this.chipStack.at(-1)!.opened = JSON.stringify(this.scene);
+    this.saveChipStack();
+    this.renderChipBar();
+  }
+
+  /** Вернуться туда, откуда открыли микросхему; update — сначала обновить её по правкам. */
+  leaveChip(update: boolean): void {
+    const top = this.chipStack.at(-1);
+    if (!top) return;
+    if (update) {
+      if (!this.packageChip("", true)) return;
+    } else if (JSON.stringify(this.scene) !== top.opened && !this.confirmLeave) {
+      this.confirmLeave = true;
+      return this.renderChipBar();
+    }
+    this.chipStack.pop();
+    this.saveChipStack();
+    this.replaceScene(JSON.parse(top.scene) as Scene);
+    this.projects.name = top.projectName;
+    this.renderChipBar();
+  }
+
+  /** Схему сменили не через «Вернуться» (Ctrl+Z, пример, проект) — лишние уровни пути больше не нужны. */
+  private syncChipStack(): void {
+    let popped = false;
+    while (this.chipStack.length && this.scene.editingChip !== this.chipStack.at(-1)!.id) {
+      this.chipStack.pop();
+      popped = true;
+    }
+    if (popped) this.saveChipStack();
+    this.renderChipBar();
+  }
+
+  private saveChipStack(): void {
+    try {
+      if (this.chipStack.length) localStorage.setItem(CHIP_STACK_KEY, JSON.stringify(this.chipStack));
+      else localStorage.removeItem(CHIP_STACK_KEY);
+    } catch {
+      /* хранилище недоступно — путь живёт до перезагрузки */
+    }
+  }
+
+  private loadChipStack(): void {
+    try {
+      const raw = localStorage.getItem(CHIP_STACK_KEY);
+      const stack = raw ? (JSON.parse(raw) as App["chipStack"]) : [];
+      this.chipStack = Array.isArray(stack) ? stack : [];
+    } catch {
+      this.chipStack = [];
+    }
+  }
+
+  /** Полоска вверху: где мы («Стол › Триггер › Мой NAND») и как вернуться. */
+  private renderChipBar(): void {
+    if (!this.chipBar) {
+      this.chipBar = document.createElement("div");
+      this.chipBar.className = "chip-bar";
+      this.chipBar.setAttribute("role", "navigation");
+      this.chipBar.setAttribute("aria-label", "Внутри микросхемы");
+      this.chipBar.addEventListener("click", (e) => {
+        const act = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-chip-bar]")?.dataset.chipBar;
+        if (act) this.leaveChip(act === "update");
+      });
+      document.body.appendChild(this.chipBar);
+    }
+    const top = this.chipStack.at(-1);
+    this.chipBar.hidden = !top;
+    if (!top) {
+      this.confirmLeave = false;
+      return;
+    }
+    const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const here = resolveChip(this.scene, top.id)?.name ?? "микросхема";
+    const path = [...this.chipStack.map((x) => x.title), here].map(esc).join(" › ");
+    this.chipBar.innerHTML = `<span class="path"><small>внутри микросхемы</small> ${path}</span>
+      <button class="btn inline" data-chip-bar="update">Обновить и вернуться</button>
+      <button class="btn inline${this.confirmLeave ? " danger" : ""}" data-chip-bar="leave">${this.confirmLeave ? "Точно? Правки пропадут" : "Вернуться"}</button>`;
   }
 
   /** Убрать из библиотеки (в проектах, где она стоит, её копия остаётся). */

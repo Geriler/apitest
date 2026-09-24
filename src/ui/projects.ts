@@ -14,7 +14,7 @@ export interface ProjectsHost {
   refreshInspector(): void;
   /** Раздел «Микросхема»: выводы открытой схемы, что мешает упаковать, библиотека. */
   chipInfo(): { pins: ChipPin[]; problems: string[]; size: number; space: number; count: PartCount; editing?: ChipDef; library: ChipDef[] };
-  packageChip(name: string, update: boolean): void;
+  packageChip(name: string, update: boolean): boolean;
   openChip(id: string): void;
   deleteChip(id: string): void;
 }
