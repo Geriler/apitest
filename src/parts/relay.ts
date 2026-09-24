@@ -39,6 +39,7 @@ export const relay: PartDef<Relay> = {
   type: "relay",
   prefix: "K",
   pins: 5,
+  notInChip: () => "реле SRD размером 19 × 15 × 15 мм — больше любого DIP (в DIP бывают только твердотельные и герконовые реле)",
   onBoard: () => false,
   tools: [
     toolFor<Relay>()({

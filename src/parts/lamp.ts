@@ -13,6 +13,7 @@ export const lamp: PartDef<Lamp> = {
   type: "lamp",
   prefix: "HL",
   pins: 2,
+  notInChip: () => "лампа накаливания в корпус микросхемы не помещается",
   onBoard: () => true,
   tools: [
     toolFor<Lamp>()({

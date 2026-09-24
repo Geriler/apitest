@@ -295,6 +295,56 @@ export interface Relay extends Base {
   kind: RelayKind;
 }
 
+/** Назначение вывода микросхемы: вход, выход, питание, общий. */
+export type ChipPinRole = "in" | "out" | "vcc" | "gnd";
+
+/** Метка «Вывод»: эта точка схемы станет выводом микросхемы с номером number. */
+export interface ChipPin extends Base {
+  type: "chippin";
+  role: ChipPinRole;
+  /** Номер вывода корпуса, с 1. */
+  number: number;
+  /** Имя для подписей: VCC, GND, A, Y… (может быть пустым). */
+  name: string;
+}
+
+/** Микросхема, собранная из своей схемы. Что внутри — ChipDef по def. */
+export interface Chip extends Base {
+  type: "chip";
+  /** Обозначение описания микросхемы (ChipDef.id). */
+  def: string;
+  /** Имя и число выводов — копия из описания (для подписей и места на плате). */
+  name: string;
+  pins: number;
+}
+
+/**
+ * Описание микросхемы: схема, из которой её собрали, и её «плоская» начинка для расчёта.
+ * Хранится в библиотеке браузера и в проекте (Scene.chips), чтобы файл проекта был самодостаточным.
+ */
+export interface ChipDef {
+  id: string;
+  name: string;
+  /** Корпус. Пока только DIP; позже — другие (SIP, SOT на переходнике…). */
+  package: "DIP";
+  /** Выводов в корпусе (у DIP — чётное, 4…16). */
+  pins: number;
+  /** Имена выводов 1…pins ("" — без имени, "NC" — не подключён). */
+  pinNames: string[];
+  /** Назначение выводов 1…pins; "nc" — вывод не подключён. */
+  pinRoles: (ChipPinRole | "nc")[];
+  /** Сколько места занимает начинка, клеток (вместимость DIP — 2 клетки на вывод). */
+  space?: number;
+  /** Детали внутри (все — «на столе»: соединения задаёт nets). */
+  parts: Component[];
+  /** Цепи начинки: какие выводы каких деталей соединены и с каким выводом корпуса (с 1). */
+  nets: { members: [string, Pin][]; pins?: number[] }[];
+  /** Исходная схема — чтобы открыть и поправить. */
+  scene: Scene;
+  /** Когда упакована, мс с 1970 года (новее — важнее). */
+  updatedAt: number;
+}
+
 /** Режим мультиметра: вольтметр, миллиамперметр, амперметр, омметр. */
 export type MeterMode = "V" | "mA" | "A" | "ohm";
 
@@ -315,11 +365,12 @@ export interface Oscilloscope extends Base {
   hold?: boolean;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay;
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay | ChipPin | Chip;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */
-export type Pin = 0 | 1 | 2 | 3 | 4;
+/** Номер вывода детали с нуля (у микросхем их до 16). */
+export type Pin = number;
 export type Endpoint = { hole: string } | { comp: string; pin: Pin };
 
 export interface Wire {
@@ -373,6 +424,10 @@ export interface Scene {
   traces?: Trace[];
   /** Ручная раскладка принципиальной схемы (поверх автоматической). */
   schematic?: SchematicLayout;
+  /** Описания микросхем, которые стоят в этой схеме (копия из библиотеки — для переноса файлом). */
+  chips?: Record<string, ChipDef>;
+  /** Эта схема — начинка микросхемы с таким обозначением (её открыли, чтобы поправить). */
+  editingChip?: string;
 }
 
 /**

@@ -9,6 +9,7 @@ export const switchPart: PartDef<Switch> = {
   type: "switch",
   prefix: "SA",
   pins: 2,
+  notInChip: () => "тумблер внутри корпуса не переключить",
   onBoard: () => true,
   tools: [
     toolFor<Switch>()({

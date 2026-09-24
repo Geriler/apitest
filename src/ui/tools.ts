@@ -7,10 +7,10 @@ import { PARTS, type ToolDef } from "../parts";
 export type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "delete" | PlaceTool;
 export type PlaceTool = string;
 
-/** Инструменты установки деталей из реестра: id → тип детали и описание инструмента. */
-export const PLACE_TOOLS = new Map<PlaceTool, { type: Component["type"]; def: ToolDef }>(
-  Object.values(PARTS).flatMap((p) => p.tools.map((t) => [t.id, { type: p.type, def: t as ToolDef }] as const)),
-);
+/** Инструменты установки деталей из реестра: id → тип детали и описание инструмента. Список меняется (микросхемы библиотеки). */
+export function placeTools(): Map<PlaceTool, { type: Component["type"]; def: ToolDef }> {
+  return new Map(Object.values(PARTS).flatMap((p) => p.tools.map((t) => [t.id, { type: p.type, def: t as ToolDef }] as const)));
+}
 /** Горячие клавиши инструментов (в латинской и в русской раскладке). Детали выбираются только кнопками. */
 export const TOOL_KEYS: Record<string, Tool> = {
   "1": "select", "2": "wire",
@@ -20,13 +20,15 @@ export const TOOL_KEYS: Record<string, Tool> = {
 
 /** Кнопки инструментов деталей — в группы на панели слева, в порядке реестра. */
 export function renderToolButtons(tools: HTMLElement): void {
-  for (const { def } of PLACE_TOOLS.values()) {
+  // Перерисовка (библиотека микросхем поменялась): сначала убрать прежние кнопки деталей
+  tools.querySelectorAll(".group-body [data-part-tool]").forEach((b) => b.remove());
+  for (const { def } of placeTools().values()) {
     if (!def.group) continue;
     const body = tools.querySelector(`details[data-group="${def.group}"] .group-body`);
     body?.insertAdjacentHTML(
       "beforeend",
-      `<button class="tool" data-tool="${def.id}" aria-pressed="false" title="${def.title}">
-        <svg viewBox="0 0 30 18">${def.icon}</svg>${def.label}
+      `<button class="tool" data-tool="${def.id}" data-part-tool aria-pressed="false" title="${def.title.replace(/"/g, "&quot;")}">
+        <svg viewBox="0 0 30 18">${def.icon}</svg>${def.label.replace(/&/g, "&amp;").replace(/</g, "&lt;")}
       </button>`,
     );
   }

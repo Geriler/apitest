@@ -12,7 +12,7 @@ import { HOLE_BY_ID } from "../model/breadboard";
 import type { Component, Pin, Scene, SchematicLayout } from "../model/types";
 import { formatSI } from "../sim/resistorCodes";
 import { endpointNode, pinNode, type Simulation } from "../sim/simulation";
-import { part } from "../parts";
+import { part, pinsOf } from "../parts";
 import type { SchematicPart } from "../parts/types";
 
 export interface Netlist {
@@ -43,7 +43,7 @@ export function buildNetlist(scene: Scene): Netlist {
   };
   const pinNodes = new Map<string, string[]>();
   for (const c of scene.components) {
-    const nodes = Array.from({ length: part(c).pins }, (_, p) => pinNode(c, p as Pin));
+    const nodes = Array.from({ length: pinsOf(c) }, (_, p) => pinNode(c, p as Pin));
     nodes.forEach(find);
     pinNodes.set(c.id, nodes);
   }
@@ -184,7 +184,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
     const elements: SchematicPart[] = part(c).schematicParts?.(c, sim) ?? [
       {
         key: "",
-        pins: Array.from({ length: part(c).pins }, (_, p) => p as Pin),
+        pins: Array.from({ length: pinsOf(c) }, (_, p) => p as Pin),
         symbol: part(c).symbol?.(c),
         symbol3: part(c).symbol3?.(c),
         text: part(c).symbolText?.(c),
@@ -202,6 +202,47 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
       const label = (lx: number, ly: number) =>
         `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(el.value)}</text>` +
         `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`;
+      if (el.flag) {
+        // Вывод микросхемы: флажок с номером над линией своей цепи
+        const y = Y(netOf[0]);
+        const w = 12 + el.flag.text.length * 6.6;
+        const svg =
+          `<rect class="hit" x="${num(px - 6)}" y="${num(y - 34)}" width="${num(w + 12)}" height="38"/>` +
+          `<path d="M${num(px)} ${num(y)}V${num(y - 12)}"/>` +
+          `<rect x="${num(px)}" y="${num(y - 28)}" width="${num(w)}" height="16" rx="2" style="fill:${el.flag.color};stroke:none"/>` +
+          `<text x="${num(px + 6)}" y="${num(y - 16)}" class="flag">${esc(el.flag.text)}</text>`;
+        placed.push({ c, key, x: px, attach: [[netOf[0], px]], svg, bottom: y });
+        x += COL * 0.6;
+        continue;
+      }
+      if (el.box) {
+        // Микросхема: прямоугольник, выводы 1…N/2 слева сверху вниз, остальные справа снизу вверх (как DIP)
+        const n = el.pins.length;
+        const half = Math.ceil(n / 2);
+        const W = 64;
+        const ys = netOf.map((net) => Y(net));
+        const top = Math.min(...ys) - 18;
+        const bottom = Math.max(...ys) + 18;
+        const attach: [number, number][] = [];
+        let pinsSvg = "";
+        el.pins.forEach((_, i) => {
+          const left = i < half;
+          const y = ys[i];
+          const ex = left ? px : px + W;
+          const ax = left ? px - 14 : px + W + 14;
+          attach.push([netOf[i], ax]);
+          pinsSvg +=
+            `<path d="M${num(ax)} ${num(y)}H${num(ex)}"/>` +
+            `<text x="${num(left ? px + 4 : px + W - 4)}" y="${num(y + 3.5)}" class="pin${left ? "" : " r"}">${esc(el.box![i])}</text>`;
+        });
+        const svg =
+          `<rect class="hit" x="${num(px - 14)}" y="${num(top)}" width="${num(W + 28)}" height="${num(bottom - top + 30)}"/>` +
+          `<rect x="${num(px)}" y="${num(top)}" width="${W}" height="${num(bottom - top)}" class="chipbox"/>${pinsSvg}` +
+          `<text x="${num(px)}" y="${num(bottom + 14)}" class="ref">${esc(c.id)}</text><text x="${num(px)}" y="${num(bottom + 27)}">${esc(el.value)}</text>`;
+        placed.push({ c, key, x: px, attach, svg, bottom: bottom + 30 });
+        x += COL * 1.4;
+        continue;
+      }
       if (el.pins.length === 2) {
         const [ya, yb] = [Y(netOf[0]), Y(netOf[1])];
         let top = Math.min(ya, yb);

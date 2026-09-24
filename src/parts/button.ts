@@ -9,6 +9,7 @@ export const button: PartDef<PushButton> = {
   type: "button",
   prefix: "SB",
   pins: 2,
+  notInChip: () => "кнопку внутри корпуса не нажать",
   onBoard: () => true,
   tools: [
     toolFor<PushButton>()({

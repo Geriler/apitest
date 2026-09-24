@@ -4,7 +4,7 @@
  * в описании её типа (PARTS[c.type]). Новая деталь = новый файл в этой папке + строка в index.ts.
  */
 
-import type { Component, Pin } from "../model/types";
+import type { Component, Pin, Scene } from "../model/types";
 import type { Load, Simulation } from "../sim/simulation";
 import type { Branch, Extras } from "../sim/solver";
 import type { Tolerance } from "../sim/tolerance";
@@ -14,6 +14,8 @@ import type { ComponentView, Visual } from "../view/kit";
 export interface Stamp {
   out: Branch[];
   extras: Required<Extras>;
+  /** Идеальные соединения узлов (начинка микросхемы с её выводами). */
+  links: [string, string][];
 }
 
 /** Перегрев: выше порога «тепло» копится со скоростью (нагрузка − порог)·rate, ниже — остывает. */
@@ -44,7 +46,7 @@ export interface ToolDef<C extends Component = Component, S = any> {
   /** Имя инструмента (data-tool): "tht", "cap"… */
   id: string;
   /** Группа кнопок на панели слева; без группы кнопки нет (инструмент скрыт). */
-  group?: "passive" | "semi" | "load" | "power" | "instruments";
+  group?: "passive" | "semi" | "load" | "power" | "instruments" | "chips";
   /** Значок: содержимое <svg viewBox="0 0 30 18">. */
   icon: string;
   /** Подпись кнопки и всплывающая подсказка. */
@@ -60,6 +62,8 @@ export interface ToolDef<C extends Component = Component, S = any> {
   set(s: S, field: string, value: string): void;
   /** Данные новой детали. */
   create(s: S): NewPart<C>;
+  /** Поправить только что поставленную деталь по схеме (например, взять следующий свободный номер). */
+  adjust?(c: C, scene: Scene): void;
   /** Подсказка внизу экрана; pending — отверстие, где уже стоит первый вывод. */
   hint(s: S, pending?: string): string;
   /** Почему нельзя поставить в плату (если деталь не встаёт в плату). */
@@ -89,6 +93,10 @@ export interface SchematicPart {
   symbol3?: Symbol3;
   /** Буквы в центре двухвыводного обозначения. */
   text?: string;
+  /** Одновыводное обозначение — флажок с подписью на линии цепи. */
+  flag?: { text: string; color: string };
+  /** Многовыводное — прямоугольник с подписями выводов (по порядку pins). */
+  box?: string[];
   /** Подпись под обозначением детали. */
   value: string;
   /** Ток для подписи, А. */
@@ -101,6 +109,12 @@ export interface PartDef<C extends Component = Component> {
   prefix: string;
   /** Число выводов. */
   pins: number;
+  /** Сколько места деталь занимает в корпусе микросхемы, клеток (по умолчанию 1). */
+  chipSpace?(c: C, scene: Scene): number;
+  /** Почему деталь не может быть внутри микросхемы (не помещается или теряет смысл); нет — может. */
+  notInChip?(c: C): string | undefined;
+  /** Число выводов у этого экземпляра, если оно своё у каждого (микросхемы). */
+  pinCount?(c: C): number;
   /** Встаёт ли в плату (у SMD-резистора нет ножек, батарея и блок питания — на столе). */
   onBoard(c: C): boolean;
   /** Инструменты установки на панели слева (у резистора — выводной и SMD). */

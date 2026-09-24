@@ -1,6 +1,7 @@
 /** Панель «Проекты»: несколько схем в браузере и файл .json для обмена. */
 
-import type { Scene } from "../model/types";
+import type { ChipDef, ChipPin, Scene } from "../model/types";
+import { PIN_ROLES, pinTitle } from "../parts/chippin";
 import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "../projects";
 
 /** Что панели проектов нужно от приложения. */
@@ -10,6 +11,11 @@ export interface ProjectsHost {
   toast(title: string, body: string): void;
   /** Перерисовать панель справа. */
   refreshInspector(): void;
+  /** Раздел «Микросхема»: выводы открытой схемы, что мешает упаковать, библиотека. */
+  chipInfo(): { pins: ChipPin[]; problems: string[]; size: number; space: number; editing?: ChipDef; library: ChipDef[] };
+  packageChip(name: string, update: boolean): void;
+  openChip(id: string): void;
+  deleteChip(id: string): void;
 }
 
 export class ProjectsPanel {
@@ -19,6 +25,8 @@ export class ProjectsPanel {
   private draft?: string;
   /** Проект, который попросили удалить: второе нажатие удаляет. */
   private confirmDelete?: string;
+  /** Имя будущей микросхемы, пока его набирают. */
+  private chipDraft?: string;
 
   constructor(private host: ProjectsHost) {}
 
@@ -26,6 +34,7 @@ export class ProjectsPanel {
   reset(): void {
     this.confirmDelete = undefined;
     this.draft = undefined;
+    this.chipDraft = undefined;
   }
 
   render(): [string, string] {
@@ -50,8 +59,41 @@ export class ProjectsPanel {
         <div class="row"><button class="btn inline" data-proj-act="export">Скачать файл</button>
         <button class="btn inline" data-proj-act="import">Открыть файл</button></div>
         <input type="file" id="f-proj-file" accept=".json,application/json" hidden /></div>
-      <p class="sub">Файл .json можно передать другому человеку или открыть в другом браузере. Открыть проект — как загрузить пример: Ctrl+Z вернёт прежнюю схему.</p>`;
+      <p class="sub">Файл .json можно передать другому человеку или открыть в другом браузере. Открыть проект — как загрузить пример: Ctrl+Z вернёт прежнюю схему.</p>
+      ${this.chipSection(esc)}`;
     return ["p", html];
+  }
+
+  /** Раздел «Микросхема»: упаковать эту схему в DIP и библиотека своих микросхем. */
+  private chipSection(esc: (t: string) => string): string {
+    const info = this.host.chipInfo();
+    const name = this.chipDraft ?? info.editing?.name ?? "";
+    const pins = info.pins.length
+      ? `<ul class="list">${info.pins
+          .map((p) => `<li><span><b>${p.number}</b> ${esc(pinTitle(p))}</span><span>${PIN_ROLES[p.role].label}</span></li>`)
+          .join("")}</ul>`
+      : `<p class="sub">Поставьте детали «Вывод» (группа «Микросхемы» слева) в точки, которые выйдут наружу: входы, выходы, питание и общий.</p>`;
+    const problems = info.pins.length ? info.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("") : "";
+    const can = !info.problems.length;
+    const lib = info.library
+      .map(
+        (d) => `<li><span><b>${esc(d.name)}</b><br /><small>DIP-${d.pins} · ${plural(d.parts.length, "деталь", "детали", "деталей")} внутри</small></span>
+          <span class="row"><button class="btn inline" data-proj-act="chipOpen" data-name="${esc(d.id)}">Открыть схему</button>
+          <button class="btn inline danger" data-proj-act="chipDelete" data-name="${esc(d.id)}">${this.confirmDelete === `chip:${d.id}` ? "Точно?" : "Удалить"}</button></span></li>`,
+      )
+      .join("");
+    return `<div class="board-section"><div class="eyebrow">микросхема</div>
+      <h3>${info.editing ? `Схема микросхемы «${esc(info.editing.name)}»` : "Упаковать эту схему в DIP"}</h3>
+      ${pins}${info.pins.length ? `<div class="kv"><span>Место в DIP-${info.size}</span><span>${info.space} из ${2 * info.size} клеток</span></div>` : ""}${problems}
+      <p class="sub">Батареи, блоки питания и приборы в микросхему не входят — это обвязка для проверки. Внутри всё считается честно, детали греются и горят.</p>
+      <div class="field"><label for="f-chip-name">Название</label>
+        <input id="f-chip-name" class="btn" type="text" maxlength="24" placeholder="Например, мой NAND" value="${esc(name)}" /></div>
+      <div class="row">
+        ${info.editing ? `<button class="btn inline" data-proj-act="chipUpdate" ${can ? "" : "disabled"}>Обновить микросхему</button>` : ""}
+        <button class="btn inline" data-proj-act="chipPack" ${can ? "" : "disabled"}>${info.editing ? "Как новую" : `Упаковать в DIP-${info.size}`}</button>
+      </div>
+      ${lib ? `<div class="eyebrow">свои микросхемы</div><ul class="list projects">${lib}</ul>` : ""}
+    </div>`;
   }
 
   /** Имя файла из имени проекта: без символов, запрещённых в именах файлов. */
@@ -118,6 +160,8 @@ export class ProjectsPanel {
     input?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") root.querySelector<HTMLButtonElement>('[data-proj-act="save"]')?.click();
     });
+    const chipName = root.querySelector<HTMLInputElement>("#f-chip-name");
+    chipName?.addEventListener("input", () => (this.chipDraft = chipName.value));
     const file = root.querySelector<HTMLInputElement>("#f-proj-file");
     file?.addEventListener("change", () => {
       if (file.files?.[0]) void this.importFile(file.files[0]);
@@ -155,6 +199,21 @@ export class ProjectsPanel {
           case "export":
             void this.exportFile();
             return;
+          case "chipPack":
+          case "chipUpdate":
+            this.host.packageChip((this.chipDraft ?? "").trim(), btn.dataset.projAct === "chipUpdate");
+            this.chipDraft = undefined;
+            return;
+          case "chipOpen":
+            this.host.openChip(name);
+            return;
+          case "chipDelete":
+            if (this.confirmDelete !== `chip:${name}`) this.confirmDelete = `chip:${name}`;
+            else {
+              this.host.deleteChip(name);
+              this.confirmDelete = undefined;
+            }
+            break;
           case "import":
             file?.click();
             return;

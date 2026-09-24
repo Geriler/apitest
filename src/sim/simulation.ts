@@ -5,6 +5,7 @@
 
 import { HOLE_BY_ID } from "../model/breadboard";
 import { FLAT_WIRE_EXTRA, TRACE_OHM_PER_MM, WIRE_OHM_PER_MM, isFlatWire, type Component, type ComponentState, type Endpoint, type Mosfet, type Scene, type Transistor, type WireShape } from "../model/types";
+import { resolveChip } from "../chips/registry";
 import { part } from "../parts";
 import { mosfetState, type MosfetState } from "../parts/mosfet";
 import { transistorState, type TransistorState } from "../parts/transistor";
@@ -116,16 +117,37 @@ export class Simulation {
     return s;
   }
 
+  /**
+   * Все детали расчёта: детали схемы и начинка микросхем (с обозначениями «D1/R1», вложенные —
+   * «D1/D2/R1»). Пересчитывается в solve() и step(): между ними схема не меняется.
+   */
+  private flat: Component[] = [];
+
+  private expand(): Component[] {
+    const out: Component[] = [];
+    const add = (list: Component[], prefix: string, depth: number) => {
+      for (const c of list) {
+        const x = prefix ? ({ ...c, id: prefix + c.id } as Component) : c;
+        out.push(x);
+        if (x.type !== "chip" || depth > 8) continue;
+        const def = resolveChip(this.scene, x.def);
+        if (def) add(def.parts, `${x.id}/`, depth + 1);
+      }
+    };
+    add(this.scene.components, "", 0);
+    return out;
+  }
+
   /** Есть ли что-то, что зависит от времени: конденсаторы или транзисторы (у них ёмкости переходов). */
   private hasCapacitors(): boolean {
-    return this.scene.components.some((c) => part(c).dynamic && !this.state(c.id).burned);
+    return this.flat.some((c) => part(c).dynamic && !this.state(c.id).burned);
   }
 
   /** Схема для решателя при заданных линеаризациях диодов и транзисторов и шаге h для конденсаторов. */
   private branches(h: number): Stamp {
     this.h = h;
-    const s: Stamp = { out: [], extras: { currents: [], vccs: [] } };
-    for (const c of this.scene.components) part(c).stamp(c, this, s);
+    const s: Stamp = { out: [], extras: { currents: [], vccs: [] }, links: [] };
+    for (const c of this.flat) part(c).stamp(c, this, s);
     for (const w of this.scene.wires) {
       s.out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: wireResistance(this.scene, w) });
     }
@@ -162,15 +184,15 @@ export class Simulation {
    * Возвращает false, если за 100 итераций не сошлось (бывает на резких переключениях).
    */
   private solveAt(h: number): boolean {
-    const nonlinear = this.scene.components.filter((c) => part(c).newton && !this.state(c.id).burned);
+    const nonlinear = this.flat.filter((c) => part(c).newton && !this.state(c.id).burned);
     const shared = { flips: 0 };
     for (let iter = 1; iter <= 100; iter++) {
-      const { out, extras } = this.branches(h);
+      const { out, extras, links } = this.branches(h);
       // Вырожденная или плохо обусловленная система (нечисла в ответе) — итерация не удалась;
       // остаётся прошлое решение, шаг будет повторён мельче
       let solution: Solution;
       try {
-        solution = solveCircuit(out, [], extras);
+        solution = solveCircuit(out, links, extras);
       } catch {
         return false;
       }
@@ -188,8 +210,9 @@ export class Simulation {
 
   /** Пересчитать токи. Вызывать после любого изменения сцены. */
   solve(): void {
-    for (const c of this.scene.components) this.state(c.id);
-    const alive = new Set(this.scene.components.map((c) => c.id));
+    this.flat = this.expand();
+    for (const c of this.flat) this.state(c.id);
+    const alive = new Set(this.flat.map((c) => c.id));
     for (const id of [...this.held]) if (!alive.has(id)) this.held.delete(id);
     for (const m of [this.states, this.capVoltage, this.junction, this.psuMode, this.memory]) {
       for (const key of [...m.keys()]) if (!alive.has(key.split(":")[0])) m.delete(key);
@@ -244,6 +267,7 @@ export class Simulation {
    * и заряд обновляется. Возвращает детали, вышедшие из строя на этом шаге.
    */
   step(dt: number): Component[] {
+    this.flat = this.expand();
     this.budget = 5000;
     const failed: Component[] = [];
     const transient = this.hasCapacitors();
@@ -281,7 +305,7 @@ export class Simulation {
       this.junction = saved;
     }
     this.time += h;
-    for (const c of this.scene.components) {
+    for (const c of this.flat) {
       if (!this.state(c.id).burned) part(c).remember?.(c, this);
     }
     return ok ? this.heat(h) : [];
@@ -289,7 +313,7 @@ export class Simulation {
 
   private heat(dt: number): Component[] {
     const failed: Component[] = [];
-    for (const c of this.scene.components) {
+    for (const c of this.flat) {
       const t = part(c).thermal;
       if (!t) continue;
       const s = this.state(c.id);
@@ -300,6 +324,12 @@ export class Simulation {
         s.burned = true;
         s.heat = 1;
         failed.push(c);
+        // Сгорела деталь внутри микросхемы — микросхема (и все, в которые она вложена) вышла из строя
+        for (let i = c.id.lastIndexOf("/"); i > 0; i = c.id.lastIndexOf("/", i - 1)) {
+          const outer = this.state(c.id.slice(0, i));
+          outer.burned = true;
+          outer.heat = 1;
+        }
       }
     }
     return failed;
@@ -307,8 +337,11 @@ export class Simulation {
 
   /** Заменить сгоревшую деталь новой (сбросить состояние и заряд). */
   repair(id: string): void {
+    // Микросхема заменяется целиком, с начинкой
+    const inside = (key: string) => key === id || key.startsWith(`${id}/`) || key.startsWith(`${id}:`);
+    for (const key of [...this.states.keys()]) if (inside(key)) this.states.set(key, { burned: false, heat: 0 });
+    for (const m of [this.capVoltage, this.memory]) for (const key of [...m.keys()]) if (inside(key)) m.delete(key);
     this.states.set(id, { burned: false, heat: 0 });
-    this.capVoltage.delete(id);
     this.solve();
   }
 

@@ -33,10 +33,13 @@ import { formatSI } from "./sim/resistorCodes";
 import { Simulation, heatThreshold } from "./sim/simulation";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
-import { PARTS, part } from "./parts";
+import { PARTS, part, pinsOf } from "./parts";
 import type { World } from "./view/world";
 import { ProjectsPanel } from "./ui/projects";
-import { PLACE_TOOLS, TOOL_KEYS, renderToolButtons, type PlaceTool, type Tool } from "./ui/tools";
+import { loadLibrary, saveLibrary } from "./chips/library";
+import { chipPins, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
+import { chipsUsed, libraryChips, resolveChip, setLibrary } from "./chips/registry";
+import { TOOL_KEYS, placeTools, renderToolButtons, type PlaceTool, type Tool } from "./ui/tools";
 import { SchematicPanel } from "./ui/schematicPanel";
 import { boardPanel, boardToolPanel, componentPanel, holePanel, overviewPanel, traceToolPanel, tracePanel, wirePanel, wireToolPanel } from "./ui/panels";
 
@@ -111,7 +114,12 @@ export class App {
   private sparkTimer = 0;
   private wireColor = 0;
   /** Настройки новых деталей по инструментам (что выбрано в панели, пока инструмент активен). */
-  private toolSettings = new Map([...PLACE_TOOLS].map(([id, { def }]) => [id, structuredClone(def.settings)]));
+  private toolSettings = new Map<PlaceTool, unknown>();
+  /** Настройки новой детали для инструмента (при первом обращении — начальные из описания). */
+  private settingsOf(tool: PlaceTool): unknown {
+    if (!this.toolSettings.has(tool)) this.toolSettings.set(tool, structuredClone(placeTools().get(tool)?.def.settings ?? {}));
+    return this.toolSettings.get(tool);
+  }
 
   defaults = {
     /** Размер новой печатной платы: столбцы × ряды. */
@@ -128,6 +136,8 @@ export class App {
     initial: Scene,
   ) {
     this.scene = initial;
+    setLibrary(loadLibrary());
+    this.adoptChips(initial);
     renderToolButtons(this.ui.tools);
     this.schematic = new SchematicPanel(this.ui.schematic, {
       scene: () => this.scene,
@@ -271,6 +281,10 @@ export class App {
   }
 
   private save(): void {
+    // Описания микросхем — вместе со схемой: файл проекта откроется и там, где их нет в библиотеке
+    const used = chipsUsed(this.scene);
+    if (Object.keys(used).length) this.scene.chips = used;
+    else delete this.scene.chips;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.scene));
     } catch {
@@ -436,6 +450,7 @@ export class App {
   replaceScene(s: Scene): void {
     // Другая схема — уже не тот проект (открытие проекта задаёт имя после загрузки)
     this.projects.name = "";
+    this.adoptChips(s);
     this.scene = s;
     this.adoptBoards();
     this.world.rebuildBoards(true);
@@ -627,7 +642,10 @@ export class App {
 
   private onBurn(c: Component): void {
     this.burnedAt.set(c.id, this.time);
-    const v = this.views.get(c.id)!;
+    // Деталь внутри микросхемы («D1/R1») — дым из корпуса самой микросхемы
+    const top = c.id.split("/")[0];
+    if (top !== c.id) this.burnedAt.set(top, this.time);
+    const v = this.views.get(c.id) ?? this.views.get(top)!;
     this.world.emitSparks(v.hotspot, 18);
     this.world.emitSmoke(v.hotspot, 10);
     const [what, note] = part(c).burn(c);
@@ -649,6 +667,77 @@ export class App {
   onTool?: (tool: string) => void;
   /** Сводка по схеме и подсказки справа — только по кнопке «?». */
   showHelp = false;
+
+  // ─── Свои микросхемы ───────────────────────────────────────────────────
+
+  /** Описания из открытой схемы (файл, пример) — в библиотеку, если их там нет или там старее. */
+  private adoptChips(s: Scene): void {
+    const lib = new Map(loadLibrary().map((d) => [d.id, d]));
+    let added = false;
+    for (const d of Object.values(s.chips ?? {})) {
+      const old = lib.get(d.id);
+      if (!old || old.updatedAt < d.updatedAt) {
+        lib.set(d.id, d);
+        added = true;
+      }
+    }
+    if (!added) return;
+    saveLibrary([...lib.values()]);
+    setLibrary(lib.values());
+    renderToolButtons(this.ui.tools);
+  }
+
+  /** Сведения для раздела «Микросхема» в панели проектов. */
+  chipInfo() {
+    return {
+      pins: chipPins(this.scene),
+      problems: packageProblems(this.scene),
+      size: dipSize(this.scene),
+      space: spaceUsed(this.scene),
+      editing: this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined,
+      library: libraryChips(),
+    };
+  }
+
+  /** Упаковать текущую схему. update — обновить ту, чью схему открыли (все её экземпляры станут новыми). */
+  packageChip(name: string, update: boolean): void {
+    const problems = packageProblems(this.scene);
+    if (problems.length) return this.toast("Не упаковать", problems.join(" "));
+    const old = update && this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined;
+    if (old && old.pins !== dipSize(this.scene)) {
+      return this.toast("Не обновить", `У «${old.name}» DIP-${old.pins}, а сейчас выводов на DIP-${dipSize(this.scene)}. Уже стоящие микросхемы не встанут в свои отверстия — упакуйте как новую.`);
+    }
+    const def = packageChip(this.scene, name || old?.name || "", old?.id);
+    const lib = loadLibrary().filter((d) => d.id !== def.id);
+    lib.push(def);
+    if (!saveLibrary(lib)) this.toast("Библиотека не сохранилась", "Хранилище браузера недоступно: микросхема будет только в этом проекте.");
+    setLibrary(lib);
+    this.scene.editingChip = def.id;
+    renderToolButtons(this.ui.tools);
+    this.save();
+    this.record();
+    this.toast(old ? "Микросхема обновлена" : "Микросхема упакована", `«${def.name}», DIP-${def.pins} — в группе «Микросхемы» слева.${old ? " Все её экземпляры теперь такие же." : ""}`);
+    this.refreshInspector();
+  }
+
+  /** Открыть схему микросхемы, чтобы поправить: как открыть проект (Ctrl+Z вернёт прежнюю схему). */
+  openChip(id: string): void {
+    const def = resolveChip(this.scene, id);
+    if (!def) return this.toast("Нет описания", "Этой микросхемы нет ни в библиотеке, ни в проекте.");
+    const s: Scene = JSON.parse(JSON.stringify(def.scene));
+    s.editingChip = def.id;
+    this.replaceScene(s);
+    this.toast(`Схема «${def.name}»`, "Поправьте и нажмите «Проекты» → «Обновить микросхему». Ctrl+Z вернёт прежнюю схему.");
+  }
+
+  /** Убрать из библиотеки (в проектах, где она стоит, её копия остаётся). */
+  deleteChip(id: string): void {
+    const lib = loadLibrary().filter((d) => d.id !== id);
+    saveLibrary(lib);
+    setLibrary(lib);
+    renderToolButtons(this.ui.tools);
+    this.refreshInspector();
+  }
 
   // ─── Принципиальная схема ──────────────────────────────────────────────
 
@@ -788,14 +877,36 @@ export class App {
   }
 
   private newComponent(tool: PlaceTool, placement: Component["placement"]): Component {
-    const { type, def } = PLACE_TOOLS.get(tool)!;
-    return { id: this.nextId(type), ...def.create(this.toolSettings.get(tool)), placement } as Component;
+    const { type, def } = placeTools().get(tool)!;
+    return { id: this.nextId(type), ...def.create(this.settingsOf(tool)), placement } as Component;
   }
 
   /**
    * Три соседних отверстия ряда для транзистора: начиная с данного и вправо
    * (у правого края платы — сдвиг влево). Только основное поле: в шине все выводы замкнулись бы.
    */
+  /** Поставить деталь инструмента tool: поправить её по схеме (номер вывода) и перестроить. */
+  private place(tool: PlaceTool, placement: Component["placement"]): void {
+    const c = this.newComponent(tool, placement);
+    placeTools().get(tool)?.def.adjust?.(c, this.scene);
+    this.scene.components.push(c);
+    this.clearGhost();
+    this.changed();
+  }
+
+  /**
+   * Отверстия DIP-n: вывод 1 — в отверстие h, выводы 1…n/2 — вправо по его ряду, остальные — обратно
+   * по ряду на три шага дальше (поперёк канавки макетки: из ряда f в ряд e). Не в шины.
+   */
+  private dipHoles(h: Hole, n: number): string[] | undefined {
+    if (h.kind === "rail") return undefined;
+    const k = n / 2;
+    const out: (Hole | undefined)[] = [];
+    for (let i = 0; i < k; i++) out.push(holeAt(h.boardId, h.x + i, h.z));
+    for (let i = k - 1; i >= 0; i--) out.push(holeAt(h.boardId, h.x + i, h.z - 3));
+    return out.every((x) => x && x.kind !== "rail") ? out.map((x) => x!.id) : undefined;
+  }
+
   private transistorHoles(h: Hole): string[] | undefined {
     if (h.kind === "rail") return undefined;
     // Три подряд вправо; если справа край платы — сдвигаемся влево
@@ -817,7 +928,7 @@ export class App {
       // Для транзистора: К-Б-Э → Э-Б-К
       c.placement.holes = [...c.placement.holes].reverse();
     } else {
-      const last = part(c).pins - 1;
+      const last = pinsOf(c) - 1;
       for (const w of this.scene.wires) {
         for (const k of ["a", "b"] as const) {
           const e = w[k];
@@ -829,7 +940,7 @@ export class App {
   }
 
   private isPlaceTool(t: Tool): boolean {
-    return PLACE_TOOLS.has(t);
+    return placeTools().has(t);
   }
 
   // ─── Ввод ──────────────────────────────────────────────────────────────
@@ -1239,7 +1350,7 @@ export class App {
       const owner = occ.get(to.id);
       if (owner && owner !== c.id) return undefined;
       // Трёхвыводная деталь в шине замкнула бы все выводы
-      if (part(c).pins > 2 && to.kind === "rail") return undefined;
+      if (pinsOf(c) > 2 && to.kind === "rail") return undefined;
       out.push(to.id);
     }
     return out;
@@ -1305,7 +1416,22 @@ export class App {
     const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
     const boardOk = part(sample).onBoard(sample);
 
-    if (part(sample).pins === 3 && h.hole) {
+    // Одновыводная метка — в одно отверстие; DIP — поперёк канавки
+    if (pinsOf(sample) === 1 && h.hole) {
+      const owner = this.occupied().get(h.hole.id);
+      if (owner) return this.setHint(`Отверстие <b>${holeLabel(h.hole.id)}</b> занято (${owner}).`);
+      return this.place(tool, { mode: "board", holes: [h.hole.id] });
+    }
+    if (pinsOf(sample) >= 4 && h.hole) {
+      const n = pinsOf(sample);
+      const holes = this.dipHoles(h.hole, n);
+      if (!holes) return this.setHint(`Микросхема встаёт поперёк центральной канавки: нажмите на отверстие ряда f — туда встанет вывод 1, а всем ${n} выводам нужно место (${n / 2} столбцов).`);
+      const occ = this.occupied();
+      const busy = holes.find((id) => occ.has(id));
+      if (busy) return this.setHint(`Отверстие <b>${holeLabel(busy)}</b> занято (${occ.get(busy)}).`);
+      return this.place(tool, { mode: "board", holes });
+    }
+    if (pinsOf(sample) === 3 && h.hole) {
       const holes = this.transistorHoles(h.hole);
       if (!holes) return this.setHint("Деталь с тремя выводами ставится в основное поле: в шине все три вывода оказались бы замкнуты.");
       const occ = this.occupied();
@@ -1338,15 +1464,10 @@ export class App {
       return;
     }
     if (h.overBoard && !boardOk) {
-      return this.setHint(PLACE_TOOLS.get(tool)!.def.boardRefusal ?? "");
+      return this.setHint(placeTools().get(tool)!.def.boardRefusal ?? "");
     }
     if (this.pendingHole) return; // ждём второе отверстие
-    if (h.table) {
-      const c = this.newComponent(tool, { mode: "free", x: h.table.x, z: h.table.z, rot: this.ghostRot });
-      this.scene.components.push(c);
-      this.clearGhost();
-      this.changed();
-    }
+    if (h.table) this.place(tool, { mode: "free", x: h.table.x, z: h.table.z, rot: this.ghostRot });
   }
 
   remove(id: string): void {
@@ -1412,7 +1533,13 @@ export class App {
     }
     if (!this.isPlaceTool(this.tool)) return this.clearGhost();
     const tool = this.tool;
-    if (PARTS[PLACE_TOOLS.get(tool)!.type].pins === 3 && h.hole) {
+    const n = pinsOf(this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 }));
+    if (n === 1 && h.hole) return this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes: [h.hole.id] })).group);
+    if (n >= 4 && h.hole) {
+      const holes = this.dipHoles(h.hole, n);
+      return holes ? this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes })).group) : this.clearGhost();
+    }
+    if (n === 3 && h.hole) {
       const holes = this.transistorHoles(h.hole);
       return holes ? this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes })).group) : this.clearGhost();
     }
@@ -1459,7 +1586,7 @@ export class App {
     else if (t === "trace") s = this.pendingPad
       ? `Дорожка от <b>${holeLabel(this.pendingPad.id)}</b>: следующая площадка. Щелчок по той же или Esc — закончить.`
       : "Нажмите на <b>площадку</b> печатной платы, затем на следующую — между ними ляжет медная дорожка.";
-    else if (this.isPlaceTool(t)) s = PLACE_TOOLS.get(t)!.def.hint(this.toolSettings.get(t), this.pendingHole ? holeLabel(this.pendingHole.id) : undefined);
+    else if (this.isPlaceTool(t)) s = placeTools().get(t)!.def.hint(this.settingsOf(t), this.pendingHole ? holeLabel(this.pendingHole.id) : undefined);
     this.showHint(s);
   }
 
@@ -1518,8 +1645,8 @@ export class App {
 
 
   private newPartPanel(tool: PlaceTool): [string, string] {
-    const { def } = PLACE_TOOLS.get(tool)!;
-    const st = this.toolSettings.get(tool);
+    const { def } = placeTools().get(tool)!;
+    const st = this.settingsOf(tool);
     const html = `<div class="eyebrow">новая деталь</div><h2>${def.name(st)}</h2>${def.note(st)}${def.editor(st)}`;
     return [`n:${tool}`, html];
   }
@@ -1529,6 +1656,10 @@ export class App {
     const root = this.ui.inspector;
     root.querySelectorAll<HTMLSelectElement>("select[data-field]").forEach((sel) => {
       sel.addEventListener("change", () => this.applyField(sel.dataset.field!, sel.value));
+    });
+    // Текстовые поля (имя вывода микросхемы): по Enter или уходу с поля
+    root.querySelectorAll<HTMLInputElement>("input[type=text][data-field]").forEach((inp) => {
+      inp.addEventListener("change", () => this.applyField(inp.dataset.field!, inp.value));
     });
     // Ползунки блока питания: меняем уставку на лету, без перестройки сцены
     root.querySelectorAll<HTMLInputElement>("input[type=range][data-field]").forEach((inp) => {
@@ -1615,6 +1746,11 @@ export class App {
         const act = btn.dataset.act;
         if (!id) return;
         if (act === "delete") this.remove(id);
+        if (act === "openChip") {
+          const c = this.component(id);
+          if (c?.type === "chip") this.openChip(c.def);
+          return;
+        }
         if (act === "rotate") this.rotate();
         if (act === "flip") this.flip(id);
         if (act === "discharge") {
@@ -1656,8 +1792,8 @@ export class App {
     }
     const c = this.selected ? this.component(this.selected) : undefined;
     if (!c) {
-      const pt = PLACE_TOOLS.get(this.tool);
-      pt?.def.set(this.toolSettings.get(this.tool), field, value);
+      const pt = placeTools().get(this.tool);
+      pt?.def.set(this.settingsOf(this.tool), field, value);
       this.inspectorHtml = "";
       this.updateHint();
       this.updateGhost();
