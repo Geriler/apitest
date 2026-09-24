@@ -77,6 +77,9 @@ try {
     page.on("response", (r) => r.status() >= 400 && !external(r.url()) && errors.push(`${r.status()} ${r.url()}`));
     await page.goto(`http://localhost:${port}/`);
     await page.waitForFunction(() => window.maketka, null, { timeout: 15000 });
+    // Первое открытие — меню выбора режима; дальше проверяем песочницу
+    check(await page.isVisible(".menu-screen"), `${viewport.name}: при первом открытии — меню режимов`);
+    await page.click('[data-mode="sandbox"]');
     await page.waitForTimeout(2500);
     await page.screenshot({ path: `screenshots/${viewport.name}-demo.png` });
 
