@@ -45,7 +45,7 @@ import { ProjectsPanel } from "./ui/projects";
 import { loadLibrary, saveLibrary } from "./chips/library";
 import { caseOf, chipInner, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
 import { chipsUsed, libraryChips, referenceList, resolveChip, setCareerChips, setChipToolSource, setLibrary, setReference } from "./chips/registry";
-import { checkLevel, levelScene, referenceChips, type CheckResult } from "./career/build";
+import { checkLevel, levelScene, publicChips, referenceChips, type CheckResult } from "./career/build";
 import { levelById, type Level } from "./career/levels";
 import { lessonById, type Lesson } from "./career/lessons";
 import { activeLesson, activeLevel, careerDefs, isDone, passLesson, kitTools, loadSlot, missing, recordFail, recordMetrics, revealHint, saveSlot, slotOf, toolAllowed, unlock, workshopScene } from "./career/session";
@@ -1061,7 +1061,8 @@ export class App {
   /** Оформление и инструменты под текущий режим. */
   private applyMode(): void {
     document.body.classList.toggle("mode-career", this.mode === "career");
-    setChipToolSource(this.mode === "career" ? careerDefs : () => [...referenceList(), ...libraryChips()]);
+    // Учебные промежуточные компоненты — только в наборах уровней, не в мастерской и не в песочнице
+    setChipToolSource(this.mode === "career" ? () => publicChips(careerDefs()) : () => [...publicChips(referenceList()), ...libraryChips()]);
     setKitTools(kitTools(this.scene));
     renderToolButtons(this.ui.tools);
     this.onTool?.(this.tool);

@@ -47,7 +47,7 @@ export class MenuScreen {
         </button>
         <button class="menu-card career${current === "career" ? " current" : ""}" data-mode="career">
           <b>Карьера</b>
-          <span>Открывайте компоненты, собирая их из выданного набора деталей — от инвертора до исключающего ИЛИ.</span>
+          <span>Открывайте компоненты, собирая их из выданного набора деталей — от инвертора до четырёхразрядного сумматора.</span>
           <small>Открыто ${done} из ${LEVELS.length} · уроков ${LESSONS.filter((l) => isDone(l.id)).length} из ${LESSONS.length}</small>
         </button>
       </div>
@@ -89,8 +89,22 @@ const PLACE: Record<string, [number, number]> = {
   "nor-cmos": [2, 4],
   "nor-rtl": [2, 5],
   xor: [3, 0],
-  and: [3, 1.6],
-  or: [3, 3.6],
+  "xor-nor": [3, 1],
+  and: [3, 2],
+  "and-nor": [3, 3],
+  or: [3, 4],
+  "or-nand": [3, 5],
+  buf: [3, 6],
+  xnor: [4, 0],
+  "xnor-nor": [4, 1],
+  "xnor-xor": [4, 2],
+  half: [4, 3.5],
+  mux: [4, 5],
+  "mux-aoi": [4, 6],
+  hc7266: [5, 1],
+  full: [5, 3.5],
+  eq2: [6, 1],
+  hc283: [6, 3.5],
 };
 /** Короткие подписи уроков на карте. */
 const SHORT: Record<string, string> = {
@@ -101,13 +115,21 @@ const SHORT: Record<string, string> = {
   "intro-switch": "транзистор-ключ",
   "intro-scope": "осциллограф",
 };
-const W = 200, H = 64, COLW = 300, ROWH = 88, PAD = 40;
+const W = 200, H = 64, COLW = 270, ROWH = 88, PAD = 40;
 const at = (id: string) => ({ x: PAD + PLACE[id][0] * COLW, y: PAD + PLACE[id][1] * ROWH });
 
 /** Из каких функций собирается уровень (по микросхемам набора). */
 const needs = (l: Level): LogicFunc[] => l.kit.flatMap((k) => (k.part === "chip" ? [k.func] : []));
 
-const variant = (l: Level) => (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
+const variant = (l: Level) => l.variant ?? (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
+
+/** Короткие названия функций для узлов карты. */
+const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит" };
+/** Подпись узла: функция и вариант; не влезает — только вариант. */
+function nodeSub(l: Level): string {
+  const full = `${FUNC_SHORT[l.func] ?? FUNC_NAMES[l.func]} · ${variant(l)}`;
+  return full.length > 27 ? variant(l) : full;
+}
 
 export class CareerMap {
   readonly el: HTMLElement;
@@ -151,8 +173,10 @@ export class CareerMap {
 
   private render(): void {
     const done = LEVELS.filter((l) => isDone(l.id)).length;
-    const width = PAD * 2 + 3 * COLW + W;
-    const height = PAD * 2 + 5 * ROWH + H;
+    const cols = Math.max(...Object.values(PLACE).map(([c]) => c));
+    const rows = Math.max(...Object.values(PLACE).map(([, r]) => r));
+    const width = PAD * 2 + cols * COLW + W;
+    const height = PAD * 2 + rows * ROWH + H;
     // Стрелки: от деталей ко всем вентилям; от вентилей — к тому, что из них собирается
     const edges: string[] = [];
     const edge = (from: string, to: string, lit: boolean) => {
@@ -185,10 +209,10 @@ export class CareerMap {
       ...LEVELS.map((l) => {
         const p = at(l.id);
         const state = isDone(l.id) ? "done" : missing(l).length ? "locked" : "open";
-        return `<g class="node ${state}${this.chosen === l.id ? " chosen" : ""}" data-node="${l.id}" transform="translate(${p.x} ${p.y})" tabindex="0" role="button" aria-label="${esc(l.part)}">
+        return `<g class="node ${state}${l.intermediate ? " step" : ""}${this.chosen === l.id ? " chosen" : ""}" data-node="${l.id}" transform="translate(${p.x} ${p.y})" tabindex="0" role="button" aria-label="${esc(l.part)}">
           <rect width="${W}" height="${H}" rx="10"/>
           <text x="14" y="27" class="t">${esc(l.part)}${state === "done" ? " ✓" : state === "locked" ? " 🔒" : ""}</text>
-          <text x="14" y="47" class="s">${esc(l.func === "xor" ? "Искл. ИЛИ" : FUNC_NAMES[l.func])} · ${variant(l)}</text></g>`;
+          <text x="14" y="47" class="s">${esc(nodeSub(l))}</text></g>`;
       }),
     ];
     const chosen = this.chosen ? LEVELS.find((l) => l.id === this.chosen) : undefined;
@@ -235,6 +259,7 @@ export class CareerMap {
     return `<div class="eyebrow">${esc(FUNC_NAMES[l.func])} · ${variant(l)}</div>
       <h3>${esc(l.part)}${isDone(l.id) ? " ✓" : ""}</h3>
       <p>${esc(l.about)}</p>
+      ${l.intermediate ? `<p class="sub">Учебная ступенька: в мастерской и песочнице её нет, она нужна только для следующего уровня цепочки.</p>` : ""}
       <div class="eyebrow">набор</div>
       <ul class="kitlist">${l.kit.map((k) => `<li>${esc(kitLabel(k))} × ${k.count}</li>`).join("")}</ul>
       ${bestOf(l.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(l.id))}` : ""}

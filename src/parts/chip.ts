@@ -3,8 +3,9 @@ import { HOLE_BY_ID, holeLabel, isSot, packageName, pinLayoutText, pinOffsets } 
 import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
 import { resolveChip, toolChips } from "../chips/registry";
+import { MODEL_MAX_OUT, MODEL_OFF, type ChipModel } from "../chips/model";
 import { pinNode } from "../sim/nodes";
-import { formatSI } from "../sim/resistorCodes";
+import { formatOhms, formatSI } from "../sim/resistorCodes";
 import { type ComponentView, blackPlastic, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
 import { kv, pill } from "../view/panel";
 import { PIN_ROLES } from "../chips/roles";
@@ -58,7 +59,7 @@ export const chip: PartDef<Chip> = {
   polar: () => true,
   label: (c) => `${c.name} (${packageName(c.package, c.pins)})`,
   value: (c) => c.name,
-  burn: (c) => [`Микросхема ${c.id} вышла из строя`, "Сгорела деталь внутри. Откройте её схему (в панели микросхемы), чтобы найти причину, или замените микросхему новой."],
+  burn: (c) => [`Микросхема ${c.id} вышла из строя`, "Сгорела деталь внутри или перегружен выход. Посмотрите, куда подключены выходы, откройте её схему (в панели микросхемы) или замените микросхему новой."],
   burnedWord: "ВЫШЛА ИЗ СТРОЯ",
   view: chipView,
 
@@ -75,8 +76,25 @@ export const chip: PartDef<Chip> = {
     ];
   },
 
-  // Начинка — отдельные детали (Simulation разворачивает её); здесь — только соединения с выводами
-  stamp(c, sim, { links }) {
+  // Начинка — отдельные детали (Simulation разворачивает её); здесь — только соединения с выводами.
+  // Проверенная микросхема считается моделью: ключи выходов, входы и ток покоя
+  stamp(c, sim, { links, out }) {
+    const model = sim.modelOf(c.id);
+    if (model) {
+      if (sim.state(c.id).burned) return;
+      const node = (p: number) => pinNode(c, p - 1);
+      const q = sim.junction.get(`${c.id}:q`);
+      const on = q !== undefined && q >= 0;
+      out.push({ id: `${c.id}:iq`, a: node(model.vcc), b: node(model.gnd), r: model.volts / Math.max(model.iq, model.volts / MODEL_OFF) });
+      model.inputs.forEach((p, i) => out.push({ id: `${c.id}:in${i}`, a: node(p), b: node(model.gnd), r: model.rIn[i] }));
+      model.outputs.forEach((p, k) => {
+        const high = on && !!(q! & (1 << k));
+        const low = on && !high;
+        out.push({ id: `${c.id}:h${k}`, a: node(model.vcc), b: node(p), r: high ? model.rHigh[k] : MODEL_OFF });
+        out.push({ id: `${c.id}:l${k}`, a: node(p), b: node(model.gnd), r: low ? model.rLow[k] : MODEL_OFF });
+      });
+      return;
+    }
     const def = resolveChip(sim.scene, c.def);
     if (!def) return;
     for (const net of def.nets) {
@@ -87,6 +105,39 @@ export const chip: PartDef<Chip> = {
       for (let i = 1; i < nodes.length; i++) links.push([nodes[0], nodes[i]]);
     }
   },
+  /**
+   * Модель: какие выходы включены — по входам из прошлого решения. Состояние меняется, пока не
+   * устоится; число переключений на решение ограничено (как у блока питания), иначе кольцо из
+   * инверторов без задержки качалось бы вечно.
+   */
+  newton(c, sim, _iter, shared) {
+    const model = sim.modelOf(c.id);
+    if (!model || sim.state(c.id).burned) return true;
+    const v = (p: number) => sim.solution.voltage.get(pinNode(c, p - 1)) ?? 0;
+    const gnd = v(model.gnd), span = v(model.vcc) - gnd;
+    // Без питания (меньше 40 % от того, при котором сняты параметры) выходы отключены
+    let q = -1;
+    if (span > 0.4 * model.volts) {
+      const outs = model.logic(model.inputs.map((p) => v(p) - gnd > span / 2));
+      q = outs.reduce((m, b, k) => m | (b ? 1 << k : 0), 0);
+    }
+    const key = `${c.id}:q`;
+    if (sim.junction.get(key) === q || shared.flips >= 64) return true;
+    sim.junction.set(key, q);
+    shared.flips++;
+    return false;
+  },
+  // Перегрузка модели — по самому нагруженному выходу (предел как у логики 74-й серии)
+  load(c, sim) {
+    const model = sim.modelOf(c.id);
+    if (!model) return undefined;
+    let worst = 0;
+    model.outputs.forEach((_, k) => {
+      for (const key of [`${c.id}:h${k}`, `${c.id}:l${k}`]) worst = Math.max(worst, Math.abs(sim.branch(key).current));
+    });
+    return { ratio: worst / MODEL_MAX_OUT, what: "ток", limit: formatSI(MODEL_MAX_OUT, "А") };
+  },
+  thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
   voltage: () => 0,
   current: () => 0,
   power: () => 0,
@@ -112,11 +163,18 @@ export const chip: PartDef<Chip> = {
         <p class="sub">${countDetails(k)}${k.chips.size ? `. Собрана из своих микросхем: ${countChips(k)}` : ""}.</p>
         ${burned.length ? kv("Сгорело внутри", burned.join(", ")) : ""}
         <div class="eyebrow">выводы (потенциал)</div>${rows}
-        <p class="sub">${def.id.startsWith("ref:") ? "Заводская: внутри эталонная сборка из карьеры." : def.id.startsWith("career:") ? "Открыта в карьере: внутри ваша сборка." : "Собрана вами."} Расчёт — полный, как если бы схема стояла на макетке: детали внутри греются и горят как обычно.</p>`,
+        <p class="sub">${def.id.startsWith("ref:") ? "Заводская: внутри эталонная сборка из карьеры." : def.id.startsWith("career:") ? "Открыта в карьере: внутри ваша сборка." : "Собрана вами."} ${modelText(sim.modelOf(c.id))}</p>`,
       editor: `<div class="row"><button class="btn inline" data-act="openChip" id="btn-open-chip">Открыть схему</button></div>`,
     };
   },
 };
+
+/** Как считается микросхема: моделью (и с какими параметрами) или целиком. */
+function modelText(m: ChipModel | undefined): string {
+  if (!m) return "Расчёт — полный, как если бы схема стояла на макетке: детали внутри греются и горят как обычно.";
+  const r = (xs: number[]) => [...new Set(xs.map((x) => (x >= MODEL_OFF ? "∞" : formatOhms(x))))].join(", ");
+  return `Она уже прошла проверку, поэтому считается моделью, снятой с этой проверки при ${formatSI(m.volts, "В")}: выход — ключ к питанию через ${r(m.rHigh)} или к общему через ${r(m.rLow)}, вход — ${r(m.rIn)} на общий, ток покоя ${formatSI(m.iq, "А")}. Так расчёт быстрый, даже если внутри сотни транзисторов. Перегрузка выхода сверх ${formatSI(MODEL_MAX_OUT, "А")} выводит её из строя.`;
+}
 
 // ─── 3D: корпус DIP ──────────────────────────────────────────────────────────
 

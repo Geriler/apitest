@@ -6,7 +6,7 @@
 import type { ChipDef, Scene } from "../model/types";
 import { PARTS, type ToolDef } from "../parts";
 import { chipTool } from "../parts/chip";
-import { chipFunc, kitUsed, type Metrics } from "./build";
+import { chipFunc, chipLevel, kitUsed, type Metrics } from "./build";
 import { FUNC_NAMES, LEVELS, kitLabel, levelById, type KitItem, type Level } from "./levels";
 import { lessonById, type Lesson } from "./lessons";
 
@@ -184,7 +184,8 @@ export function kitTools(scene: Scene): { id: string; type: string; def: ToolDef
     baseTool(k).map(({ tool, preset }, j) => {
       const left = k.count - used[row];
       const settings = { ...structuredClone(tool.settings ?? {}), ...preset };
-      const label = k.part === "chip" ? tool.label : kitLabel(k);
+      const variant = k.part === "chip" ? chipLevel(tool.id.replace(/^chip:/, ""))?.variant : undefined;
+      const label = k.part === "chip" ? `${tool.label}${variant ? ` (${variant})` : ""}` : kitLabel(k);
       const def: ToolDef = {
         ...tool,
         id: `kit:${row}:${j}`,

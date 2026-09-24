@@ -324,7 +324,7 @@
   .map-head .eyebrow { color: #a592ff; }
   .map-body { display: flex; gap: 16px; padding: 16px 20px; align-items: flex-start; flex-wrap: wrap; }
   .map-scroll { flex: 1 1 560px; overflow-x: auto; }
-  .map-svg { display: block; width: 100%; height: auto; min-width: 760px; }
+  .map-svg { display: block; width: 100%; height: auto; min-width: 1100px; }
   .map-svg .edge { fill: none; stroke: #3d4366; stroke-width: 2.5; }
   .map-svg .edge.lit { stroke: #a592ff; }
   .map-svg .arrow { fill: #3d4366; }
@@ -336,6 +336,7 @@
   .map-svg .node.open rect { stroke: #a592ff; fill: #28264a; }
   .map-svg .node.done rect { stroke: #52b97f; fill: #1c3a2e; }
   .map-svg .node.locked { opacity: 0.55; }
+  .map-svg .node.step rect { stroke-dasharray: 7 5; }
   .map-svg .node.root { cursor: default; }
   .map-svg .node.chosen rect { stroke-width: 3.5; filter: drop-shadow(0 0 8px rgba(165, 146, 255, 0.7)); }
   .map-svg .node:not(.root):hover rect { stroke-width: 3; }
@@ -350,6 +351,9 @@
   .truth th, .truth td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: center; }
   .truth td.ok { color: #2f9e5a; font-weight: 700; }
   .truth td.bad { color: #c8261f; font-weight: 700; }
+  .truth-scroll { max-height: 320px; overflow: auto; }
+  .truth.compact td, .truth.compact th { white-space: pre; padding: 2px 5px; font-size: 11px; }
+  .truth.compact b.bad { color: #c8261f; }
   .levels li.done b::after { content: " ✓"; color: #2f9e5a; }
   .levels li.locked { opacity: 0.6; }
   .kitlist { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; }

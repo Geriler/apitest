@@ -1,6 +1,6 @@
 /** Панель «Карьера»: список уровней или, на столе уровня, задание, набор и результат проверки. */
 
-import { kitUsed, rowText, type CheckResult, type Metrics } from "../career/build";
+import { CHECK_VOLTS, kitUsed, rowText, type CheckResult, type Metrics } from "../career/build";
 import { formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level } from "../career/levels";
 import { HINT_AFTER, bestOf, failsOf, hintsOf, isDone } from "../career/session";
@@ -88,7 +88,7 @@ export class CareerPanel {
   }
 
   private workshopHtml(): string {
-    const open = LEVELS.filter((l) => isDone(l.id));
+    const open = LEVELS.filter((l) => isDone(l.id) && !l.intermediate);
     return `<div class="eyebrow">карьера</div><h2>Мастерская</h2>
       <p>Свободный стол: базовые детали — резисторы, транзисторы, приборы — и все модули, которые вы открыли. Закрытых здесь нет: открывайте их на карте.</p>
       <div class="eyebrow">открытые модули</div>
@@ -106,7 +106,10 @@ export class CareerPanel {
     const names = io.inputs.map((p) => level.names[p - 1] || `вывод ${p}`);
     const check = this.host.lastCheck;
     const outs = io.outputs.map((p) => level.names[p - 1] || `вывод ${p}`);
-    const table = check?.rows.length
+    const compact = names.length > 4 || outs.length > 2;
+    const table = check?.rows.length && compact
+      ? this.compactTable(names, outs, check)
+      : check?.rows.length
       ? `<table class="truth"><tr>${names.map((n) => `<th>${esc(n)}</th>`).join("")}${outs.map((n) => `<th>${esc(n)} нужно</th><th>${esc(n)}</th>`).join("")}<th></th></tr>${check.rows
           .map(
             (r) =>
@@ -133,6 +136,29 @@ export class CareerPanel {
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
       <button class="btn inline" data-career-act="leave">К карте</button></div>
       ${table}${verdict}${hints}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;
+  }
+
+  /**
+   * Таблица большой микросхемы: входы и выходы — строками битов под своими именами, неверные
+   * биты выделены; напряжения — во всплывающей подсказке.
+   */
+  private compactTable(names: string[], outs: string[], check: CheckResult): string {
+    const bits = (xs: string[], labels: string[]) => xs.map((x, i) => x.padStart(labels[i].length)).join(" ");
+    const head = (labels: string[]) => esc(labels.join(" "));
+    const rows = check.rows
+      .map((r) => {
+        const got = r.volts
+          .map((v, k) => {
+            const bit = (v > CHECK_VOLTS / 2 ? "1" : "0").padStart(outs[k].length);
+            return r.each[k] ? bit : `<b class="bad">${bit}</b>`;
+          })
+          .join(" ");
+        return `<tr title="${esc(rowText(r))}"><td>${bits(r.inputs.map((b) => (b ? "1" : "0")), names)}</td><td>${bits(r.expected.map((b) => (b ? "1" : "0")), outs)}</td><td>${got}</td><td class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}</td></tr>`;
+      })
+      .join("");
+    const failed = check.rows.filter((r) => !r.ok).length;
+    return `<p class="sub">Проверено ${check.rows.length} наборов входов${check.rows.length < 2 ** names.length ? ` из ${2 ** names.length} возможных — как проверяют настоящие микросхемы` : ""}${failed ? `, неверных ${failed}` : ""}.</p>
+      <div class="truth-scroll"><table class="truth compact"><tr><th>${head(names)}</th><th>нужно<br />${head(outs)}</th><th>есть<br />${head(outs)}</th><th></th></tr>${rows}</table></div>`;
   }
 
   bind(root: HTMLElement): void {

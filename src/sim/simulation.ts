@@ -11,6 +11,7 @@ import { mosfetState, type MosfetState } from "../parts/mosfet";
 import { transistorState, type TransistorState } from "../parts/transistor";
 import { endpointNode } from "./nodes";
 import { solveCircuit, type BranchResult, type Solution, type Topology } from "./solver";
+import { chipModel, type ChipModel } from "../chips/model";
 import * as tolerance from "./tolerance";
 import { NO_TOLERANCE, type Tolerance } from "./tolerance";
 import type { Stamp } from "../parts/types";
@@ -105,12 +106,29 @@ export class Simulation {
   /** Сколько итераций Ньютона потребовало последнее решение (для тестов и отладки). */
   lastIterations = 0;
 
+  /** Микросхемы схемы (обозначения верхнего уровня), которые считаются до транзисторов, даже если у них есть модель. */
+  readonly expandChips: Set<string>;
+  /** Микросхемы, которые считаются моделью (см. chips/model), — по обозначению в расчёте. */
+  private models = new Map<string, ChipModel>();
+
   constructor(
     public scene: Scene,
     /** Режим «реальные допуски». После изменения вызвать solve(). */
     public tolerance: Tolerance = NO_TOLERANCE,
+    options: { expand?: Iterable<string> } = {},
   ) {
+    this.expandChips = new Set(options.expand ?? []);
     this.solve();
+  }
+
+  /** Модель, которой считается микросхема id (undefined — считается её начинка). */
+  modelOf(id: string): ChipModel | undefined {
+    return this.models.get(id);
+  }
+
+  /** Все детали расчёта (с начинкой раскрытых микросхем). */
+  get parts(): readonly Component[] {
+    return this.flat;
   }
 
   state(id: string): ComponentState {
@@ -130,6 +148,7 @@ export class Simulation {
 
   private expand(): Component[] {
     const out: Component[] = [];
+    this.models.clear();
     const add = (list: Component[], prefix: string, depth: number) => {
       for (const c of list) {
         // Деталь неизвестного типа (из старой версии) в расчёт не идёт
@@ -138,7 +157,11 @@ export class Simulation {
         out.push(x);
         if (x.type !== "chip" || depth > 8) continue;
         const def = resolveChip(this.scene, x.def);
-        if (def) add(def.parts, `${x.id}/`, depth + 1);
+        if (!def) continue;
+        // Проверенная микросхема — моделью; начинку считаем только у тех, кого попросили раскрыть
+        const model = this.expandChips.has(x.id) ? undefined : chipModel(def, this.scene);
+        if (model) this.models.set(x.id, model);
+        else add(def.parts, `${x.id}/`, depth + 1);
       }
     };
     add(this.scene.components, "", 0);
