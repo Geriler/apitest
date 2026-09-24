@@ -51,7 +51,7 @@ export function componentPanel(h: PanelHost, c: Component, pinned: boolean): [st
     ? `<div class="row">
         ${s.burned ? `<button class="btn inline" data-act="repair" id="btn-repair-one">Заменить новой</button>` : ""}
         ${polar ? `<button class="btn inline" data-act="flip" id="btn-flip">Перевернуть (F)</button>` : ""}
-        ${c.placement.mode === "free" ? `<button class="btn inline" data-act="rotate" id="btn-rotate">Повернуть (R)</button>` : ""}
+        <button class="btn inline" data-act="rotate" id="btn-rotate">Повернуть (R)</button>
         <button class="btn inline danger" data-act="delete" id="btn-delete">Удалить</button>
       </div>`
     : `<p class="sub">Нажмите, чтобы выбрать и изменить.</p>`;

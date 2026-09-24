@@ -1073,23 +1073,56 @@ export class App {
    * Отверстия DIP-n: вывод 1 — в отверстие h, выводы 1…n/2 — вправо по его ряду, остальные — обратно
    * по ряду на три шага дальше (поперёк канавки макетки: из ряда f в ряд e). Не в шины.
    */
-  private dipHoles(h: Hole, n: number): string[] | undefined {
+  private dipHoles(h: Hole, n: number, turns = this.quarterTurns()): string[] | undefined {
     if (h.kind === "rail") return undefined;
     const k = n / 2;
+    const at = (along: number, across: number) => {
+      const [dx, dz] = turn(along, -across, turns);
+      return holeAt(h.boardId, h.x + dx, h.z + dz);
+    };
     const out: (Hole | undefined)[] = [];
-    for (let i = 0; i < k; i++) out.push(holeAt(h.boardId, h.x + i, h.z));
-    for (let i = k - 1; i >= 0; i--) out.push(holeAt(h.boardId, h.x + i, h.z - 3));
+    for (let i = 0; i < k; i++) out.push(at(i, 0));
+    for (let i = k - 1; i >= 0; i--) out.push(at(i, 3));
     return out.every((x) => x && x.kind !== "rail") ? out.map((x) => x!.id) : undefined;
   }
 
-  private transistorHoles(h: Hole): string[] | undefined {
+  private transistorHoles(h: Hole, turns = this.quarterTurns()): string[] | undefined {
     if (h.kind === "rail") return undefined;
-    // Три подряд вправо; если справа край платы — сдвигаемся влево
+    // Три подряд по направлению поворота; если там край платы — сдвигаемся назад
     for (const shift of [0, -1, -2]) {
-      const holes = [0, 1, 2].map((k) => holeAt(h.boardId, h.x + shift + k, h.z));
+      const holes = [0, 1, 2].map((k) => {
+        const [dx, dz] = turn(shift + k, 0, turns);
+        return holeAt(h.boardId, h.x + dx, h.z + dz);
+      });
       if (holes.every((x) => x && x.kind !== "rail")) return holes.map((x) => x!.id);
     }
     return undefined;
+  }
+
+  /** Поворот призрака (R) в четвертях оборота: 0 — выводы вправо, 1 — от себя, 2 — влево, 3 — к себе. */
+  private quarterTurns(): number {
+    return Math.round(this.ghostRot / (Math.PI / 2)) % 4;
+  }
+
+  /**
+   * Повернуть деталь на плате на четверть оборота вокруг вывода 1 — если все выводы попадут
+   * в свободные отверстия той же платы (многовыводные — не в шины). Иначе объяснить, что мешает.
+   */
+  private rotateOnBoard(c: Component): void {
+    if (c.placement.mode !== "board") return;
+    const holes = c.placement.holes.map((id) => HOLE_BY_ID.get(id)!);
+    const [h0] = holes;
+    const next = holes.map((h) => {
+      const [dx, dz] = turn(h.x - h0.x, h.z - h0.z, 1);
+      return holeAt(h0.boardId, h0.x + dx, h0.z + dz);
+    });
+    if (next.some((h) => !h)) return this.setHint("Не повернуть: выводы вышли бы за край платы.");
+    if (holes.length > 2 && next.some((h) => h!.kind === "rail")) return this.setHint("Не повернуть: выводы попали бы в шину питания — там они замкнулись бы.");
+    const occ = this.occupied();
+    const busy = next.find((h) => occ.has(h!.id) && occ.get(h!.id) !== c.id);
+    if (busy) return this.setHint(`Не повернуть: там, куда встали бы выводы, уже стоит ${occ.get(busy.id)} (<b>${holeLabel(busy.id)}</b>).`);
+    c.placement.holes = next.map((h) => h!.id);
+    this.changed();
   }
 
   /**
@@ -1184,7 +1217,7 @@ export class App {
     if (c && c.placement.mode === "free") {
       c.placement.rot = (c.placement.rot + Math.PI / 2) % (Math.PI * 2);
       this.changed();
-    }
+    } else if (c) this.rotateOnBoard(c);
   }
 
   private computeHover(e: PointerEvent): Hover {
@@ -1643,7 +1676,7 @@ export class App {
     if (pinsOf(sample) >= 4 && h.hole) {
       const n = pinsOf(sample);
       const holes = this.dipHoles(h.hole, n);
-      if (!holes) return this.setHint(`Микросхема встаёт поперёк центральной канавки: нажмите на отверстие ряда f — туда встанет вывод 1, а всем ${n} выводам нужно место (${n / 2} столбцов).`);
+      if (!holes) return this.setHint(`Здесь не встанет: вывод 1 — в отверстие под курсором, всем ${n} выводам нужно место (${n / 2} × 2, ряды через 3 шага), не в шинах. На макетке — поперёк канавки, от ряда f. R — повернуть.`);
       const occ = this.occupied();
       const busy = holes.find((id) => occ.has(id));
       if (busy) return this.setHint(`Отверстие <b>${holeLabel(busy)}</b> занято (${occ.get(busy)}).`);
@@ -2047,10 +2080,11 @@ export class App {
   }
 }
 
-
-
-
-
-
-
-
+/**
+ * Сдвиг (dx, dz), повёрнутый на turns четвертей оборота — так же, как поворот детали на столе
+ * (rotation.y): при одной четверти «вправо» становится «от себя».
+ */
+function turn(dx: number, dz: number, turns: number): [number, number] {
+  for (let i = 0; i < ((turns % 4) + 4) % 4; i++) [dx, dz] = [dz, -dx];
+  return [dx, dz];
+}

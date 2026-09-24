@@ -145,7 +145,7 @@ export const mosfet: PartDef<Mosfet> = {
         if (field === "fet") s.kind = value as MosfetKind;
       },
       create: (s) => ({ type: "mosfet", kind: s.kind }),
-      hint: (s) => `Нажмите на отверстие — MOSFET займёт его и два соседних справа: <b>${mosfetPinNames(s.kind)}</b>. F — перевернуть.`,
+      hint: (s) => `Нажмите на отверстие — MOSFET займёт его и два соседних справа: <b>${mosfetPinNames(s.kind)}</b>. R — повернуть (до установки или выделенный), F — перевернуть.`,
     }),
   ],
   polar: () => true,
