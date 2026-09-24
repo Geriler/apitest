@@ -8,9 +8,10 @@ import { mosfetPin, type Chip, type ChipDef, type Component, type Endpoint, type
 import { packageChip, packageProblems, chipInner } from "../chips/package";
 import { chipsUsed } from "../chips/registry";
 import { countChip } from "../chips/count";
-import { Simulation, pinNode } from "../sim/simulation";
+import { Simulation, heatThreshold, pinNode } from "../sim/simulation";
 import { formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, truth, type KitItem, type Level, type LogicFunc } from "./levels";
+import { PIN_ROLES } from "../chips/roles";
 
 /** Напряжение питания при проверке, В. */
 export const CHECK_VOLTS = 5;
@@ -148,6 +149,10 @@ export interface CheckRow {
   volts: number;
   /** Ток от питания в этом состоянии, А. */
   amps: number;
+  /** Что сгорело или перегружено сверх номинала при этой строке (обозначения внутри микросхемы). */
+  burned: string[];
+  /** Выход «висит»: идёт за нагрузкой (к общему — ноль, к питанию — единица). */
+  floating?: boolean;
   ok: boolean;
 }
 
@@ -173,6 +178,8 @@ export interface CheckResult {
   rows: CheckRow[];
   def?: ChipDef;
   metrics?: Metrics;
+  /** Что проверить, если не прошло: симптомы, без решения. */
+  diagnosis?: string[];
   /** Какие цифры стали лучше прежних (заполняет приложение, сохраняя результат). */
   better?: (keyof Metrics)[];
 }
@@ -215,8 +222,8 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
   const io = gateIo(level);
   const rows: CheckRow[] = [];
   const n = io.inputs.length;
-  for (let m = 0; m < 1 << n; m++) {
-    const inputs = Array.from({ length: n }, (_, i) => !!(m & (1 << (n - 1 - i))));
+  /** Один прогон: входы inputs, нагрузка 100 кОм с выхода на общий (down) или на питание. */
+  const run = (inputs: boolean[], down: boolean) => {
     const u: Chip = { id: "U1", type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement: { mode: "free", x: 0, z: 0, rot: 0 } };
     const pin = (p: number): Endpoint => ({ comp: "U1", pin: p - 1 });
     const plus: Endpoint = { comp: "G1", pin: 1 };
@@ -226,7 +233,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
       [minus, pin(io.gnd)],
       ...io.inputs.map((p, i): [Endpoint, Endpoint] => [pin(p), inputs[i] ? plus : minus]),
       [pin(io.output), { comp: "RL", pin: 0 }],
-      [{ comp: "RL", pin: 1 }, minus],
+      [{ comp: "RL", pin: 1 }, down ? minus : plus],
     ];
     const scene: Scene = {
       components: [
@@ -239,15 +246,50 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
       chips: { ...chips, [def.id]: def },
     };
     const sim = new Simulation(scene);
-    let burned = false;
-    for (let t = 0; t < 0.4; t += 0.05) if (sim.step(0.05).length) burned = true;
+    const burnt = new Set<string>();
+    for (let t = 0; t < 0.4; t += 0.05) for (const c of sim.step(0.05)) if (c.id.startsWith("U1/")) burnt.add(c.id.slice(3));
+    // Сгорание в расчёте копится нагревом за секунды, проверка короче — поэтому перегрузка сверх
+    // номинала тоже провал: в жизни такая деталь сгорела бы чуть позже
+    for (const c of innerParts(def, "U1/", scene.chips!)) {
+      const limit = heatThreshold(c);
+      if (limit && sim.overload(c) > limit) burnt.add(c.id.slice(3));
+    }
     const volts = (sim.solution.voltage.get(pinNode(u, io.output - 1)) ?? 0) - (sim.solution.voltage.get(pinNode(u, io.gnd - 1)) ?? 0);
-    const expected = truth(level.func, inputs);
-    // Ток от питания без нагрузки выхода: то, что потребляет сама микросхема
+    // Ток от питания без тока нагрузки: то, что потребляет сама микросхема
     const amps = Math.max(0, Math.abs(sim.current(scene.components[0])) - Math.abs(sim.current(scene.components[2])));
-    rows.push({ inputs, expected, volts, amps, ok: !burned && (expected ? isHigh(volts, CHECK_VOLTS) : isLow(volts, CHECK_VOLTS)) });
+    return { volts, amps, burnt };
+  };
+  for (let m = 0; m < 1 << n; m++) {
+    const inputs = Array.from({ length: n }, (_, i) => !!(m & (1 << (n - 1 - i))));
+    const expected = truth(level.func, inputs);
+    // Выход должен держать уровень сам: и когда нагрузка тянет к общему, и когда к питанию.
+    // «Висящий» выход послушно пойдёт за нагрузкой и провалит один из прогонов.
+    const down = run(inputs, true), up = run(inputs, false);
+    const burnt = [...new Set([...down.burnt, ...up.burnt])];
+    const good = (v: number) => (expected ? isHigh(v, CHECK_VOLTS) : isLow(v, CHECK_VOLTS));
+    // Показываем худший из двух прогонов
+    const volts = good(down.volts) ? up.volts : down.volts;
+    rows.push({
+      inputs,
+      expected,
+      volts,
+      amps: down.amps,
+      burned: burnt,
+      floating: isLow(down.volts, CHECK_VOLTS) && isHigh(up.volts, CHECK_VOLTS),
+      ok: !burnt.length && good(down.volts) && good(up.volts),
+    });
   }
   return rows;
+}
+
+/** Детали начинки с обозначениями расчёта («U1/VT1», вложенные — «U1/D1/VT1»). */
+function innerParts(def: ChipDef, prefix: string, chips: Record<string, ChipDef>, depth = 0): Component[] {
+  return def.parts.flatMap((c) => {
+    const id = prefix + c.id;
+    if (c.type !== "chip") return [{ ...c, id } as Component];
+    const sub = chips[c.def] ?? def.scene.chips?.[c.def];
+    return sub && depth < 8 ? innerParts(sub, `${id}/`, chips, depth + 1) : [];
+  });
 }
 
 /** Проверить сборку уровня: корпус, набор, таблица истинности. */
@@ -258,8 +300,33 @@ export function checkLevel(level: Level, scene: Scene, chips: Record<string, Chi
   def.scene.chips = { ...chipsUsed(scene), ...(scene.chips ?? {}) };
   const rows = truthTable(def, level, { ...chips, ...def.scene.chips });
   const ok = rows.every((r) => r.ok);
-  if (!ok) return { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows };
+  if (!ok) return { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows, diagnosis: diagnose(level, def, rows) };
   return { ok, problems: [], rows, def, metrics: measure(scene, rows, def, { ...chips, ...def.scene.chips }) };
+}
+
+/**
+ * Что проверить, когда таблица не сошлась: симптомы словами — неподключённые выводы, сгоревшее,
+ * куда тянется выход в неверных строках. Как собрать — не говорит.
+ */
+export function diagnose(level: Level, def: ChipDef, rows: CheckRow[]): string[] {
+  const out: string[] = [];
+  const io = gateIo(level);
+  const pinName = (n: number) => `${n} ${level.names[n - 1] || PIN_ROLES[level.roles[n - 1]].name}`;
+  // Выводы, от которых внутри ничего не идёт
+  const inside = new Set(def.nets.filter((n) => n.members.length).flatMap((n) => n.pins ?? []));
+  const loose = [...io.inputs, io.output, io.vcc, io.gnd].filter((n) => !inside.has(n));
+  if (loose.length) out.push(`${loose.length > 1 ? "Выводы" : "Вывод"} ${loose.map(pinName).join(", ")} ни к чему внутри не ${loose.length > 1 ? "подключены" : "подключён"}.`);
+  const burnt = [...new Set(rows.flatMap((r) => r.burned))];
+  if (burnt.length) out.push(`При проверке сгорело или перегружено сверх номинала: ${burnt.join(", ")}. Где-то течёт слишком большой ток — посмотрите, откуда и куда.`);
+  const names = io.inputs.map((p) => level.names[p - 1] || `вывод ${p}`);
+  for (const r of rows) {
+    if (r.ok || r.burned.length) continue;
+    const when = r.inputs.map((b, i) => `${names[i]} = ${b ? 1 : 0}`).join(", ");
+    const v = formatSI(r.volts, "В");
+    const got = r.floating ? "выход ни за что не держится: куда тянет нагрузка, туда и идёт" : isLow(r.volts, CHECK_VOLTS) ? `выход прижат к общему (${v})` : isHigh(r.volts, CHECK_VOLTS) ? `выход у питания (${v})` : `выход висит посередине (${v}) — его никто уверенно не тянет или тянут сразу в обе стороны`;
+    out.push(`При ${when} нужен ${r.expected ? "единица" : "ноль"}, а ${got}.`.replace("нужен единица", "нужна единица"));
+  }
+  return out;
 }
 
 /** Строка таблицы для людей: «A=1 B=0 → 4,98 В». */

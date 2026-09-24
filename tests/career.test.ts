@@ -5,7 +5,7 @@ import { chipInner } from "../src/chips/package";
 import { setLibrary } from "../src/chips/registry";
 import { LEVELS, levelById, type LogicFunc } from "../src/career/levels";
 import { checkLevel, kitIndex, kitUsed, packageRecipe, recipeScene, referenceChips, truthTable, type Metrics } from "../src/career/build";
-import { bestOf, recordMetrics } from "../src/career/session";
+import { bestOf, failsOf, hintsOf, recordFail, recordMetrics, revealHint } from "../src/career/session";
 
 setLibrary([]);
 const refs = referenceChips();
@@ -114,5 +114,77 @@ describe("карьера: цифры сборки", () => {
     expect(recordMetrics("t", { ...base, width: 3, links: 12 })).toEqual(["width"]);
     expect(recordMetrics("t", { ...base, links: 8, idle: 2e-3 })).toEqual(["links"]);
     expect(bestOf("t")).toEqual({ width: 3, height: 4, links: 8, idle: 1e-3, transistors: 2 });
+  });
+});
+
+describe("карьера: что проверить и подсказки", () => {
+  const broken = (id: string, change: (s: ReturnType<typeof recipeScene>) => void) => {
+    const level = levelById(id)!;
+    const scene = recipeScene(level, chipFor);
+    change(scene);
+    applyBoards(scene.boards!);
+    return checkLevel(level, scene, allChips);
+  };
+  const dropWiresAt = (s: ReturnType<typeof recipeScene>, hole: string) =>
+    (s.wires = s.wires.filter((w) => ![w.a, w.b].some((e) => "hole" in e && e.hole === hole)));
+
+  it("выход не подтянут к питанию — «никто уверенно не тянет»; вывод питания без связи — назван", () => {
+    // РТЛ-инвертор без резистора к питанию (вывод 5 ни к чему не подключён)
+    const r = broken("not-rtl", (s) => dropWiresAt(s, "k:5"));
+    expect(r.ok).toBe(false);
+    const text = r.diagnosis!.join(" ");
+    expect(text).toMatch(/Вывод 5 VCC ни к чему внутри не подключён/);
+    expect(text).toMatch(/При A = 0 нужна единица, а выход (ни за что не держится|висит посередине|прижат к общему)/);
+    // Решения в диагностике нет: ни «резистор», ни «транзистор»
+    expect(text).not.toMatch(/резистор|транзистор/i);
+  });
+
+  it("вход прямо на базу — сгорает, и это сказано", () => {
+    const level = levelById("not-rtl")!;
+    const r = broken("not-rtl", (s) => {
+      // Убрать резистор базы из цепи: вход — прямо на базу
+      const vt = s.components.find((c) => c.id === "VT1")!;
+      const base = (vt.placement as { holes: string[] }).holes[1];
+      s.wires = s.wires.filter((w) => ![w.a, w.b].some((e) => "hole" in e && e.hole === "k:2"));
+      s.wires.push({ id: "X", a: { hole: "k:2" }, b: { hole: base }, color: "" });
+    });
+    expect(r.ok).toBe(false);
+    expect(r.diagnosis!.join(" ")).toMatch(/При проверке сгорело или перегружено сверх номинала: VT1/);
+    expect(level.hints).toHaveLength(2);
+  });
+
+  it("подсказки: только после двух неудачных проверок и по одной", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: Storage }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    } as Storage;
+    revealHint("h", 2);
+    expect(hintsOf("h")).toBe(0);
+    recordFail("h");
+    revealHint("h", 2);
+    expect(hintsOf("h")).toBe(0);
+    recordFail("h");
+    revealHint("h", 2);
+    expect(hintsOf("h")).toBe(1);
+    revealHint("h", 2);
+    revealHint("h", 2);
+    expect(hintsOf("h")).toBe(2);
+    expect(failsOf("h")).toBe(2);
+  });
+});
+
+describe("карьера: висящий выход", () => {
+  it("И-НЕ без связи с общим не проходит: выход «идёт за нагрузкой»", () => {
+    const level = levelById("nand-cmos")!;
+    const scene = recipeScene(level, chipFor);
+    scene.wires = scene.wires.filter((w) => ![w.a, w.b].some((e) => "hole" in e && e.hole === "k:3"));
+    applyBoards(scene.boards!);
+    const r = checkLevel(level, scene, allChips);
+    expect(r.ok).toBe(false);
+    expect(r.rows.find((x) => x.inputs.every(Boolean))!.floating).toBe(true);
+    expect(r.diagnosis!.join(" ")).toMatch(/Вывод 3 GND ни к чему внутри не подключён/);
+    expect(r.diagnosis!.join(" ")).toMatch(/При A = 1, B = 1 нужен ноль, а выход ни за что не держится/);
   });
 });

@@ -3,7 +3,7 @@
 import { kitUsed, rowText, type CheckResult, type Metrics } from "../career/build";
 import { formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level } from "../career/levels";
-import { bestOf, isDone } from "../career/session";
+import { HINT_AFTER, bestOf, failsOf, hintsOf, isDone } from "../career/session";
 import { PIN_ROLES } from "../chips/roles";
 import type { Scene } from "../model/types";
 
@@ -14,6 +14,7 @@ export interface CareerHost {
   startLevel(id: string, fresh?: boolean): void;
   checkLevel(): void;
   leaveLevel(): void;
+  revealHint(): void;
   /** Последняя проверка на этом столе. */
   lastCheck?: CheckResult;
 }
@@ -77,8 +78,23 @@ export class CareerPanel {
         ? `<p class="sub"><b>Работает!</b> ${esc(level.part)} открыт: теперь он в группе «Набор» уровней, где нужен, и остаётся вашим — внутри ваша сборка.</p>
           <div class="eyebrow">цифры сборки</div>${metricsHtml(check.metrics, bestOf(level.id), check.better)}
           <p class="sub">Меньше — лучше. Площадь — прямоугольник, в который помещается всё на поле корпуса; соединения — провода и дорожки внутри. Ток покоя и число транзисторов показывают разницу между КМОП и РТЛ.</p>`
-        : check.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("")
+        : check.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("") +
+          (check.diagnosis?.length ? `<div class="eyebrow">что проверить</div><ul class="kitlist">${check.diagnosis.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "")
       : "";
+    // Подсказки — только по кнопке и после нескольких неудачных проверок
+    const fails = failsOf(level.id), shown = hintsOf(level.id);
+    const hints = isDone(level.id) && !shown
+      ? ""
+      : `<div class="eyebrow">подсказки</div>${level.hints
+          .slice(0, shown)
+          .map((h, i) => `<p class="sub"><b>${i + 1}.</b> ${esc(h)}</p>`)
+          .join("")}${
+          shown >= level.hints.length
+            ? ""
+            : fails < HINT_AFTER
+              ? `<p class="sub">Подсказка откроется после ${HINT_AFTER} неудачных проверок (сейчас ${fails}).</p>`
+              : `<div class="row"><button class="btn inline" data-career-act="hint">Подсказка ${shown + 1} из ${level.hints.length}</button></div>`
+        }`;
     return `<div class="eyebrow">карьера · ${esc(FUNC_NAMES[level.func])}</div><h2>${esc(level.part)}</h2>
       <p><b>${esc(level.title)}.</b> ${esc(level.about)}</p>
       <div class="eyebrow">набор</div><ul class="kitlist">${kit}</ul>
@@ -86,7 +102,7 @@ export class CareerPanel {
       <p class="sub">Детали — из группы «Набор» слева, ставьте их на площадки корпуса и соединяйте дорожками (T) или проводами. Для своей проверки можно взять питание и приборы — в микросхему они не входят.</p>
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
       <button class="btn inline" data-career-act="leave">К карте</button></div>
-      ${table}${verdict}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;
+      ${table}${verdict}${hints}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;
   }
 
   bind(root: HTMLElement): void {
@@ -96,6 +112,7 @@ export class CareerPanel {
         if (act === "start") this.host.startLevel(btn.dataset.id!);
         if (act === "check") this.host.checkLevel();
         if (act === "leave") this.host.leaveLevel();
+        if (act === "hint") this.host.revealHint();
       });
     });
   }

@@ -18,7 +18,13 @@ interface Progress {
   slots?: Record<string, Scene>;
   /** Лучшие цифры по уровням — каждая сама по себе (меньше — лучше). */
   best?: Record<string, Metrics>;
+  /** Неудачных проверок по уровням и сколько подсказок открыто. */
+  fails?: Record<string, number>;
+  hints?: Record<string, number>;
 }
+
+/** После скольких неудачных проверок можно попросить подсказку. */
+export const HINT_AFTER = 2;
 
 function load(): Progress {
   try {
@@ -49,6 +55,22 @@ function store(): boolean {
 export function unlock(def: ChipDef, levelId: string): boolean {
   progress = { ...progress, defs: { ...progress.defs, [levelId]: def } };
   return store();
+}
+
+/** Неудачных проверок на уровне и открытых подсказок. */
+export const failsOf = (levelId: string) => progress.fails?.[levelId] ?? 0;
+export const hintsOf = (levelId: string) => progress.hints?.[levelId] ?? 0;
+
+export function recordFail(levelId: string): void {
+  progress = { ...progress, fails: { ...progress.fails, [levelId]: failsOf(levelId) + 1 } };
+  store();
+}
+
+/** Открыть следующую подсказку (если уже можно). */
+export function revealHint(levelId: string, total: number): void {
+  if (failsOf(levelId) < HINT_AFTER || hintsOf(levelId) >= total) return;
+  progress = { ...progress, hints: { ...progress.hints, [levelId]: hintsOf(levelId) + 1 } };
+  store();
 }
 
 /** Лучшие цифры уровня. */

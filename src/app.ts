@@ -47,7 +47,7 @@ import { caseOf, chipInner, dipSize, packageChip, packageProblems, spaceUsed } f
 import { chipsUsed, libraryChips, referenceList, resolveChip, setCareerChips, setChipToolSource, setLibrary, setReference } from "./chips/registry";
 import { checkLevel, levelScene, referenceChips, type CheckResult } from "./career/build";
 import { levelById, type Level } from "./career/levels";
-import { activeLevel, careerDefs, kitTools, loadSlot, missing, recordMetrics, saveSlot, slotOf, toolAllowed, unlock, workshopScene } from "./career/session";
+import { activeLevel, careerDefs, kitTools, loadSlot, missing, recordFail, recordMetrics, revealHint, saveSlot, slotOf, toolAllowed, unlock, workshopScene } from "./career/session";
 import { CareerMap, MenuScreen } from "./ui/screens";
 import { CareerPanel } from "./ui/career";
 import { countParts } from "./chips/count";
@@ -1182,9 +1182,20 @@ export class App {
       setCareerChips(careerDefs());
       this.applyMode();
       this.toast(first ? `Открыт ${level.part}!` : `${level.part} обновлён`, "Таблица истинности сошлась. Внутри — ваша сборка; компонент появится в мастерской и в наборах следующих уровней.");
+    } else if (this.lastCheck.rows.length) {
+      // Собрано, но работает не так — это считается к подсказкам (ошибки набора и корпуса — нет)
+      recordFail(level.id);
     }
     this.careerOpen = false;
     this.setCareerOpen(true);
+  }
+
+  /** Открыть следующую подсказку уровня. */
+  revealHint(): void {
+    const level = this.careerLevel();
+    if (!level) return;
+    revealHint(level.id, level.hints.length);
+    this.refreshInspector();
   }
 
   /** Выйти из уровня — на карту (стол уровня сохранён). */
