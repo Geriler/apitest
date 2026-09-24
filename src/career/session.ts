@@ -14,6 +14,8 @@ const STORE_KEY = "maketka.career.v1";
 interface Progress {
   /** Открытые компоненты: уровень → микросхема, собранная игроком. */
   defs: Record<string, ChipDef>;
+  /** Незаконченные столы: уровень (или «workshop») → сцена, как её оставили. */
+  slots?: Record<string, Scene>;
 }
 
 function load(): Progress {
@@ -32,9 +34,7 @@ let progress: Progress = load();
 export const careerDefs = (): ChipDef[] => Object.values(progress.defs);
 export const isDone = (id: string) => !!progress.defs[id];
 
-/** Открыть компонент: сохранить собранную микросхему. false — хранилище недоступно. */
-export function unlock(def: ChipDef, levelId: string): boolean {
-  progress = { defs: { ...progress.defs, [levelId]: def } };
+function store(): boolean {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(progress));
     return true;
@@ -42,6 +42,20 @@ export function unlock(def: ChipDef, levelId: string): boolean {
     return false;
   }
 }
+
+/** Открыть компонент: сохранить собранную микросхему. false — хранилище недоступно. */
+export function unlock(def: ChipDef, levelId: string): boolean {
+  progress = { ...progress, defs: { ...progress.defs, [levelId]: def } };
+  return store();
+}
+
+/** Стол уровня или мастерской, как его оставили (слот — id уровня или «workshop»). */
+export const loadSlot = (slot: string): Scene | undefined => progress.slots?.[slot];
+export function saveSlot(slot: string, scene: Scene): void {
+  progress = { ...progress, slots: { ...progress.slots, [slot]: scene } };
+  store();
+}
+export const slotOf = (scene: Scene): string | undefined => (scene.career?.workshop ? "workshop" : scene.career?.level);
 
 /** Чего не хватает, чтобы взяться за уровень: функции микросхем набора, которые ещё не открыты. */
 export function missing(level: Level): string[] {
@@ -54,7 +68,7 @@ export function missing(level: Level): string[] {
 // ─── Текущий уровень ─────────────────────────────────────────────────────────
 
 /** Уровень, который собирают на столе (по сцене). */
-export const activeLevel = (scene: Scene): Level | undefined => (scene.career ? levelById(scene.career.level) : undefined);
+export const activeLevel = (scene: Scene): Level | undefined => (scene.career?.level ? levelById(scene.career.level) : undefined);
 
 /** Приборы и питание — для проверки на столе; в микросхему они не входят. */
 const TEST_TOOLS = new Set(["psu", "battery", "meter", "scope", "switch", "button"]);
@@ -62,8 +76,22 @@ const BUILTIN = new Set(["select", "wire", "trace", "delete", "bb", "pcb"]);
 
 /** Можно ли пользоваться инструментом в этой сцене. */
 export function toolAllowed(scene: Scene, tool: string): boolean {
-  if (!scene.career) return !tool.startsWith("kit:");
+  // Песочница и мастерская — все детали (микросхемы — по режиму: заводские или открытые)
+  if (!scene.career?.level) return !tool.startsWith("kit:");
   return BUILTIN.has(tool) || TEST_TOOLS.has(tool) || tool.startsWith("kit:");
+}
+
+/** Мастерская: свободный стол карьеры — базовые детали и открытые модули. */
+export function workshopScene(): Scene {
+  return {
+    components: [],
+    wires: [],
+    boards: [
+      { id: "BB1", kind: "breadboard", x: 0, z: 0 },
+      { id: "PCB1", kind: "pcb", x: 0, z: 21, cols: 24, rows: 14 },
+    ],
+    career: { workshop: true },
+  };
 }
 
 /** Базовый инструмент детали набора и её фиксированные настройки. */

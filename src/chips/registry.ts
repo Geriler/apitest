@@ -34,6 +34,13 @@ export function setCareerChips(defs: Iterable<ChipDef>): void {
   for (const d of defs) career.set(d.id, d);
 }
 
+/** Какие микросхемы показывать кнопками (песочница — заводские и свои, карьера — открытые). */
+let toolSource: () => ChipDef[] = () => [...referenceList(), ...libraryChips()];
+export function setChipToolSource(f: () => ChipDef[]): void {
+  toolSource = f;
+}
+export const toolChips = (): ChipDef[] => toolSource();
+
 /** Эталонные компоненты, по обозначению. */
 export function referenceList(): ChipDef[] {
   return [...reference.values()].sort((a, b) => a.name.localeCompare(b.name, "ru"));

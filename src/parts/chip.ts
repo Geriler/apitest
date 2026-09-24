@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { HOLE_BY_ID, holeLabel, packageName, pinLayoutText, pinOffsets } from "../model/breadboard";
 import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
-import { libraryChips, referenceList, resolveChip } from "../chips/registry";
+import { resolveChip, toolChips } from "../chips/registry";
 import { pinNode } from "../sim/nodes";
 import { formatSI } from "../sim/resistorCodes";
 import { type ComponentView, blackPlastic, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
@@ -53,7 +53,7 @@ export const chip: PartDef<Chip> = {
   onBoard: () => true,
   // Инструменты — заводские компоненты карьеры и по одному на свою микросхему библиотеки
   get tools() {
-    return [...referenceList(), ...libraryChips()].map(chipTool);
+    return toolChips().map(chipTool);
   },
   polar: () => true,
   label: (c) => `${c.name} (${packageName(c.package, c.pins)})`,

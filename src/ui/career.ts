@@ -2,7 +2,7 @@
 
 import { kitUsed, rowText, type CheckResult } from "../career/build";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level } from "../career/levels";
-import { isDone, missing } from "../career/session";
+import { isDone } from "../career/session";
 import { PIN_ROLES } from "../chips/roles";
 import type { Scene } from "../model/types";
 
@@ -10,7 +10,7 @@ export interface CareerHost {
   readonly scene: Scene;
   /** Уровень, который сейчас собирают (или нет). */
   careerLevel(): Level | undefined;
-  startLevel(id: string): void;
+  startLevel(id: string, fresh?: boolean): void;
   checkLevel(): void;
   leaveLevel(): void;
   /** Последняя проверка на этом столе. */
@@ -24,23 +24,16 @@ export class CareerPanel {
 
   render(): [string, string] {
     const level = this.host.careerLevel();
-    return level ? ["cl", this.levelHtml(level)] : ["cc", this.listHtml()];
+    return level ? ["cl", this.levelHtml(level)] : ["cc", this.workshopHtml()];
   }
 
-  private listHtml(): string {
-    const done = LEVELS.filter((l) => isDone(l.id)).length;
-    const items = LEVELS.map((l) => {
-      const need = missing(l);
-      const kit = l.kit.map((k) => `${kitLabel(k)} × ${k.count}`).join(", ");
-      const state = isDone(l.id) ? "открыт — ваша сборка идёт в наборы следующих уровней" : need.length ? `сначала откройте: ${need.join(", ")}` : "доступен";
-      return `<li class="${isDone(l.id) ? "done" : need.length ? "locked" : ""}"><span><b>${esc(l.part)}</b> ${esc(l.title)}<br />
-        <small>${esc(kit)}</small><br /><small>${esc(state)}</small></span>
-        <span class="row"><button class="btn inline" data-career-act="start" data-id="${l.id}" ${need.length ? "disabled" : ""}>${isDone(l.id) ? "Заново" : "Собрать"}</button></span></li>`;
-    }).join("");
-    return `<div class="eyebrow">карьера</div><h2>Открыто ${done} из ${LEVELS.length}</h2>
-      <p class="sub">Каждый компонент открывается, когда соберёшь его сам — ровно из выданного набора, ни деталью больше. Корпус — SOT-23-5 на переходнике, выводы как у настоящих 74LVC1G. Собрал — нажми «Проверить»: песочница сама прогонит таблицу истинности при питании 5 В. Открытое становится деталью, из которой собираются следующие уровни.</p>
-      <ul class="list projects levels">${items}</ul>
-      <p class="sub">В песочнице все эти компоненты есть сразу — в «заводском» исполнении.</p>`;
+  private workshopHtml(): string {
+    const open = LEVELS.filter((l) => isDone(l.id));
+    return `<div class="eyebrow">карьера</div><h2>Мастерская</h2>
+      <p>Свободный стол: базовые детали — резисторы, транзисторы, приборы — и все модули, которые вы открыли. Закрытых здесь нет: открывайте их на карте.</p>
+      <div class="eyebrow">открытые модули</div>
+      ${open.length ? `<ul class="kitlist">${open.map((l) => `<li>${esc(l.part)} — ${esc(l.title)}</li>`).join("")}</ul>` : `<p class="sub">Пока ни одного — соберите первый уровень на карте.</p>`}
+      <p class="sub">«Очистить» убирает всё с мастерской. Стол сохраняется сам и ждёт вас, пока вы на уровнях.</p>`;
   }
 
   private levelHtml(level: Level): string {
@@ -70,7 +63,7 @@ export class CareerPanel {
       <div class="eyebrow">выводы корпуса</div><ul class="list">${pins}</ul>
       <p class="sub">Детали — из группы «Набор» слева, ставьте их на площадки корпуса и соединяйте дорожками (T) или проводами. Для своей проверки можно взять питание и приборы — в микросхему они не входят.</p>
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
-      <button class="btn inline" data-career-act="leave">Выйти из уровня</button></div>
+      <button class="btn inline" data-career-act="leave">К карте</button></div>
       ${table}${verdict}`;
   }
 

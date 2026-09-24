@@ -297,6 +297,55 @@
   .pill.bad { color: var(--danger); background: var(--danger-soft); }
   .sub.bad { color: var(--danger); }
   details.group[hidden] { display: none; }
+  /* ── Режим карьеры: свой акцент ─────────────── */
+  body.mode-career { --copper: #6b52d6; --copper-soft: #e6e0fa; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) body.mode-career { --copper: #a592ff; --copper-soft: #2c2748; } }
+  :root[data-theme="dark"] body.mode-career { --copper: #a592ff; --copper-soft: #2c2748; }
+  body.mode-career .sandbox-only, body:not(.mode-career) .career-only { display: none !important; }
+
+  /* ── Экраны: меню и карта ───────────────────── */
+  .screen { position: fixed; inset: 0; z-index: 60; overflow: auto; color: var(--ink); font-family: var(--sans); }
+  .screen[hidden] { display: none; }
+  .menu-screen { display: grid; place-items: center; padding: 16px; background: radial-gradient(ellipse at 30% 20%, #3a4c51, #1b2426 70%); }
+  .menu-box { max-width: 760px; width: 100%; text-align: center; color: #eef2f0; }
+  .menu-box h1 { font: 700 44px var(--sans); margin: 0 0 4px; letter-spacing: 0.01em; }
+  .menu-box .sub { color: #b9c5c7; }
+  .menu-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 28px 0 18px; }
+  .menu-card { display: flex; flex-direction: column; gap: 10px; text-align: left; padding: 22px; border-radius: 14px; border: 1px solid #4b5d62; background: rgba(255, 255, 255, 0.06); color: #eef2f0; cursor: pointer; font: 400 14px var(--sans); transition: transform 0.12s, border-color 0.12s, background 0.12s; }
+  .menu-card b { font: 700 22px var(--sans); }
+  .menu-card small { font: 600 12px var(--mono); color: #c9bdff; }
+  .menu-card:hover, .menu-card:focus-visible { transform: translateY(-2px); border-color: #e0955c; background: rgba(255, 255, 255, 0.1); }
+  .menu-card.career:hover, .menu-card.career:focus-visible { border-color: #a592ff; }
+  .menu-card.current { outline: 2px solid rgba(255, 255, 255, 0.35); }
+
+  .map-screen { background: #151a2b; background-image: linear-gradient(rgba(165, 146, 255, 0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(165, 146, 255, 0.07) 1px, transparent 1px); background-size: 32px 32px; color: #e8e6f5; }
+  .map-head { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 20px; background: rgba(21, 26, 43, 0.92); border-bottom: 1px solid #2e3350; }
+  .map-head h2 { margin: 0; font: 700 20px var(--sans); }
+  .map-head .eyebrow { color: #a592ff; }
+  .map-body { display: flex; gap: 16px; padding: 16px 20px; align-items: flex-start; flex-wrap: wrap; }
+  .map-scroll { flex: 1 1 560px; overflow-x: auto; }
+  .map-svg { display: block; max-width: none; }
+  .map-svg .edge { fill: none; stroke: #3d4366; stroke-width: 2.5; }
+  .map-svg .edge.lit { stroke: #a592ff; }
+  .map-svg .arrow { fill: #3d4366; }
+  .map-svg .arrow.lit { fill: #a592ff; }
+  .map-svg .node { cursor: pointer; }
+  .map-svg .node rect { fill: #1f2540; stroke: #3d4366; stroke-width: 2; }
+  .map-svg .node .t { font: 700 15px var(--mono); fill: #e8e6f5; }
+  .map-svg .node .s { font: 500 12px var(--sans); fill: #a6a9c6; }
+  .map-svg .node.open rect { stroke: #a592ff; fill: #28264a; }
+  .map-svg .node.done rect { stroke: #52b97f; fill: #1c3a2e; }
+  .map-svg .node.locked { opacity: 0.55; }
+  .map-svg .node.root { cursor: default; }
+  .map-svg .node.chosen rect { stroke-width: 3.5; filter: drop-shadow(0 0 8px rgba(165, 146, 255, 0.7)); }
+  .map-svg .node:not(.root):hover rect { stroke-width: 3; }
+  .map-card { flex: 0 1 320px; min-width: 260px; padding: 16px; border-radius: 12px; background: #1f2540; border: 1px solid #2e3350; }
+  .map-card h3 { margin: 4px 0 8px; font: 700 20px var(--mono); }
+  .map-card .eyebrow { color: #a592ff; }
+  .map-card .sub, .map-card p { color: #c7c9e0; }
+  .map-card .bad { color: #ff9a8a; }
+  .map-screen .btn { background: #28264a; color: #e8e6f5; border-color: #4a4f7a; }
+  .map-screen .btn.primary { background: #6b52d6; border-color: #6b52d6; color: #fff; }
   .truth { width: 100%; border-collapse: collapse; font: 500 12px var(--mono); margin: 6px 0 10px; }
   .truth th, .truth td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: center; }
   .truth td.ok { color: #2f9e5a; font-weight: 700; }
@@ -499,7 +548,9 @@
   </nav>
 
   <div id="actions">
-    <select class="btn" id="demo-select" aria-label="Загрузить пример">
+    <button class="btn" id="btn-menu" title="Выбор режима: песочница или карьера">Меню</button>
+    <button class="btn career-only" id="btn-map" title="Карта карьеры: уровни и мастерская">Карта</button>
+    <select class="btn sandbox-only" id="demo-select" aria-label="Загрузить пример">
       <option value="" selected>Примеры…</option>
       <option value="lamps">Лампы и перегрев резистора</option>
       <option value="leds">Конденсатор и светодиоды</option>
@@ -512,8 +563,7 @@
     <button class="btn" id="btn-redo" title="Вернуть (Ctrl+Y)" aria-label="Вернуть" disabled>↷</button>
     <button class="btn" id="btn-clear">Очистить</button>
     <button class="btn" id="btn-schematic" aria-pressed="false" title="Принципиальная схема сборки">Схема</button>
-    <button class="btn" id="btn-career" aria-pressed="false" title="Открывать компоненты, собирая их из выданного набора">Карьера</button>
-    <button class="btn" id="btn-projects" aria-pressed="false" title="Сохранить, открыть, скачать файлом">Проекты</button>
+    <button class="btn sandbox-only" id="btn-projects" aria-pressed="false" title="Сохранить, открыть, скачать файлом">Проекты</button>
     <details class="menu" id="settings-menu">
       <summary class="btn" title="Допуски, ток, замена сгоревших">Настройки</summary>
       <div class="menu-body panel">

@@ -1,6 +1,7 @@
 import { App } from "./app";
 import { blinkerScene, demoScene, ledDemoScene, mosfetScene, pcbScene, scopeScene } from "./demo";
 import { World } from "./view/world";
+import { workshopScene } from "./career/session";
 
 async function start(): Promise<void> {
   // Шрифты нужны до отрисовки текстур с подписями; ждём не дольше 1,5 с.
@@ -16,9 +17,14 @@ async function start(): Promise<void> {
   };
   setInsets();
   window.addEventListener("resize", setInsets);
-  const saved = App.load();
-  const app = new App(world, { inspector: $("inspector"), hint: $("hint"), toasts: $("toasts"), tools: $("tools"), schematic: $("schematic") }, saved ?? demoScene());
-  if (!saved) {
+  // У каждого режима свой стол: песочница — схема или пример, карьера — уровень или мастерская
+  const mode = App.loadMode();
+  const saved = mode === "career" ? App.loadCareer() : App.load();
+  const app = new App(world, { inspector: $("inspector"), hint: $("hint"), toasts: $("toasts"), tools: $("tools"), schematic: $("schematic") }, saved ?? (mode === "career" ? workshopScene() : demoScene()));
+  // Первый раз — выбор режима; в карьере без начатого стола — карта
+  if (!mode) app.openMenu();
+  else if (mode === "career" && !saved) app.openMap();
+  if (!saved && mode !== "career") {
     app.toast("Это пример", "Замкните тумблер SA2 (нажмите на него): резистор R2 22 Ом не выдержит мощности и сгорит. Потом выберите R2 и поставьте номинал побольше.");
   }
 
@@ -149,9 +155,8 @@ async function start(): Promise<void> {
   });
 
   // «Проекты» — панель справа
-  const careerBtn = $("btn-career");
-  app.onCareer = () => careerBtn.setAttribute("aria-pressed", String(app.careerOpen));
-  careerBtn.addEventListener("click", () => app.setCareerOpen(!app.careerOpen));
+  $("btn-menu").addEventListener("click", () => app.openMenu());
+  $("btn-map").addEventListener("click", () => app.openMap());
   const projBtn = $("btn-projects");
   app.onProjects = () => projBtn.setAttribute("aria-pressed", String(app.projectsOpen));
   projBtn.addEventListener("click", () => app.setProjectsOpen(!app.projectsOpen));
@@ -214,8 +219,8 @@ async function start(): Promise<void> {
       clearTimeout(armed);
       armed = undefined;
       clear.textContent = "Очистить";
-      // Пустой стол: без деталей, проводов, дорожек и плат
-      app.replaceScene({ components: [], wires: [], boards: [] });
+      // Песочница — пустой стол; уровень карьеры — чистый корпус; мастерская — пустые платы
+      app.clearTable();
       return;
     }
     clear.textContent = "Точно очистить?";
