@@ -59,3 +59,16 @@ export function part<C extends Component>(c: C): PartDef<C> {
 }
 
 export type { PartDef, ToolDef } from "./types";
+
+/**
+ * Убрать из схемы детали, которых больше нет в реестре (например, из старой версии песочницы),
+ * и провода к ним. Возвращает обозначения убранных.
+ */
+export function dropUnknownParts(scene: Scene): string[] {
+  const gone = scene.components.filter((c) => !(c.type in PARTS)).map((c) => c.id);
+  if (!gone.length) return gone;
+  const set = new Set(gone);
+  scene.components = scene.components.filter((c) => !set.has(c.id));
+  scene.wires = scene.wires.filter((w) => ![w.a, w.b].some((e) => "comp" in e && set.has(e.comp)));
+  return gone;
+}

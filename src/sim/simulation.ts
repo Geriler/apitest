@@ -6,7 +6,7 @@
 import { HOLE_BY_ID } from "../model/breadboard";
 import { FLAT_WIRE_EXTRA, TRACE_OHM_PER_MM, WIRE_OHM_PER_MM, isFlatWire, type Component, type ComponentState, type Endpoint, type Mosfet, type Scene, type Transistor, type WireShape } from "../model/types";
 import { resolveChip } from "../chips/registry";
-import { part } from "../parts";
+import { PARTS, part } from "../parts";
 import { mosfetState, type MosfetState } from "../parts/mosfet";
 import { transistorState, type TransistorState } from "../parts/transistor";
 import { endpointNode } from "./nodes";
@@ -127,6 +127,8 @@ export class Simulation {
     const out: Component[] = [];
     const add = (list: Component[], prefix: string, depth: number) => {
       for (const c of list) {
+        // Деталь неизвестного типа (из старой версии) в расчёт не идёт
+        if (!(c.type in PARTS)) continue;
         const x = prefix ? ({ ...c, id: prefix + c.id } as Component) : c;
         out.push(x);
         if (x.type !== "chip" || depth > 8) continue;

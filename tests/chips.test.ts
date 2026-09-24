@@ -6,6 +6,7 @@ import { HOLE_BY_ID, applyBoards, chipPinAt, holeLabel, newChipBoard, type Board
 import { boardConflicts, mosfetPin, type Chip, type ChipDef, type Component, type Endpoint, type Scene } from "../src/model/types";
 import { Simulation, pinNode } from "../src/sim/simulation";
 import { schematicSvg } from "../src/view/schematic";
+import { dropUnknownParts } from "../src/parts";
 
 const free = () => ({ mode: "free" as const, x: 0, z: 0, rot: 0 });
 const on = (...holes: string[]) => ({ mode: "board" as const, holes });
@@ -299,5 +300,18 @@ describe("свои микросхемы", () => {
     expect(countShort(countChip(packed, scene([], [])))).toBe("8 транзисторов");
     // Обвязка (батарея) не считается
     expect(countParts([bat(), R("R1", 1)], scene([], [])).total).toBe(1);
+  });
+});
+
+describe("схемы из старых версий", () => {
+  it("деталь, которой больше нет (старый «Корпус»), убирается вместе с проводами; расчёт не падает", () => {
+    const sc = scene(
+      [{ id: "X1", type: "chipcase", placement: free() } as unknown as Component, R("R1", 1000), bat()],
+      [[pin("X1", 0), pin("R1", 0)], [pin("GB1", 1), pin("R1", 0)], [pin("GB1", 0), pin("R1", 1)]],
+    );
+    expect(dropUnknownParts(sc)).toEqual(["X1"]);
+    expect(sc.components.map((c) => c.id)).toEqual(["R1", "GB1"]);
+    expect(sc.wires.map((w) => w.id)).toEqual(["W1", "W2"]);
+    expect(Math.abs(new Simulation(sc).current(sc.components[0]))).toBeGreaterThan(0);
   });
 });

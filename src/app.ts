@@ -34,7 +34,7 @@ import { formatSI } from "./sim/resistorCodes";
 import { Simulation, heatThreshold, pinNode } from "./sim/simulation";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
 import { buildComponentView, buildTraceView, buildWireView, type ComponentView, type WireView } from "./view/builders";
-import { PARTS, part, pinLabelOf, pinsOf } from "./parts";
+import { PARTS, dropUnknownParts, part, pinLabelOf, pinsOf } from "./parts";
 import type { World } from "./view/world";
 import { ProjectsPanel } from "./ui/projects";
 import { loadLibrary, saveLibrary } from "./chips/library";
@@ -141,6 +141,7 @@ export class App {
     private ui: { inspector: HTMLElement; hint: HTMLElement; toasts: HTMLElement; tools: HTMLElement; schematic?: HTMLElement },
     initial: Scene,
   ) {
+    const gone = dropUnknownParts(initial);
     this.scene = initial;
     setLibrary(loadLibrary());
     this.adoptChips(initial);
@@ -170,6 +171,7 @@ export class App {
     this.setTool("select");
     // Открыли страницу внутри микросхемы — вернуть полоску пути (или забыть устаревший путь)
     this.syncChipStack();
+    this.reportDropped(gone);
     // Если кадры редкие, физика догоняет сама
     setInterval(() => this.tick(), 50);
   }
@@ -452,6 +454,7 @@ export class App {
   replaceScene(s: Scene): void {
     // Другая схема — уже не тот проект (открытие проекта задаёт имя после загрузки)
     this.projects.name = "";
+    const gone = dropUnknownParts(s);
     this.adoptChips(s);
     this.scene = s;
     this.adoptBoards();
@@ -466,6 +469,12 @@ export class App {
     this.changed();
     this.confirmLeave = false;
     this.syncChipStack();
+    this.reportDropped(gone);
+  }
+
+  /** Сказать, что из схемы убраны детали, которых в этой версии нет. */
+  private reportDropped(gone: string[]): void {
+    if (gone.length) this.toast("Убраны устаревшие детали", `${gone.join(", ")} — таких деталей в песочнице больше нет (вместе с ними — их провода).`);
   }
 
   // ─── Сборка 3D ─────────────────────────────────────────────────────────
