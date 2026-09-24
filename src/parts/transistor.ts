@@ -109,6 +109,7 @@ export const transistor: PartDef<Transistor> = {
   type: "transistor",
   prefix: "VT",
   pins: 3,
+  countAs: (c) => ({ name: TRANSISTORS[c.kind].label, transistor: true }),
   onBoard: () => true,
   tools: [
     toolFor<Transistor>()({

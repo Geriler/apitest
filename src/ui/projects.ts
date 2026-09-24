@@ -2,6 +2,7 @@
 
 import type { ChipDef, ChipPin, Scene } from "../model/types";
 import { PIN_ROLES, pinTitle } from "../parts/chippin";
+import { countChip, countChips, countDetails, countShort, type PartCount } from "../chips/count";
 import { deleteProject, listProjects, loadProject, parseProjectFile, projectFile, saveProject } from "../projects";
 
 /** Что панели проектов нужно от приложения. */
@@ -12,7 +13,7 @@ export interface ProjectsHost {
   /** Перерисовать панель справа. */
   refreshInspector(): void;
   /** Раздел «Микросхема»: выводы открытой схемы, что мешает упаковать, библиотека. */
-  chipInfo(): { pins: ChipPin[]; problems: string[]; size: number; space: number; editing?: ChipDef; library: ChipDef[] };
+  chipInfo(): { pins: ChipPin[]; problems: string[]; size: number; space: number; count: PartCount; editing?: ChipDef; library: ChipDef[] };
   packageChip(name: string, update: boolean): void;
   openChip(id: string): void;
   deleteChip(id: string): void;
@@ -77,13 +78,14 @@ export class ProjectsPanel {
     const can = !info.problems.length;
     const lib = info.library
       .map(
-        (d) => `<li><span><b>${esc(d.name)}</b><br /><small>DIP-${d.pins} · ${plural(d.parts.length, "деталь", "детали", "деталей")} внутри</small></span>
+        (d) => `<li><span><b>${esc(d.name)}</b><br /><small>DIP-${d.pins} · ${countShort(countChip(d, this.host.scene))}</small></span>
           <span class="row"><button class="btn inline" data-proj-act="chipOpen" data-name="${esc(d.id)}">Открыть схему</button>
           <button class="btn inline danger" data-proj-act="chipDelete" data-name="${esc(d.id)}">${this.confirmDelete === `chip:${d.id}` ? "Точно?" : "Удалить"}</button></span></li>`,
       )
       .join("");
     return `<div class="board-section"><div class="eyebrow">микросхема</div>
       <h3>${info.editing ? `Схема микросхемы «${esc(info.editing.name)}»` : "Упаковать эту схему в DIP"}</h3>
+      ${info.count.total ? `<div class="kv"><span>Внутри</span><span>${countShort(info.count)}</span></div><p class="sub">${esc(countDetails(info.count))}${info.count.chips.size ? `; из своих микросхем: ${esc(countChips(info.count))}` : ""}</p>` : ""}
       ${pins}${info.pins.length ? `<div class="kv"><span>Место в DIP-${info.size}</span><span>${info.space} из ${2 * info.size} клеток</span></div>` : ""}${problems}
       <p class="sub">Батареи, блоки питания и приборы в микросхему не входят — это обвязка для проверки. Внутри всё считается честно, детали греются и горят.</p>
       <div class="field"><label for="f-chip-name">Название</label>

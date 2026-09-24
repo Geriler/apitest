@@ -21,6 +21,7 @@ export const resistor: PartDef<Resistor> = {
   type: "resistor",
   prefix: "R",
   pins: 2,
+  countAs: () => ({ name: "резистор" }),
   onBoard: (c) => c.variant !== "smd",
   tools: [
     toolFor<Resistor>()({

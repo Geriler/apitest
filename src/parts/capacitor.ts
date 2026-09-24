@@ -13,6 +13,7 @@ export const capacitor: PartDef<Capacitor> = {
   type: "capacitor",
   prefix: "C",
   pins: 2,
+  countAs: () => ({ name: "конденсатор" }),
   // Даже маленький электролит (5 × 11 мм) выше и шире корпуса DIP
   notInChip: (c) => (c.variant === "electrolytic" ? "электролитический конденсатор выше и шире корпуса DIP — возьмите керамический" : undefined),
   onBoard: () => true,

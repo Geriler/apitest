@@ -39,6 +39,7 @@ import { ProjectsPanel } from "./ui/projects";
 import { loadLibrary, saveLibrary } from "./chips/library";
 import { chipPins, dipSize, packageChip, packageProblems, spaceUsed } from "./chips/package";
 import { chipsUsed, libraryChips, resolveChip, setLibrary } from "./chips/registry";
+import { countParts } from "./chips/count";
 import { TOOL_KEYS, placeTools, renderToolButtons, type PlaceTool, type Tool } from "./ui/tools";
 import { SchematicPanel } from "./ui/schematicPanel";
 import { boardPanel, boardToolPanel, componentPanel, holePanel, overviewPanel, traceToolPanel, tracePanel, wirePanel, wireToolPanel } from "./ui/panels";
@@ -694,6 +695,7 @@ export class App {
       problems: packageProblems(this.scene),
       size: dipSize(this.scene),
       space: spaceUsed(this.scene),
+      count: countParts(this.scene.components, this.scene),
       editing: this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined,
       library: libraryChips(),
     };

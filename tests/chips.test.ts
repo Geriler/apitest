@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chipsUsed, setLibrary } from "../src/chips/registry";
 import { dipSize, packageChip, packageProblems } from "../src/chips/package";
+import { countChip, countChips, countDetails, countParts, countShort } from "../src/chips/count";
 import { mosfetPin, type Chip, type ChipDef, type ChipPin, type ChipPinRole, type Component, type Endpoint, type Scene } from "../src/model/types";
 import { Simulation, pinNode } from "../src/sim/simulation";
 import { schematicSvg } from "../src/view/schematic";
@@ -172,5 +173,30 @@ describe("свои микросхемы", () => {
       if (a && b) expect(y, `A=${a} B=${b}`).toBeLessThan(0.5);
       else expect(y, `A=${a} B=${b}`).toBeGreaterThan(4.5);
     }
+  });
+
+  it("состав: 4 MOSFET — «4 транзистора»; RTL-вариант — «3 детали, из них 2 транзистора»; из двух NAND — 8 транзисторов «по кусочкам»", () => {
+    const m = (id: string, kind: "2N7000" | "BS250"): Component => ({ id, type: "mosfet", kind, placement: free() });
+    const cmos = packageChip(
+      scene([m("VT1", "BS250"), m("VT2", "BS250"), m("VT3", "2N7000"), m("VT4", "2N7000"), P("X1", 1, "in"), P("X2", 2, "out")], []),
+      "Мой NAND",
+      "nand4",
+      1,
+    );
+    const k = countChip(cmos, scene([], []));
+    expect(countShort(k)).toBe("4 транзистора");
+    expect(countDetails(k)).toBe("2 × 2N7000, 2 × BS250");
+    const bjt = (id: string): Component => ({ id, type: "transistor", kind: "BC547", placement: free() });
+    const rtl = packageChip(scene([bjt("VT1"), bjt("VT2"), R("R1", 1000), P("X1", 1, "in"), P("X2", 2, "out")], []), "RTL", "rtl", 1);
+    expect(countShort(countChip(rtl, scene([], [])))).toBe("3 детали, из них 2 транзистора");
+    // Триггер из двух своих NAND: считаем по кусочкам
+    const latch = scene([chipOf("D1", cmos), chipOf("D2", cmos), P("X1", 1, "in"), P("X2", 2, "out")], [], { [cmos.id]: cmos });
+    const kl = countParts(latch.components, latch);
+    expect(countShort(kl)).toBe("8 транзисторов");
+    expect(countChips(kl)).toBe("2 × Мой NAND");
+    const packed = packageChip(latch, "Триггер", "latch", 2);
+    expect(countShort(countChip(packed, scene([], [])))).toBe("8 транзисторов");
+    // Обвязка (батарея) и сами выводы не считаются
+    expect(countParts([bat(), P("X9", 1, "in"), R("R1", 1)], scene([], [])).total).toBe(1);
   });
 });

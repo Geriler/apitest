@@ -13,6 +13,7 @@ export const led: PartDef<Led> = {
   type: "led",
   prefix: "HL",
   pins: 2,
+  countAs: () => ({ name: "светодиод" }),
   onBoard: () => true,
   tools: [
     toolFor<Led>()({

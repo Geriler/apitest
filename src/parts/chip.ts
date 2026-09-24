@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { HOLE_BY_ID, holeLabel } from "../model/breadboard";
 import type { Chip, ChipDef, ChipPinRole } from "../model/types";
+import { countChip, countChips, countDetails, countShort } from "../chips/count";
 import { libraryChips, resolveChip } from "../chips/registry";
 import { pinNode } from "../sim/nodes";
 import { formatSI } from "../sim/resistorCodes";
@@ -87,7 +88,7 @@ export const chip: PartDef<Chip> = {
   power: () => 0,
   readout: (c, sim) => {
     const def = resolveChip(sim.scene, c.def);
-    return `<div class="kv"><span>${def ? `${def.name}, DIP-${def.pins}` : "Нет описания микросхемы"}</span><span>${def ? `${def.parts.length} дет. внутри` : ""}</span></div>`;
+    return `<div class="kv"><span>${def ? `${def.name}, DIP-${def.pins}` : "Нет описания микросхемы"}</span><span>${def ? countShort(countChip(def, sim.scene)) : ""}</span></div>`;
   },
   status: (c, sim) => (resolveChip(sim.scene, c.def) ? pill("ok", "РАБОТАЕТ") : pill("bad", "НЕТ ОПИСАНИЯ — ОТКРОЙТЕ ПРОЕКТ, ГДЕ ОНА ЕСТЬ")),
 
@@ -100,11 +101,14 @@ export const chip: PartDef<Chip> = {
       return kv(`${i + 1} ${chipPinName(def, i)}`, v === undefined ? "не подключён" : formatSI(v, "В"));
     }).join("");
     const burned = def.parts.filter((p) => sim.state(`${c.id}/${p.id}`).burned).map((p) => p.id);
+    const k = countChip(def, sim.scene);
     return {
       title: def.name,
-      body: `${burned.length ? kv("Сгорело внутри", burned.join(", ")) : ""}
+      body: `${kv("Внутри", countShort(k))}
+        <p class="sub">${countDetails(k)}${k.chips.size ? `. Собрана из своих микросхем: ${countChips(k)}` : ""}.</p>
+        ${burned.length ? kv("Сгорело внутри", burned.join(", ")) : ""}
         <div class="eyebrow">выводы (потенциал)</div>${rows}
-        <p class="sub">Собрана вами: внутри ${def.parts.length} дет., расчёт — полный, как если бы схема стояла на макетке. Детали внутри греются и горят как обычно.</p>`,
+        <p class="sub">Собрана вами. Расчёт — полный, как если бы схема стояла на макетке: детали внутри греются и горят как обычно.</p>`,
       editor: `<div class="row"><button class="btn inline" data-act="openChip" id="btn-open-chip">Открыть схему</button></div>`,
     };
   },
