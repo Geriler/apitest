@@ -18,7 +18,9 @@ export type KitItem =
   | { part: "mosfet"; kind: MosfetKind; count: number }
   | { part: "bjt"; kind: TransistorKind; count: number }
   | { part: "resistor"; ohms: number; count: number }
-  | { part: "chip"; func: LogicFunc; count: number };
+  | { part: "chip"; func: LogicFunc; count: number }
+  /** Любая другая деталь: тип, инструмент и его настройки (светодиод нужного цвета, кнопка…). */
+  | { part: "other"; type: string; tool: string; preset: Record<string, unknown>; label: string; count: number };
 
 /**
  * Эталонная сборка на корпусе SOT-23-5 (поле 13 × 8, ряды A–H; выводы: 1 — снизу слева, 2 — снизу
@@ -304,7 +306,8 @@ export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
 /** Название детали набора: «BS250», «резистор 10 кОм», «И-НЕ (своя)». */
 export function kitLabel(k: KitItem): string {
   if (k.part === "mosfet" || k.part === "bjt") return k.kind;
-  if (k.part === "resistor") return `резистор ${k.ohms >= 1000 ? `${k.ohms / 1000} кОм` : `${k.ohms} Ом`}`;
+  if (k.part === "resistor") return `резистор ${k.ohms >= 1000 ? `${String(k.ohms / 1000).replace(".", ",")} кОм` : `${k.ohms} Ом`}`;
+  if (k.part === "other") return k.label;
   return `${FUNC_NAMES[k.func]} — открытая микросхема`;
 }
 

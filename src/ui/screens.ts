@@ -3,6 +3,7 @@
  * стрелки «из чего собирается», как дерево исследований.
  */
 
+import { LESSONS, lessonById, type Lesson } from "../career/lessons";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level, type LogicFunc } from "../career/levels";
 import { bestOf, isDone, loadSlot, missing } from "../career/session";
 import { metricsHtml } from "./career";
@@ -45,7 +46,7 @@ export class MenuScreen {
         <button class="menu-card career${current === "career" ? " current" : ""}" data-mode="career">
           <b>Карьера</b>
           <span>Открывайте компоненты, собирая их из выданного набора деталей — от инвертора до исключающего ИЛИ.</span>
-          <small>Открыто ${done} из ${LEVELS.length}</small>
+          <small>Открыто ${done} из ${LEVELS.length} · уроков ${LESSONS.filter((l) => isDone(l.id)).length} из ${LESSONS.length}</small>
         </button>
       </div>
       <p class="sub">У каждого режима свой стол и свои сохранения.</p>
@@ -72,16 +73,31 @@ export interface MapHost {
 
 /** Где узлы: [столбец, ряд]. Слева — детали, потом вентили, потом то, что из них собирается. */
 const PLACE: Record<string, [number, number]> = {
-  parts: [0, 2.5],
-  "nand-cmos": [1, 0],
-  "nand-rtl": [1, 1],
-  "not-cmos": [1, 2],
-  "not-rtl": [1, 3],
-  "nor-cmos": [1, 4],
-  "nor-rtl": [1, 5],
-  xor: [2, 0],
-  and: [2, 1.6],
-  or: [2, 3.6],
+  "intro-led": [0, 0],
+  "intro-volts": [0, 1],
+  "intro-amps": [0, 2],
+  "intro-divider": [0, 3],
+  "intro-switch": [0, 4],
+  "intro-scope": [0, 5],
+  parts: [1, 2.5],
+  "nand-cmos": [2, 0],
+  "nand-rtl": [2, 1],
+  "not-cmos": [2, 2],
+  "not-rtl": [2, 3],
+  "nor-cmos": [2, 4],
+  "nor-rtl": [2, 5],
+  xor: [3, 0],
+  and: [3, 1.6],
+  or: [3, 3.6],
+};
+/** Короткие подписи уроков на карте. */
+const SHORT: Record<string, string> = {
+  "intro-led": "зажечь светодиод",
+  "intro-volts": "мультиметр: напряжение",
+  "intro-amps": "мультиметр: ток",
+  "intro-divider": "делитель напряжения",
+  "intro-switch": "транзистор-ключ",
+  "intro-scope": "осциллограф",
 };
 const W = 200, H = 64, COLW = 300, ROWH = 88, PAD = 40;
 const at = (id: string) => ({ x: PAD + PLACE[id][0] * COLW, y: PAD + PLACE[id][1] * ROWH });
@@ -133,15 +149,23 @@ export class CareerMap {
 
   private render(): void {
     const done = LEVELS.filter((l) => isDone(l.id)).length;
-    const width = PAD * 2 + 2 * COLW + W;
+    const width = PAD * 2 + 3 * COLW + W;
     const height = PAD * 2 + 5 * ROWH + H;
     // Стрелки: от деталей ко всем вентилям; от вентилей — к тому, что из них собирается
     const edges: string[] = [];
     const edge = (from: string, to: string, lit: boolean) => {
       const a = at(from), b = at(to);
+      const cls = `class="edge${lit ? " lit" : ""}" marker-end="url(#arrow${lit ? "-lit" : ""})"`;
+      // В одном столбце — сверху вниз, между столбцами — слева направо
+      if (PLACE[from][0] === PLACE[to][0]) {
+        edges.push(`<path ${cls} d="M${a.x + W / 2} ${a.y + H}L${b.x + W / 2} ${b.y}"/>`);
+        return;
+      }
       const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2, mx = (x1 + x2) / 2;
-      edges.push(`<path class="edge${lit ? " lit" : ""}" d="M${x1} ${y1}C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}" marker-end="url(#arrow${lit ? "-lit" : ""})"/>`);
+      edges.push(`<path ${cls} d="M${x1} ${y1}C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
     };
+    // Введение: урок за уроком, последний ведёт к деталям (рекомендовано, но не обязательно)
+    LESSONS.forEach((l, i) => edge(l.id, LESSONS[i + 1]?.id ?? "parts", isDone(l.id)));
     for (const l of LEVELS) {
       const n = needs(l);
       if (!n.length) edge("parts", l.id, true);
@@ -149,6 +173,13 @@ export class CareerMap {
     }
     const nodes = [
       `<g class="node done root" data-node="parts" transform="translate(${at("parts").x} ${at("parts").y})"><rect width="${W}" height="${H}" rx="10"/><text x="14" y="27" class="t">Детали</text><text x="14" y="47" class="s">транзисторы и резисторы</text></g>`,
+      ...LESSONS.map((l, i) => {
+        const p = at(l.id);
+        return `<g class="node ${isDone(l.id) ? "done" : "open"} lesson${this.chosen === l.id ? " chosen" : ""}" data-node="${l.id}" transform="translate(${p.x} ${p.y})" tabindex="0" role="button" aria-label="${esc(l.title)}">
+          <rect width="${W}" height="${H}" rx="10"/>
+          <text x="14" y="27" class="t">Урок ${i + 1}${isDone(l.id) ? " ✓" : ""}</text>
+          <text x="14" y="47" class="s">${esc(SHORT[l.id] ?? l.title)}</text></g>`;
+      }),
       ...LEVELS.map((l) => {
         const p = at(l.id);
         const state = isDone(l.id) ? "done" : missing(l).length ? "locked" : "open";
@@ -159,8 +190,9 @@ export class CareerMap {
       }),
     ];
     const chosen = this.chosen ? LEVELS.find((l) => l.id === this.chosen) : undefined;
+    const lesson = this.chosen ? lessonById(this.chosen) : undefined;
     this.el.innerHTML = `<header class="map-head">
-        <div><div class="eyebrow">карьера</div><h2>Открыто ${done} из ${LEVELS.length}</h2></div>
+        <div><div class="eyebrow">карьера</div><h2>Открыто ${done} из ${LEVELS.length} · уроков ${LESSONS.filter((l) => isDone(l.id)).length} из ${LESSONS.length}</h2></div>
         <div class="row">
           ${this.host.hasTable() ? `<button class="btn inline" data-map="close">К столу</button>` : ""}
           <button class="btn inline" data-map="workshop">Мастерская</button>
@@ -168,15 +200,25 @@ export class CareerMap {
         </div>
       </header>
       <div class="map-body">
-        <div class="map-scroll"><svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" class="map-svg">
+        <div class="map-scroll"><svg viewBox="0 0 ${width} ${height}" class="map-svg" style="max-width:${width}px">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="arrow"/></marker>
             <marker id="arrow-lit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="arrow lit"/></marker>
           </defs>
           ${edges.join("")}${nodes.join("")}
         </svg></div>
-        <aside class="map-card">${chosen ? this.card(chosen) : `<p class="sub">Выберите компонент на карте. Зелёные — открыты, светлые — можно собирать, серые — сначала откройте то, из чего они собираются.</p><p class="sub">Мастерская — свободный стол: базовые детали и все открытые модули.</p>`}</aside>
+        <aside class="map-card">${lesson ? this.lessonCard(lesson) : chosen ? this.card(chosen) : `<p class="sub">Начните с введения слева, если приборы и детали пока незнакомы, — или сразу с вентилей. Выберите компонент на карте. Зелёные — открыты, светлые — можно собирать, серые — сначала откройте то, из чего они собираются.</p><p class="sub">Мастерская — свободный стол: базовые детали и все открытые модули.</p>`}</aside>
       </div>`;
+  }
+
+  private lessonCard(l: Lesson): string {
+    const started = !!loadSlot(l.id);
+    return `<div class="eyebrow">введение · урок ${LESSONS.indexOf(l) + 1}</div>
+      <h3>${esc(l.title)}${isDone(l.id) ? " ✓" : ""}</h3>
+      <p>${esc(l.about)}</p>
+      ${l.kit.length ? `<div class="eyebrow">набор</div><ul class="kitlist">${l.kit.map((k) => `<li>${esc(kitLabel(k))} × ${k.count}</li>`).join("")}</ul>` : ""}
+      <div class="row"><button class="btn inline primary" data-map="start">${started ? "Продолжить" : isDone(l.id) ? "Пройти ещё раз" : "Начать"}</button>
+      ${started ? `<button class="btn inline" data-map="restart">Начать заново</button>` : ""}</div>`;
   }
 
   private card(l: Level): string {

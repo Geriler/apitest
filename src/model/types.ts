@@ -433,8 +433,8 @@ export interface Scene {
   chips?: Record<string, ChipDef>;
   /** Эта схема — начинка микросхемы с таким обозначением (её открыли, чтобы поправить). */
   editingChip?: string;
-  /** Стол карьеры: уровень (набор деталей ограничен) или мастерская (открытые модули). */
-  career?: { level?: string; workshop?: boolean };
+  /** Стол карьеры: уровень или урок введения (набор деталей ограничен) или мастерская (открытые модули). */
+  career?: { level?: string; lesson?: string; workshop?: boolean };
 }
 
 /**

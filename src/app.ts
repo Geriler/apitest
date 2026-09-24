@@ -47,7 +47,8 @@ import { caseOf, chipInner, dipSize, packageChip, packageProblems, spaceUsed } f
 import { chipsUsed, libraryChips, referenceList, resolveChip, setCareerChips, setChipToolSource, setLibrary, setReference } from "./chips/registry";
 import { checkLevel, levelScene, referenceChips, type CheckResult } from "./career/build";
 import { levelById, type Level } from "./career/levels";
-import { activeLevel, careerDefs, kitTools, loadSlot, missing, recordFail, recordMetrics, revealHint, saveSlot, slotOf, toolAllowed, unlock, workshopScene } from "./career/session";
+import { lessonById, type Lesson } from "./career/lessons";
+import { activeLesson, activeLevel, careerDefs, isDone, passLesson, kitTools, loadSlot, missing, recordFail, recordMetrics, revealHint, saveSlot, slotOf, toolAllowed, unlock, workshopScene } from "./career/session";
 import { CareerMap, MenuScreen } from "./ui/screens";
 import { CareerPanel } from "./ui/career";
 import { countParts } from "./chips/count";
@@ -1137,8 +1138,21 @@ export class App {
     return activeLevel(this.scene);
   }
 
+  careerLesson(): Lesson | undefined {
+    return activeLesson(this.scene);
+  }
+
   /** Взяться за уровень: его стол, как оставили (или с чистого корпуса). */
   startLevel(id: string, fresh = false): void {
+    const lesson = lessonById(id);
+    if (lesson) {
+      const saved = fresh ? undefined : loadSlot(id);
+      this.replaceScene(saved ? (JSON.parse(JSON.stringify(saved)) as Scene) : lesson.start());
+      this.resetHistory();
+      this.map.hide();
+      this.careerOpen = false;
+      return this.setCareerOpen(true);
+    }
     const level = levelById(id);
     if (!level) return;
     const need = missing(level);
@@ -1164,13 +1178,28 @@ export class App {
   /** «Очистить»: песочница — пустой стол, уровень — чистый корпус, мастерская — пустые платы. */
   clearTable(): void {
     const level = this.careerLevel();
+    const lesson = this.careerLesson();
     if (level) this.replaceScene(levelScene(level));
+    else if (lesson) this.replaceScene(lesson.start());
     else if (this.scene.career?.workshop) this.replaceScene(workshopScene());
     else this.replaceScene({ components: [], wires: [], boards: [] });
   }
 
   /** Проверить сборку уровня; получилось — компонент открыт. */
   checkLevel(): void {
+    const lesson = this.careerLesson();
+    if (lesson) {
+      const steps = lesson.check(this.scene);
+      const ok = steps.every((x) => x.ok);
+      this.lastCheck = { ok, problems: [], rows: [], steps };
+      if (ok) {
+        const first = !isDone(lesson.id);
+        if (!passLesson(lesson.id)) this.toast("Прогресс не сохранился", "Хранилище браузера недоступно.");
+        this.toast(first ? "Урок пройден!" : "Всё верно", `«${lesson.title}» — готово. Дальше — на карте.`);
+      } else recordFail(lesson.id);
+      this.careerOpen = false;
+      return this.setCareerOpen(true);
+    }
     const level = this.careerLevel();
     if (!level) return;
     const chips = Object.fromEntries(careerDefs().map((d) => [d.id, d]));
@@ -1192,7 +1221,7 @@ export class App {
 
   /** Открыть следующую подсказку уровня. */
   revealHint(): void {
-    const level = this.careerLevel();
+    const level = this.careerLevel() ?? this.careerLesson();
     if (!level) return;
     revealHint(level.id, level.hints.length);
     this.refreshInspector();
@@ -1235,6 +1264,11 @@ export class App {
     this.careerBar.hidden = !this.scene.career;
     if (level) {
       this.careerBar.innerHTML = `<span class="path"><small>карьера</small> ${level.part} · ${level.title}</span>
+        <button class="btn inline" data-career-bar="task">Задание</button>
+        <button class="btn inline" data-career-bar="check">Проверить</button>
+        <button class="btn inline" data-career-bar="leave">К карте</button>`;
+    } else if (this.careerLesson()) {
+      this.careerBar.innerHTML = `<span class="path"><small>введение</small> ${this.careerLesson()!.title}</span>
         <button class="btn inline" data-career-bar="task">Задание</button>
         <button class="btn inline" data-career-bar="check">Проверить</button>
         <button class="btn inline" data-career-bar="leave">К карте</button>`;
@@ -2208,7 +2242,7 @@ export class App {
     this.ui.inspector.innerHTML = html;
     this.bindInspector();
     if (key === "p") this.projects.bind(this.ui.inspector);
-    if (key === "cl" || key === "cc") this.career.bind(this.ui.inspector);
+    if (key === "cl" || key === "cc" || key === "cs") this.career.bind(this.ui.inspector);
   }
 
 

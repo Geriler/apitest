@@ -8,6 +8,7 @@ import { PARTS, type ToolDef } from "../parts";
 import { chipTool } from "../parts/chip";
 import { chipFunc, kitUsed, type Metrics } from "./build";
 import { FUNC_NAMES, LEVELS, kitLabel, levelById, type KitItem, type Level } from "./levels";
+import { lessonById, type Lesson } from "./lessons";
 
 const STORE_KEY = "maketka.career.v1";
 
@@ -21,6 +22,8 @@ interface Progress {
   /** Неудачных проверок по уровням и сколько подсказок открыто. */
   fails?: Record<string, number>;
   hints?: Record<string, number>;
+  /** Пройденные уроки введения. */
+  lessons?: Record<string, boolean>;
 }
 
 /** После скольких неудачных проверок можно попросить подсказку. */
@@ -40,7 +43,13 @@ let progress: Progress = load();
 
 /** Открытые игроком микросхемы. */
 export const careerDefs = (): ChipDef[] => Object.values(progress.defs);
-export const isDone = (id: string) => !!progress.defs[id];
+export const isDone = (id: string) => !!progress.defs[id] || !!progress.lessons?.[id];
+
+/** Урок пройден. */
+export function passLesson(id: string): boolean {
+  progress = { ...progress, lessons: { ...progress.lessons, [id]: true } };
+  return store();
+}
 
 function store(): boolean {
   try {
@@ -107,10 +116,10 @@ export function saveSlot(slot: string, scene: Scene): void {
   progress = { ...progress, slots: { ...progress.slots, [slot]: scene } };
   store();
 }
-export const slotOf = (scene: Scene): string | undefined => (scene.career?.workshop ? "workshop" : scene.career?.level);
+export const slotOf = (scene: Scene): string | undefined => (scene.career?.workshop ? "workshop" : (scene.career?.level ?? scene.career?.lesson));
 
 /** Чего не хватает, чтобы взяться за уровень: функции микросхем набора, которые ещё не открыты. */
-export function missing(level: Level): string[] {
+export function missing(level: Level | Lesson): string[] {
   return level.kit
     .filter((k): k is Extract<KitItem, { part: "chip" }> => k.part === "chip")
     .filter((k) => !careerDefs().some((d) => chipFunc(d.id) === k.func))
@@ -121,6 +130,9 @@ export function missing(level: Level): string[] {
 
 /** Уровень, который собирают на столе (по сцене). */
 export const activeLevel = (scene: Scene): Level | undefined => (scene.career?.level ? levelById(scene.career.level) : undefined);
+export const activeLesson = (scene: Scene): Lesson | undefined => (scene.career?.lesson ? lessonById(scene.career.lesson) : undefined);
+/** Набор деталей стола: уровня или урока. */
+const activeKit = (scene: Scene): KitItem[] | undefined => activeLevel(scene)?.kit ?? activeLesson(scene)?.kit;
 
 /** Приборы и питание — для проверки на столе; в микросхему они не входят. */
 const TEST_TOOLS = new Set(["psu", "battery", "meter", "scope", "switch", "button"]);
@@ -128,6 +140,8 @@ const BUILTIN = new Set(["select", "wire", "trace", "delete", "bb", "pcb"]);
 
 /** Можно ли пользоваться инструментом в этой сцене. */
 export function toolAllowed(scene: Scene, tool: string): boolean {
+  // Урок: только провода и набор (приборы уже на столе)
+  if (scene.career?.lesson) return ["select", "wire", "delete"].includes(tool) || tool.startsWith("kit:");
   // Песочница и мастерская — все детали (микросхемы — по режиму: заводские или открытые)
   if (!scene.career?.level) return !tool.startsWith("kit:");
   return BUILTIN.has(tool) || TEST_TOOLS.has(tool) || tool.startsWith("kit:");
@@ -152,6 +166,7 @@ function baseTool(k: KitItem): { tool: ToolDef; preset: Record<string, unknown> 
   if (k.part === "mosfet") return [{ tool: find("fet"), preset: { kind: k.kind } }];
   if (k.part === "bjt") return [{ tool: find("bjt"), preset: { kind: k.kind } }];
   if (k.part === "resistor") return [{ tool: find("tht"), preset: { ohms: k.ohms, watts: 0.25 } }];
+  if (k.part === "other") return [{ tool: find(k.tool), preset: k.preset }];
   return careerDefs()
     .filter((d) => chipFunc(d.id) === k.func)
     .map((d) => ({ tool: chipTool(d) as ToolDef, preset: {} }));
@@ -162,10 +177,10 @@ function baseTool(k: KitItem): { tool: ToolDef; preset: Record<string, unknown> 
  * с остатком в подписи. Настройки не меняются — номинал задан набором.
  */
 export function kitTools(scene: Scene): { id: string; type: string; def: ToolDef; row: number; left: number }[] {
-  const level = activeLevel(scene);
-  if (!level) return [];
-  const used = kitUsed(level.kit, scene);
-  return level.kit.flatMap((k, row) =>
+  const kit = activeKit(scene);
+  if (!kit) return [];
+  const used = kitUsed(kit, scene);
+  return kit.flatMap((k, row) =>
     baseTool(k).map(({ tool, preset }, j) => {
       const left = k.count - used[row];
       const settings = { ...structuredClone(tool.settings ?? {}), ...preset };
@@ -182,7 +197,7 @@ export function kitTools(scene: Scene): { id: string; type: string; def: ToolDef
         create: () => tool.create(settings),
         note: (s) => `${tool.note(s)}<p class="sub">Из набора уровня: ${kitLabel(k)} — ${k.count} шт., осталось ${left}. Номинал задан набором.</p>`,
       };
-      const type = k.part === "mosfet" ? "mosfet" : k.part === "bjt" ? "transistor" : k.part === "resistor" ? "resistor" : "chip";
+      const type = k.part === "mosfet" ? "mosfet" : k.part === "bjt" ? "transistor" : k.part === "resistor" ? "resistor" : k.part === "other" ? k.type : "chip";
       return { id: def.id, type, def, row, left };
     }),
   );
