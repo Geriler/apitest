@@ -13,8 +13,12 @@ import {
   holesOnNode,
   newChipBoard,
   nextBoardId,
+  packageName,
+  parsePackage,
+  pinOffsets,
   padsAlong,
   type BoardSpec,
+  type ChipPackage,
   type ChipPinRole,
   type Hole,
 } from "./model/breadboard";
@@ -722,8 +726,9 @@ export class App {
       return false;
     }
     const old = update && this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip) : undefined;
-    if (old && old.pins !== dipSize(this.scene)) {
-      this.toast("Не обновить", `У «${old.name}» DIP-${old.pins}, а сейчас выводов на DIP-${dipSize(this.scene)}. Уже стоящие микросхемы не встанут в свои отверстия — упакуйте как новую.`);
+    const now = caseOf(this.scene);
+    if (old && (old.pins !== dipSize(this.scene) || (old.package ?? "DIP") !== (now?.package ?? "DIP"))) {
+      this.toast("Не обновить", `У «${old.name}» корпус ${packageName(old.package, old.pins)}, а сейчас — ${packageName(now?.package, dipSize(this.scene))}. Уже стоящие микросхемы не встанут в свои отверстия — упакуйте как новую.`);
       return false;
     }
     const box = caseOf(this.scene)!;
@@ -746,7 +751,7 @@ export class App {
     renderToolButtons(this.ui.tools);
     this.save();
     this.record();
-    this.toast(old ? "Микросхема обновлена" : "Микросхема упакована", `«${def.name}», DIP-${def.pins} — в группе «Микросхемы» слева.${old ? " Все её экземпляры теперь такие же." : ""}`);
+    this.toast(old ? "Микросхема обновлена" : "Микросхема упакована", `«${def.name}», ${packageName(def.package, def.pins)} — в группе «Микросхемы» слева.${old ? " Все её экземпляры теперь такие же." : ""}`);
     this.refreshInspector();
     return true;
   }
@@ -775,11 +780,12 @@ export class App {
   }
 
   /** Новая микросхема: пустой стол с корпусом DIP-pins; вверху — путь и «Вернуться». */
-  newChip(pins: number): void {
+  newChip(pkg: string): void {
+    const { package: kind, pins } = parsePackage(pkg);
     const here = this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip)?.name : undefined;
     const id = `new:${Date.now().toString(36)}`;
     this.chipStack.push({ id, scene: JSON.stringify(this.scene), projectName: this.projects.name, title: here ?? (this.projects.name || "Стол"), opened: "" });
-    this.replaceScene({ components: [], wires: [], boards: [newChipBoard(pins)], editingChip: id });
+    this.replaceScene({ components: [], wires: [], boards: [newChipBoard(pins, 0, 0, "K1", kind)], editingChip: id });
     this.chipStack.at(-1)!.opened = JSON.stringify(this.scene);
     this.saveChipStack();
     this.renderChipBar();
@@ -789,13 +795,15 @@ export class App {
     this.renderInspector();
   }
 
-  /** Сменить корпус: выводы сохраняют номера (и провода на них), поле растёт вправо. */
-  resizeChip(id: string, pins: number): boolean {
+  /** Сменить корпус («DIP-14», «SOT-23-5»): выводы сохраняют номера (и провода на них), поле растёт вправо. */
+  resizeChip(id: string, pkg: string): boolean {
     const b = boardById(id);
-    if (!b || b.kind !== "chip" || b.pins === pins) return false;
+    const { package: kind, pins } = parsePackage(pkg);
+    if (!b || b.kind !== "chip" || b.fixed || (b.pins === pins && (b.package ?? "DIP") === kind)) return false;
     const r = boardRect(b);
     const grown: BoardSpec = {
       ...b,
+      package: kind,
       pins,
       roles: Array.from({ length: pins }, (_, i) => b.roles?.[i] ?? "nc"),
       names: Array.from({ length: pins }, (_, i) => b.names?.[i] ?? ""),
@@ -821,7 +829,7 @@ export class App {
   /** Назначение, имя вывода или название на корпусе. */
   private editChip(id: string, field: string, value: string): void {
     const b = (this.scene.boards ?? []).find((x) => x.id === id);
-    if (!b || b.kind !== "chip") return;
+    if (!b || b.kind !== "chip" || b.fixed) return;
     const [what, n] = field.split(":");
     const i = Number(n);
     if (what === "chipRole") (b.roles ??= [])[i] = value as ChipPinRole;
@@ -1073,16 +1081,12 @@ export class App {
    * Отверстия DIP-n: вывод 1 — в отверстие h, выводы 1…n/2 — вправо по его ряду, остальные — обратно
    * по ряду на три шага дальше (поперёк канавки макетки: из ряда f в ряд e). Не в шины.
    */
-  private dipHoles(h: Hole, n: number, turns = this.quarterTurns()): string[] | undefined {
+  private dipHoles(h: Hole, n: number, turns = this.quarterTurns(), pkg: ChipPackage = "DIP"): string[] | undefined {
     if (h.kind === "rail") return undefined;
-    const k = n / 2;
-    const at = (along: number, across: number) => {
+    const out = pinOffsets(pkg, n).map(([along, across]) => {
       const [dx, dz] = turn(along, -across, turns);
       return holeAt(h.boardId, h.x + dx, h.z + dz);
-    };
-    const out: (Hole | undefined)[] = [];
-    for (let i = 0; i < k; i++) out.push(at(i, 0));
-    for (let i = k - 1; i >= 0; i--) out.push(at(i, 3));
+    });
     return out.every((x) => x && x.kind !== "rail") ? out.map((x) => x!.id) : undefined;
   }
 
@@ -1675,7 +1679,7 @@ export class App {
     }
     if (pinsOf(sample) >= 4 && h.hole) {
       const n = pinsOf(sample);
-      const holes = this.dipHoles(h.hole, n);
+      const holes = this.dipHoles(h.hole, n, this.quarterTurns(), sample.type === "chip" ? sample.package : undefined);
       if (!holes) return this.setHint(`Здесь не встанет: вывод 1 — в отверстие под курсором, всем ${n} выводам нужно место (${n / 2} × 2, ряды через 3 шага), не в шинах. На макетке — поперёк канавки, от ряда f. R — повернуть.`);
       const occ = this.occupied();
       const busy = holes.find((id) => occ.has(id));
@@ -1795,7 +1799,7 @@ export class App {
     if (!part(sample).onBoard(sample) && (h.hole || h.overBoard)) return this.clearGhost();
     if (n === 1 && h.hole) return this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes: [h.hole.id] })).group);
     if (n >= 4 && h.hole) {
-      const holes = this.dipHoles(h.hole, n);
+      const holes = this.dipHoles(h.hole, n, this.quarterTurns(), sample.type === "chip" ? sample.package : undefined);
       return holes ? this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes })).group) : this.clearGhost();
     }
     if (n === 3 && h.hole) {
@@ -2041,9 +2045,9 @@ export class App {
       this.updateGhost();
       return;
     }
-    if (field === "chipPins" || field.startsWith("chipRole:") || field.startsWith("chipName:") || field === "chipLabel") {
+    if (field === "chipPkg" || field.startsWith("chipRole:") || field.startsWith("chipName:") || field === "chipLabel") {
       const id = this.selectedHole?.boardId ?? this.selectedBoard;
-      if (id && field === "chipPins") this.resizeChip(id, Number(value));
+      if (id && field === "chipPkg") this.resizeChip(id, value);
       else if (id) this.editChip(id, field, value);
       this.inspectorHtml = "";
       this.renderInspector();

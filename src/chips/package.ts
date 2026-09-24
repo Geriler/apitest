@@ -5,7 +5,7 @@
  * и считается одинаково в любом месте.
  */
 
-import { HOLE_BY_ID, chipPinHole, type BoardSpec } from "../model/breadboard";
+import { HOLE_BY_ID, chipPinHole, packageName, type BoardSpec } from "../model/breadboard";
 import type { ChipDef, Component, Scene } from "../model/types";
 import { part } from "../parts";
 import { buildNetlist } from "../view/schematic";
@@ -88,7 +88,7 @@ export function packageProblems(scene: Scene): string[] {
   const space = spaceUsed(scene);
   const room = spaceOf(box.pins ?? 0);
   if (space > room) {
-    out.push(`Не помещается в DIP-${box.pins}: начинка занимает ${space} клеток из ${room}. Уберите детали или возьмите корпус больше.`);
+    out.push(`Не помещается в ${packageName(box.package, box.pins ?? 0)}: начинка занимает ${space} клеток из ${room}. Уберите детали или возьмите корпус больше.`);
   }
   return out;
 }
@@ -116,7 +116,7 @@ export function packageChip(scene: Scene, name: string, id: string = newChipId()
   return {
     id,
     name: name.trim() || box.label?.trim() || "Микросхема",
-    package: "DIP",
+    package: box.package ?? "DIP",
     pins: box.pins ?? 0,
     space: spaceUsed(scene),
     pinNames,

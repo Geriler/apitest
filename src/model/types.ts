@@ -1,6 +1,6 @@
 /** Модель песочницы: что стоит на столе и как соединено. Без Three.js. */
 
-import { DEFAULT_BOARDS, HOLE_BY_ID, boardsFromLayout, holeIdsFor, type BoardSpec, type ChipPinRole, type Layout } from "./breadboard";
+import { DEFAULT_BOARDS, HOLE_BY_ID, boardsFromLayout, holeIdsFor, type BoardSpec, type ChipPackage, type ChipPinRole, type Layout } from "./breadboard";
 export type { ChipPinRole } from "./breadboard";
 
 export type SmdSize = "1206" | "0805" | "0603" | "0402";
@@ -301,8 +301,9 @@ export interface Chip extends Base {
   type: "chip";
   /** Обозначение описания микросхемы (ChipDef.id). */
   def: string;
-  /** Имя и число выводов — копия из описания (для подписей и места на плате). */
+  /** Имя, корпус и число выводов — копия из описания (для подписей и места на плате). */
   name: string;
+  package?: ChipPackage;
   pins: number;
 }
 
@@ -313,8 +314,8 @@ export interface Chip extends Base {
 export interface ChipDef {
   id: string;
   name: string;
-  /** Корпус. Пока только DIP; позже — другие (SIP, SOT на переходнике…). */
-  package: "DIP";
+  /** Корпус: DIP или SOT-23-5 на переходнике. */
+  package: ChipPackage;
   /** Выводов в корпусе (у DIP — чётное, 4…16). */
   pins: number;
   /** Имена выводов 1…pins ("" — без имени, "NC" — не подключён). */

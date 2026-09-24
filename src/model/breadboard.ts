@@ -54,27 +54,62 @@ export interface BoardSpec {
   /** Только у печатной платы: число столбцов и рядов площадок. */
   cols?: number;
   rows?: number;
-  /** Только у корпуса: число выводов (DIP: 4…16), их назначение и имена, название микросхемы. */
+  /** Только у корпуса: вид корпуса (по умолчанию DIP), число выводов, их назначение и имена, название. */
+  package?: ChipPackage;
   pins?: number;
   roles?: ChipPinRole[];
   names?: string[];
   label?: string;
+  /** Корпус из задания карьеры: вид, назначение и имена выводов менять нельзя. */
+  fixed?: boolean;
 }
 
 /** Назначение вывода корпуса; nc — не подключён. */
 export type ChipPinRole = "nc" | "in" | "out" | "vcc" | "gnd";
 
-/** Корпуса DIP, которые можно выбрать. */
-export const DIP_SIZES = [4, 6, 8, 14, 16];
+/** Вид корпуса: DIP (выводы в два ряда) или SOT-23-5 — крошечный, на переходнике с шагом 2,54 мм. */
+export type ChipPackage = "DIP" | "SOT-23-5";
 
-/** Поле площадок корпуса DIP-pins: по 4 столбца на пару выводов, 8 рядов. */
-export function chipField(pins: number): { cols: number; rows: number } {
-  return { cols: 2 * pins + 1, rows: 8 };
+/** Корпуса, которые можно выбрать: «DIP-4» … «DIP-16», «SOT-23-5». */
+export const PACKAGES = ["DIP-4", "DIP-6", "DIP-8", "DIP-14", "DIP-16", "SOT-23-5"];
+
+/** Название корпуса: «DIP-8», «SOT-23-5». */
+export function packageName(pkg: ChipPackage | undefined, pins: number): string {
+  return pkg === "SOT-23-5" ? "SOT-23-5" : `DIP-${pins}`;
+}
+
+/** Из названия — вид и число выводов. */
+export function parsePackage(name: string): { package: ChipPackage; pins: number } {
+  return name === "SOT-23-5" ? { package: "SOT-23-5", pins: 5 } : { package: "DIP", pins: Number(name.replace(/\D/g, "")) || 8 };
+}
+
+/**
+ * Где выводы корпуса относительно вывода 1: [вдоль ряда, поперёк] в шагах 2,54 мм; поперёк 0 —
+ * ближний ряд, 3 — дальний. DIP: 1…N/2 по ближнему слева направо, остальные обратно по дальнему.
+ * SOT-23-5 на переходнике: 1, 2, 3 по ближнему; 4 — дальний справа, 5 — дальний слева (посередине
+ * дальнего ряда ножки нет) — как у самого SOT-23-5.
+ */
+export function pinOffsets(pkg: ChipPackage | undefined, pins: number): [number, number][] {
+  if (pkg === "SOT-23-5") return [[0, 0], [1, 0], [2, 0], [2, 3], [0, 3]];
+  const k = pins / 2;
+  return Array.from({ length: pins }, (_, i): [number, number] => (i < k ? [i, 0] : [pins - 1 - i, 3]));
+}
+
+/** Словами, где какие выводы: для подсказок и панелей. */
+export function pinLayoutText(pkg: ChipPackage | undefined, pins: number): string {
+  if (pkg === "SOT-23-5") return "выводы 1–3 — по ближнему ряду слева направо, 4 — дальний справа, 5 — дальний слева (как у SOT-23-5; посередине дальнего ряда ножки нет)";
+  return `выводы 1–${pins / 2} — по ближнему ряду слева направо, ${pins / 2 + 1}–${pins} — обратно по дальнему, как у DIP`;
+}
+
+/** Поле площадок корпуса: по 4 столбца на место вывода в ряду, 8 рядов. */
+export function chipField(b: Pick<BoardSpec, "package" | "pins">): { cols: number; rows: number } {
+  const along = Math.max(...pinOffsets(b.package, b.pins ?? 8).map(([a]) => a)) + 1;
+  return { cols: 4 * along + 1, rows: 8 };
 }
 
 /** Новый корпус: все выводы не подключены. */
-export function newChipBoard(pins: number, x = 0, z = 0, id = "K1"): BoardSpec {
-  return { id, kind: "chip", x, z, pins, roles: Array(pins).fill("nc"), names: Array(pins).fill(""), label: "" };
+export function newChipBoard(pins: number, x = 0, z = 0, id = "K1", pkg: ChipPackage = "DIP"): BoardSpec {
+  return { id, kind: "chip", x, z, package: pkg, pins, roles: Array(pins).fill("nc"), names: Array(pins).fill(""), label: "" };
 }
 
 /** Старый формат (до того, как платы стали отдельными предметами): число макеток и размер печатной. */
@@ -107,7 +142,7 @@ export const DEFAULT_BOARDS: BoardSpec[] = [
 export function boardSize(b: BoardSpec): { width: number; depth: number; height: number } {
   if (b.kind === "chip") {
     // Поле, по два шага до рядов выводов и по полтора — поля
-    const f = chipField(b.pins ?? 8);
+    const f = chipField(b);
     return { width: f.cols + 3, depth: f.rows + 6, height: PCB_HEIGHT };
   }
   return b.kind === "breadboard"
@@ -142,7 +177,7 @@ function boardNumber(b: BoardSpec): number {
 
 /** Человекочитаемое имя: «макетка 2», «печатная плата 1». */
 export function boardName(b: BoardSpec): string {
-  if (b.kind === "chip") return `корпус DIP-${b.pins}`;
+  if (b.kind === "chip") return `корпус ${packageName(b.package, b.pins ?? 8)}`;
   return `${b.kind === "breadboard" ? "макетка" : "печатная плата"} ${boardNumber(b)}`;
 }
 
@@ -172,15 +207,13 @@ export function chipPinHole(b: BoardSpec, n: number): string {
 }
 
 /**
- * Где площадка вывода i (с 0) корпуса b: выводы 1…N/2 — по ближнему краю слева направо,
- * остальные — обратно по дальнему, как у настоящего DIP.
+ * Где площадка вывода i (с 0) корпуса b: по раскладке корпуса (pinOffsets), ближний ряд — у ближнего
+ * края корпуса, дальний — у дальнего.
  */
 export function chipPinAt(b: BoardSpec, i: number): { x: number; z: number } {
-  const n = b.pins ?? 8;
-  const k = n / 2;
-  const along = i < k ? i : n - 1 - i;
-  const { rows } = chipField(n);
-  return { x: padX(b, 4 * along + 3), z: i < k ? padZ(b, rows - 1) + 2 : padZ(b, 0) - 2 };
+  const [along, across] = pinOffsets(b.package, b.pins ?? 8)[i];
+  const { rows } = chipField(b);
+  return { x: padX(b, 4 * along + 3), z: across === 0 ? padZ(b, rows - 1) + 2 : padZ(b, 0) - 2 };
 }
 
 function rowZ(rowIndex: number): number {
@@ -235,7 +268,7 @@ export function boardHoles(b: BoardSpec): Hole[] {
     return holes;
   }
   if (b.kind === "chip") {
-    const f = chipField(b.pins ?? 8);
+    const f = chipField(b);
     for (let r = 0; r < f.rows; r++) {
       for (let c = 1; c <= f.cols; c++) {
         const id = `${px.id}${LETTERS[r]}${c}`;

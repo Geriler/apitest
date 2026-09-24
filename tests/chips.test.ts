@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { chipsUsed, setLibrary } from "../src/chips/registry";
 import { chipInner, dipSize, packageChip, packageProblems } from "../src/chips/package";
 import { countChip, countChips, countDetails, countParts, countShort } from "../src/chips/count";
-import { HOLE_BY_ID, applyBoards, chipPinAt, holeLabel, newChipBoard, type BoardSpec, type ChipPinRole } from "../src/model/breadboard";
+import { HOLE_BY_ID, applyBoards, chipField, chipPinAt, holeLabel, newChipBoard, packageName, parsePackage, pinOffsets, type BoardSpec, type ChipPinRole } from "../src/model/breadboard";
 import { boardConflicts, mosfetPin, type Chip, type ChipDef, type Component, type Endpoint, type Scene } from "../src/model/types";
 import { Simulation, pinNode } from "../src/sim/simulation";
 import { schematicSvg } from "../src/view/schematic";
@@ -313,5 +313,28 @@ describe("схемы из старых версий", () => {
     expect(sc.components.map((c) => c.id)).toEqual(["R1", "GB1"]);
     expect(sc.wires.map((w) => w.id)).toEqual(["W1", "W2"]);
     expect(Math.abs(new Simulation(sc).current(sc.components[0]))).toBeGreaterThan(0);
+  });
+});
+
+describe("SOT-23-5 на переходнике", () => {
+  it("раскладка выводов: 1–3 по ближнему ряду, 4 — дальний справа, 5 — дальний слева; упаковка помнит корпус", () => {
+    expect(pinOffsets("SOT-23-5", 5)).toEqual([[0, 0], [1, 0], [2, 0], [2, 3], [0, 3]]);
+    expect(pinOffsets("DIP", 6)).toEqual([[0, 0], [1, 0], [2, 0], [2, 3], [1, 3], [0, 3]]);
+    const b = newChipBoard(5, 0, 0, "K1", "SOT-23-5");
+    applyBoards([b]);
+    const at = (n: number) => chipPinAt(b, n - 1);
+    expect(at(4).x).toBe(at(3).x);
+    expect(at(5).x).toBe(at(1).x);
+    expect(at(4).z).toBeLessThan(at(3).z);
+    // Поле корпуса по ширине трёх выводов, как у DIP-6
+    expect(chipField(b)).toEqual(chipField(newChipBoard(6)));
+    const box5 = { ...b, roles: ["in", "in", "gnd", "out", "vcc"] as ChipPinRole[] };
+    const sc = scene([R("R1", 1000, "k:A1", "k:A2")], [], [box5], [["k:1", "k:A1"], ["k:4", "k:A2"]]);
+    expect(packageProblems(sc)).toEqual([]);
+    const d = packageChip(sc, "74LVC1G00", "sot", 1);
+    expect([d.package, d.pins]).toEqual(["SOT-23-5", 5]);
+    expect(packageName(d.package, d.pins)).toBe("SOT-23-5");
+    expect(parsePackage("SOT-23-5")).toEqual({ package: "SOT-23-5", pins: 5 });
+    expect(parsePackage("DIP-14")).toEqual({ package: "DIP", pins: 14 });
   });
 });

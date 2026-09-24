@@ -3,7 +3,7 @@
  * Только строки HTML по текущему состоянию; события навешивает app.ts.
  */
 
-import { BOARDS, DIP_SIZES, HOLE_BY_ID, PCB_SIZES, boardById, boardName, boardSize, describeNode, holeLabel, type BoardSpec, type ChipPinRole, type Hole } from "../model/breadboard";
+import { BOARDS, PACKAGES, HOLE_BY_ID, chipPinName, packageName, parsePackage, pinLayoutText, PCB_SIZES, boardById, boardName, boardSize, describeNode, holeLabel, type BoardSpec, type ChipPinRole, type Hole } from "../model/breadboard";
 import { isFlatWire, type Component, type Endpoint, type Scene, type WireShape } from "../model/types";
 import { part, pinLabelOf } from "../parts";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
@@ -252,18 +252,21 @@ function chipSection(b: BoardSpec): string {
     const opts = (Object.keys(PIN_ROLES) as ChipPinRole[])
       .map((r) => `<option value="${r}"${r === role ? " selected" : ""}>${PIN_ROLES[r].short}</option>`)
       .join("");
+    if (b.fixed) {
+      return `<div class="pinrow"><b style="border-color:${PIN_ROLES[role].color}">${i + 1}</b><span>${PIN_ROLES[role].short}</span><span>${esc(chipPinName(b, i))}</span></div>`;
+    }
     return `<div class="pinrow"><b style="border-color:${PIN_ROLES[role].color}">${i + 1}</b>
       <select data-field="chipRole:${i}" aria-label="Назначение вывода ${i + 1}">${opts}</select>
       <input class="btn" type="text" maxlength="8" data-field="chipName:${i}" aria-label="Имя вывода ${i + 1}" placeholder="${PIN_ROLES[role].name}" value="${esc(b.names?.[i] ?? "")}" ${role === "nc" ? "disabled" : ""} /></div>`;
   }).join("");
   return `<div class="board-section">
     <div class="eyebrow">корпус микросхемы</div>
-    <h3>${b.label ? esc(b.label) : "Своя микросхема"}, DIP-${n}</h3>
-    ${selectField("chipPins", "Корпус", DIP_SIZES.map((k): [string, string] => [String(k), `DIP-${k} — ${2 * k} клеток места`]), String(n))}
-    <div class="field"><label for="f-chipLabel">Название</label><input id="f-chipLabel" class="btn" type="text" maxlength="24" data-field="chipLabel" placeholder="Например, мой NAND" value="${esc(b.label ?? "")}" /></div>
-    <p class="sub">Детали ставьте на площадки корпуса и соединяйте дорожками (T) или проводами. Выводы 1…${n / 2} — по ближнему краю слева направо, ${n / 2 + 1}…${n} — обратно по дальнему, как у настоящего DIP; место выводов не меняется, только для чего они. Питание и приборы — на столе, подключайте их к выводам.</p>
+    <h3>${b.label ? esc(b.label) : "Своя микросхема"}, ${packageName(b.package, n)}</h3>
+    ${b.fixed ? "" : selectField("chipPkg", "Корпус", PACKAGES.map((k): [string, string] => [k, `${k} — ${2 * parsePackage(k).pins} клеток места`]), packageName(b.package, n))}
+    ${b.fixed ? "" : `<div class="field"><label for="f-chipLabel">Название</label><input id="f-chipLabel" class="btn" type="text" maxlength="24" data-field="chipLabel" placeholder="Например, мой NAND" value="${esc(b.label ?? "")}" /></div>`}
+    <p class="sub">Детали ставьте на площадки корпуса и соединяйте дорожками (T) или проводами. ${pinLayoutText(b.package, n)[0].toUpperCase()}${pinLayoutText(b.package, n).slice(1)}; место выводов не меняется${b.fixed ? ", назначение задано заданием" : ", только для чего они"}. Питание и приборы — на столе, подключайте их к выводам.</p>
     <div class="eyebrow">выводы: назначение и имя</div><div class="pinrows">${rows}</div>
-    <div class="row"><button class="btn inline danger" data-board-act="remove">Убрать корпус</button></div>
+    ${b.fixed ? "" : `<div class="row"><button class="btn inline danger" data-board-act="remove">Убрать корпус</button></div>`}
   </div>`;
 }
 
