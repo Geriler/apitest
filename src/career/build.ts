@@ -529,7 +529,7 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
         points,
         vmin: points[0].volts,
         vmax: 1.1 * CHECK_VOLTS,
-        ...(def.id.startsWith("ref:") ? { absMax: REF_ABS_MAX } : {}),
+        ...(def.id.startsWith("ref:") ? { absMax: level.absMax ?? REF_ABS_MAX } : {}),
       };
     }
   } finally {
