@@ -1211,7 +1211,7 @@ export class App {
       if (this.lastCheck.metrics) this.lastCheck.better = recordMetrics(level.id, this.lastCheck.metrics);
       setCareerChips(careerDefs());
       this.applyMode();
-      this.toast(first ? `Открыт ${level.part}!` : `${level.part} обновлён`, `Таблица истинности сошлась. Внутри — ваша сборка; ${level.intermediate ? "учебная ступенька попадёт только в набор следующего уровня." : "компонент появится в мастерской и в наборах следующих уровней."}`);
+      this.toast(first ? `Открыт ${level.part}!` : `${level.part} обновлён`, `${level.sequence ? "Все шаги проверки сошлись" : "Таблица истинности сошлась"}. Внутри — ваша сборка; ${level.intermediate ? "учебная ступенька попадёт только в набор следующего уровня." : "компонент появится в мастерской и в наборах следующих уровней."}`);
     } else if (this.lastCheck.rows.length) {
       // Собрано, но работает не так — это считается к подсказкам (ошибки набора и корпуса — нет)
       recordFail(level.id);
