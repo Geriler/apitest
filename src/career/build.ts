@@ -411,7 +411,9 @@ export function diagnose(level: Level, def: ChipDef, rows: CheckRow[]): string[]
       if (r.each[k]) return;
       const v = formatSI(r.volts[k], "В");
       const what = many ? `выход ${outNames[k]}` : "выход";
-      const got = r.floating[k]
+      const got = r.floating[k] && level.drive
+        ? `${what} под нагрузкой ${formatSI(level.drive, "А")} проседает до ${v}: он держит уровень, но слишком слабо — не хватает тока`
+        : r.floating[k]
         ? `${what} ни за что не держится: куда тянет нагрузка, туда и идёт`
         : isLow(r.volts[k], CHECK_VOLTS)
           ? `${what} прижат к общему (${v})`
