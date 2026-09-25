@@ -370,13 +370,18 @@ export class World {
     let bestD = 0.6;
     for (const h of HOLES) {
       if (h.boardId !== hit.boardId) continue;
-      if (h.w !== undefined && h.d !== undefined) {
-        // SMD-площадка мелкая: попадание в её прямоугольник важнее близости к центрам соседей
-        const inside = Math.abs(h.x - hit.point.x) <= h.w / 2 + 0.04 && Math.abs(h.z - hit.point.z) <= h.d / 2 + 0.04;
+      const d = Math.hypot(h.x - hit.point.x, h.z - hit.point.z);
+      if (h.seat && h.w !== undefined && h.d !== undefined) {
+        // Площадка посадочного места: попадание в неё важнее близости к центрам соседей,
+        // мимо — ближайшая не дальше 0,3 шага (мелкие SMD-площадки трудно поймать точно)
+        const inside = h.round ? d <= h.w / 2 + 0.04 : Math.abs(h.x - hit.point.x) <= h.w / 2 + 0.04 && Math.abs(h.z - hit.point.z) <= h.d / 2 + 0.04;
         if (inside) return h;
+        if (d < 0.3 && d < bestD) {
+          bestD = d;
+          best = h;
+        }
         continue;
       }
-      const d = Math.hypot(h.x - hit.point.x, h.z - hit.point.z);
       if (d < bestD) {
         bestD = d;
         best = h;
@@ -508,8 +513,18 @@ function chipLegs(b: BoardSpec, height: number): THREE.Group {
 function seatCopper(b: BoardSpec, height: number): THREE.Group {
   const g = new THREE.Group();
   const tin = new THREE.MeshStandardMaterial({ color: 0xd2d4cc, metalness: 0.8, roughness: 0.35 });
+  const drill = new THREE.MeshStandardMaterial({ color: 0x15191a, roughness: 0.9 });
   for (const h of HOLES) {
-    if (h.boardId !== b.id || !h.seat) continue;
+    if (h.boardId !== b.id || !h.seat || h.w! < 0.2) continue; // узел дорожки — без площадки
+    if (h.round) {
+      // Отверстие выводной детали: лужёное кольцо и тёмный канал
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(h.w! / 2, h.w! / 2, 0.012, 20), tin);
+      ring.position.set(h.x, height + 0.006, h.z);
+      const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.014, 14), drill);
+      hole.position.set(h.x, height + 0.008, h.z);
+      g.add(ring, hole);
+      continue;
+    }
     const pad = new THREE.Mesh(new THREE.BoxGeometry(h.w!, 0.012, h.d!), tin);
     pad.position.set(h.x, height + 0.006, h.z);
     pad.receiveShadow = true;

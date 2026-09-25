@@ -355,6 +355,8 @@ export interface Chip extends Base {
   name: string;
   package?: ChipPackage;
   pins: number;
+  /** Микросхема в DIP-исполнении взята в корпусе SOIC (SO-n): только на плату под SMD. */
+  smd?: boolean;
 }
 
 /**
@@ -566,18 +568,38 @@ export function boardConflicts(scene: Scene, boards: readonly BoardSpec[]): stri
 /** Корпуса SO-n, для которых есть посадочное место. */
 const SO_PINS = [4, 6, 8, 14, 16];
 
+/** Шаг выводов аксиальной детали, в шагах 2,54 мм: корпус плюс по 1,25 мм на загиб (резистор 0,25 Вт — 10,16 мм). */
+const axialSpan = (lengthMm: number) => Math.max(3, Math.ceil((lengthMm + 2.5) / 2.54));
+
 /**
- * Посадочное место детали на плате под SMD; undefined — у детали ножки, на SMD-плату не ставится.
- * Микросхема в DIP на SMD-плате — та же микросхема в корпусе SOIC (SO-n): выводы у них нумеруются одинаково.
+ * Посадочное место детали на плате под SMD: SMD-корпус (площадки) или отверстия с площадками,
+ * которые выводная деталь делает себе сама. undefined — на плату не ставится (питание, приборы, реле).
  */
 export function footprintOf(c: Component): Footprint | undefined {
-  if (c.type === "resistor") return c.variant === "smd" ? c.smdSize : undefined;
-  if (c.type === "capacitor") return c.variant === "ceramic" && c.smd ? "0805" : undefined;
-  if (c.type === "transistor") return TRANSISTORS[c.kind].pkg;
-  if (c.type === "mosfet") return MOSFETS[c.kind].pkg === "SOT-23" ? "SOT-23" : undefined;
-  if (c.type === "chip") {
-    if (c.package === "SOT-23-5" || c.package === "SOT-23-6") return c.package;
-    return SO_PINS.includes(c.pins) ? (`SO-${c.pins}` as Footprint) : undefined;
+  switch (c.type) {
+    case "resistor":
+      return c.variant === "smd" ? c.smdSize : `TH2-${axialSpan(thtResistorSpec(c).lengthMm)}`;
+    case "capacitor":
+      if (c.variant === "ceramic") return c.smd ? "0805" : "TH2-2";
+      return electrolyticSize(c.uF, capacitorVolts(c)).diaMm > 6.3 ? "TH2-2" : "TH2-1";
+    case "diode":
+      return `TH2-${axialSpan(diodeSpec(c).lengthMm)}`;
+    case "led":
+      return "TH2-1";
+    case "lamp":
+    case "button":
+    case "switch":
+      return "TH2-2";
+    case "transistor":
+      return TRANSISTORS[c.kind].pkg ?? "TH3";
+    case "mosfet":
+      return MOSFETS[c.kind].pkg === "SOT-23" ? "SOT-23" : "TH3";
+    case "pot":
+      return "TH3";
+    case "chip":
+      if (c.package === "SOT-23-5" || c.package === "SOT-23-6") return c.package;
+      if (c.smd) return SO_PINS.includes(c.pins) ? (`SO-${c.pins}` as Footprint) : undefined;
+      return `DIP-${c.pins}`;
   }
   return undefined;
 }
@@ -588,6 +610,7 @@ export function smdOnly(c: Component): boolean {
   if (c.type === "capacitor") return !!c.smd;
   if (c.type === "transistor") return !!TRANSISTORS[c.kind].pkg;
   if (c.type === "mosfet") return MOSFETS[c.kind].pkg === "SOT-23";
+  if (c.type === "chip") return !!c.smd;
   return false;
 }
 

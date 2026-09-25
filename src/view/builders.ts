@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { HOLE_BY_ID, fineTrace, type Hole } from "../model/breadboard";
+import { HOLE_BY_ID, fineTrace, isThtFootprint, type Hole } from "../model/breadboard";
 import { FINE_TRACE_WIDTH_MM, TRACE_WIDTH_MM, footprintOf, smdOnly, jumperPoints, type Component, type WireBend } from "../model/types";
 import { part } from "../parts";
 import { Y, leadMaterial, mm, type ComponentView } from "./kit";
@@ -14,7 +14,9 @@ const solderGeometry = new THREE.ConeGeometry(mm(1.1), mm(1.2), 16);
 
 export function buildComponentView(c: Component): ComponentView {
   // На посадочном месте платы под SMD — корпус SMD, припой на площадках не нужен
-  if (isSeated(c) || (c.placement.mode === "free" && smdOnly(c) && footprintOf(c) && !(c.type === "resistor"))) return smdView(c);
+  // Выводная деталь на плате под SMD стоит в своих отверстиях — как на печатной плате
+  const fp = footprintOf(c);
+  if ((isSeated(c) && fp && !isThtFootprint(fp)) || (c.placement.mode === "free" && smdOnly(c) && fp && c.type !== "resistor")) return smdView(c);
   const view = part(c).view(c);
   if (c.placement.mode === "board") {
     for (const id of c.placement.holes) {

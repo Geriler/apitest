@@ -179,7 +179,7 @@ function baseTool(k: KitItem, smd = false): { tool: ToolDef; preset: Record<stri
   if (k.part === "other") return [{ tool: find(k.tool), preset: k.preset }];
   return careerDefs()
     .filter((d) => chipFunc(d.id) === k.func)
-    .map((d) => ({ tool: chipTool(d) as ToolDef, preset: {} }));
+    .map((d) => ({ tool: chipTool(d) as ToolDef, preset: smd ? { smd: true } : {} }));
 }
 
 /**

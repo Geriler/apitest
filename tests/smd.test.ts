@@ -47,14 +47,32 @@ describe("посадочные места SMD", () => {
     expect(seatProblem(b, { id: "R1", fp: "0805", x: 0, z: 6.5, rot: 0 })).toMatch(/край/);
   });
 
+  it("выводные детали делают себе отверстия на шаге 2,54 мм: DIP-14 — ряды через 7,62 мм, резистор 0,25 Вт — 10,16 мм", () => {
+    const at = { mode: "free" as const, x: 0, z: 0, rot: 0 };
+    const dip = footprintPads("DIP-14");
+    expect(dip[1].x - dip[0].x).toBeCloseTo(2.54);
+    expect(dip[0].z - dip[13].z).toBeCloseTo(7.62);
+    expect(dip[7].x).toBeCloseTo(dip[6].x);
+    const r = footprintOf({ id: "R1", type: "resistor", variant: "tht", ohms: 1e3, smdSize: "0805", placement: at })!;
+    expect(r).toBe("TH2-4");
+    expect(footprintOf({ id: "HL1", type: "led", color: "red", placement: at })).toBe("TH2-1");
+    expect(footprintOf({ id: "EL1", type: "lamp", kind: "6.3V", placement: at })).toBe("TH2-2");
+    expect(footprintOf({ id: "VT1", type: "mosfet", kind: "2N7000", placement: at })).toBe("TH3");
+    // Узел дорожки ничего не занимает — его можно поставить и под корпус
+    const b: BoardSpec = { id: "S1", kind: "smd", x: 0, z: 0, cols: 24, rows: 15, seats: [{ id: "U1", fp: "SO-14", x: 0, z: 0, rot: 0 }] };
+    expect(seatProblem(b, { id: "n1", fp: "NODE", x: 0, z: 0, rot: 0 })).toBeUndefined();
+    expect(seatProblem(b, { id: "R1", fp: "TH2-4", x: 0, z: 0, rot: 0 })).toMatch(/U1/);
+  });
+
   it("корпуса деталей: SOT-23 у SMD-транзисторов, SOIC у DIP-микросхем; у BC847 коллектор — вывод 3", () => {
     const at = { mode: "free" as const, x: 0, z: 0, rot: 0 };
     const bc: Component = { id: "VT1", type: "transistor", kind: "BC847", placement: at };
     expect(footprintOf(bc)).toBe("SOT-23");
     expect(padNumbers(bc, 3)).toEqual([3, 1, 2]);
     expect(smdOnly(bc)).toBe(true);
-    expect(footprintOf({ id: "VT2", type: "mosfet", kind: "2N7000", placement: at })).toBeUndefined();
-    expect(footprintOf({ id: "U1", type: "chip", def: "x", name: "x", package: "DIP", pins: 16, placement: at })).toBe("SO-16");
+    expect(smdOnly({ id: "VT2", type: "mosfet", kind: "2N7000", placement: at })).toBe(false);
+    expect(footprintOf({ id: "U1", type: "chip", def: "x", name: "x", package: "DIP", pins: 16, placement: at })).toBe("DIP-16");
+    expect(footprintOf({ id: "U1", type: "chip", def: "x", name: "x", package: "DIP", pins: 16, smd: true, placement: at })).toBe("SO-16");
     expect(footprintOf({ id: "R1", type: "resistor", variant: "smd", ohms: 1e3, smdSize: "0805", placement: at })).toBe("0805");
     expect(MOSFETS["2N7002"].pins).toEqual(["G", "S", "D"]);
     expect(MOSFETS.BSS84.pins).toEqual(["G", "S", "D"]);

@@ -19,6 +19,8 @@ import {
   seatHole,
   seatOf,
   seatProblem,
+  seatPads,
+  isThtFootprint,
   nextBoardId,
   packageName,
   parsePackage,
@@ -1364,10 +1366,52 @@ export class App {
     this.renderInspector();
   }
 
+  /**
+   * Узел дорожки на плате под SMD в точке point (по сетке 0,635 мм): точка излома или развилки.
+   * Без дорожек и проводов узел пропадает сам (pruneNodes).
+   */
+  private traceNode(board: BoardSpec, point: THREE.Vector3): Hole | undefined {
+    const b = (this.scene.boards ?? []).find((x) => x.id === board.id)!;
+    const x = snapSeat(point.x - b.x), z = snapSeat(point.z - b.z);
+    const existing = (b.seats ?? []).find((s) => s.fp === "NODE" && s.x === x && s.z === z);
+    if (existing) return HOLE_BY_ID.get(seatHole(b, existing.id, 1));
+    let n = 1;
+    while ((b.seats ?? []).some((s) => s.id === `n${n}`)) n++;
+    const seat: Seat = { id: `n${n}`, fp: "NODE", x, z, rot: 0 };
+    if (seatProblem(b, seat)) return undefined;
+    b.seats = [...(b.seats ?? []), seat];
+    applyBoards(this.scene.boards ?? []);
+    this.world.rebuildBoards();
+    return HOLE_BY_ID.get(seatHole(b, seat.id, 1));
+  }
+
+  /** Убрать узлы дорожек, к которым не идёт ни дорожка, ни провод. */
+  private pruneNodes(): boolean {
+    const used = new Set<string>();
+    for (const t of this.scene.traces ?? []) used.add(t.a).add(t.b);
+    for (const w of this.scene.wires) for (const e of [w.a, w.b]) if ("hole" in e) used.add(e.hole);
+    if (this.pendingPad) used.add(this.pendingPad.id);
+    let changed = false;
+    for (const b of this.scene.boards ?? []) {
+      const keep = (b.seats ?? []).filter((s) => s.fp !== "NODE" || used.has(seatHole(b, s.id, 1)));
+      if (b.seats && keep.length !== b.seats.length) {
+        b.seats = keep;
+        changed = true;
+      }
+    }
+    if (changed) {
+      applyBoards(this.scene.boards ?? []);
+      this.world.rebuildBoards();
+    }
+    return changed;
+  }
+
   private cancelPending(): void {
+    const hadPad = !!this.pendingPad;
     this.pendingHole = undefined;
     this.pendingPad = undefined;
     this.pendingEnd = undefined;
+    if (hadPad && this.pruneNodes()) this.changed();
     this.clearGhost();
     this.refreshMarks();
     this.updateHint();
@@ -1496,6 +1540,7 @@ export class App {
    */
   private placeSeated(tool: PlaceTool, board: BoardSpec, point: THREE.Vector3): void {
     const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
+    if (!part(sample).onBoard(sample) && !smdOnly(sample)) return this.setHint(placeTools().get(tool)!.def.boardRefusal ?? "");
     const fp = footprintOf(sample);
     if (!fp) return this.setHint(noSmdHint(sample));
     const seat: Seat = { id: "?", fp, x: snapSeat(point.x - board.x), z: snapSeat(point.z - board.z), rot: this.quarterTurns() };
@@ -1519,7 +1564,7 @@ export class App {
   flip(id?: string): void {
     const c = id ? this.component(id) : undefined;
     if (!c || part(c).noFlip) return;
-    if (isSeated(c)) return this.setHint("SMD-деталь не перевернуть: выводы корпуса на своих местах. Повернуть — R.");
+    if (isSeated(c) && !isThtFootprint(footprintOf(c)!)) return this.setHint("SMD-деталь не перевернуть: выводы корпуса на своих местах. Повернуть — R.");
     if (c.placement.mode === "board") {
       // Для транзистора: К-Б-Э → Э-Б-К
       c.placement.holes = [...c.placement.holes].reverse();
@@ -1665,6 +1710,7 @@ export class App {
     if (this.tool === "trace") {
       // Дорожку рисуем по площадкам: детали и провода не мешают
       h.hole = this.world.pickHole(ndc);
+      if (!h.hole && h.overBoard) h.onBoard = this.world.pickBoard(ndc);
       return h;
     }
     if (!h.componentId && !h.wireId && !h.traceId) {
@@ -2002,7 +2048,12 @@ export class App {
    * от предыдущей площадки. Щелчок по той же площадке или Esc — конец.
    */
   private clickTrace(): void {
-    const h = this.hover.hole;
+    let h = this.hover.hole;
+    // На плате под SMD дорожку можно вести через любую точку: там появляется узел
+    if (!h && this.hover.onBoard) {
+      const b = boardById(this.hover.onBoard.boardId);
+      if (b && isSmdBoard(b)) h = this.traceNode(b, this.hover.onBoard.point);
+    }
     if (!h) return;
     if (h.board !== "pcb") return this.setHint("Дорожки рисуются только на печатной плате. На макетке соединяйте проводами.");
     if (!this.pendingPad) {
@@ -2209,6 +2260,7 @@ export class App {
       this.scene.wires = this.scene.wires.filter((w) => w.id !== id);
       this.scene.traces = (this.scene.traces ?? []).filter((t) => t.id !== id);
     }
+    this.pruneNodes();
     this.sim.scene = this.scene;
     if (this.selected === id) this.selected = undefined;
     if (this.picked === id) this.picked = undefined;
@@ -2274,6 +2326,12 @@ export class App {
     if (this.tool === "trace" && this.pendingPad && h.hole?.boardId === this.pendingPad.boardId && h.hole.id !== this.pendingPad.id) {
       return this.showGhost(buildTraceView("ghost", this.pendingPad, h.hole).mesh);
     }
+    // На плате под SMD — до точки, где появится узел
+    if (this.tool === "trace" && this.pendingPad && !h.hole && h.onBoard?.boardId === this.pendingPad.boardId) {
+      const b = boardById(h.onBoard.boardId)!;
+      const to: Hole = { ...this.pendingPad, id: "ghost", seat: undefined, x: b.x + snapSeat(h.onBoard.point.x - b.x), z: b.z + snapSeat(h.onBoard.point.z - b.z) };
+      return this.showGhost(buildTraceView("ghost", this.pendingPad, to).mesh);
+    }
     if (BOARD_TOOLS[this.tool] && h.table) {
       const b = this.newBoard(BOARD_TOOLS[this.tool]!, h.table);
       if (this.boardProblem(b)) return this.clearGhost();
@@ -2292,7 +2350,19 @@ export class App {
       if (!fp) return this.clearGhost();
       const seat: Seat = { id: "?", fp, x: snapSeat(h.onBoard!.point.x - smdBoard.x), z: snapSeat(h.onBoard!.point.z - smdBoard.z), rot: this.quarterTurns() };
       if (seatProblem(smdBoard, seat)) return this.clearGhost();
-      return this.showGhost(smdView(sample, { x: smdBoard.x + seat.x, z: smdBoard.z + seat.z, y: PCB_HEIGHT, angle: (seat.rot * Math.PI) / 2 }).group);
+      if (!isThtFootprint(fp)) return this.showGhost(smdView(sample, { x: smdBoard.x + seat.x, z: smdBoard.z + seat.z, y: PCB_HEIGHT, angle: (seat.rot * Math.PI) / 2 }).group);
+      // Выводная: вид строится по отверстиям — на время создаём их на месте будущих
+      const ids = seatPads(smdBoard, seat).map((p, i) => {
+        const id = `ghost:${i}`;
+        HOLE_BY_ID.set(id, { id, x: p.x, y: PCB_HEIGHT, z: p.z, node: "", kind: "pad", board: "pcb", boardId: smdBoard.id });
+        return id;
+      });
+      try {
+        const holes = padNumbers(sample, ids.length).map((n) => ids[n - 1]);
+        return this.showGhost(buildComponentView({ ...sample, placement: { mode: "board", holes } } as Component).group);
+      } finally {
+        for (const id of ids) HOLE_BY_ID.delete(id);
+      }
     }
     if (smdOnly(sample) && (h.hole || h.overBoard)) return this.clearGhost();
     if (!part(sample).onBoard(sample) && (h.hole || h.overBoard)) return this.clearGhost();
@@ -2348,7 +2418,7 @@ export class App {
     else if (t === "smdb") s = "Нажмите на свободное место на столе — туда ляжет плата под SMD. Размер — в панели справа.";
     else if (t === "trace") s = this.pendingPad
       ? `Дорожка от <b>${holeLabel(this.pendingPad.id)}</b>: следующая площадка. Щелчок по той же или Esc — закончить.`
-      : "Нажмите на <b>площадку</b> печатной платы, затем на следующую — между ними ляжет медная дорожка.";
+      : `Нажмите на <b>площадку</b> печатной платы, затем на следующую — между ними ляжет медная дорожка.${(this.scene.boards ?? []).some(isSmdBoard) ? " На плате под SMD щелчок по пустому месту — узел для поворота." : ""}`;
     else if (this.isPlaceTool(t)) {
       s = placeTools().get(t)!.def.hint(this.settingsOf(t), this.pendingHole ? holeLabel(this.pendingHole.id) : undefined);
       // SMD-деталь — на плату под SMD: там площадки появляются под ней, где её ни поставь
@@ -2638,6 +2708,7 @@ function HOLES_OF_SEAT(b: BoardSpec, seat: string): string[] {
 function noSmdHint(c: Component): string {
   const kind = c.type === "mosfet" || c.type === "transistor" ? c.kind : "";
   const twin = ({ "2N7000": "2N7002", BS250: "BSS84", BC547: "BC847" } as Record<string, string>)[kind];
+  if (c.type === "chip") return `Для ${c.name} посадочного места нет. Ставьте её на макетку и подключайте проводом к площадкам J.`;
   if (twin) return `${kind} — в корпусе с ножками (TO-92), на плату под SMD не встаёт. Его SMD-пара в корпусе SOT-23 — <b>${twin}</b>: выберите её в панели детали.`;
   if (c.type === "resistor") return "Выводной резистор на плату под SMD не встаёт. Возьмите SMD-резистор (Пассивные → SMD).";
   if (c.type === "capacitor") return c.variant === "ceramic" ? "Выводной конденсатор на плату под SMD не встаёт. Выберите в панели корпус «SMD 0805»." : "Электролит с ножками на плату под SMD не встаёт: ставьте его на макетку или печатную плату и подключайте проводом.";
