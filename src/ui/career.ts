@@ -132,6 +132,10 @@ export class CareerPanel {
         : check.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("") +
           (check.diagnosis?.length ? `<div class="eyebrow">что проверить</div><ul class="kitlist">${check.diagnosis.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "")
       : "";
+    // Проверки кроме таблицы: пороги триггера Шмитта, период генератора
+    const steps = check?.steps
+      ? `<ul class="list steps">${check.steps.map((x) => `<li><span>${esc(x.text)}</span><span class="${x.ok ? "ok" : "bad"}">${x.ok ? "✓" : "✗"}</span></li>`).join("")}</ul>`
+      : "";
     const hints = this.hintsHtml(level);
     return `<div class="eyebrow">карьера · ${esc(FUNC_NAMES[level.func])}</div><h2>${esc(level.part)}</h2>
       <p><b>${esc(level.title)}.</b> ${esc(level.about)}</p>
@@ -140,7 +144,7 @@ export class CareerPanel {
       <p class="sub">Детали — из группы «Набор» слева, ставьте их на площадки корпуса и соединяйте дорожками (T) или проводами. Для своей проверки можно взять питание и приборы — в микросхему они не входят.</p>
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
       <button class="btn inline" data-career-act="leave">К карте</button></div>
-      ${table}${verdict}${hints}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;
+      ${table}${steps}${verdict}${hints}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;
   }
 
   /**

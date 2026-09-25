@@ -3,7 +3,7 @@ import { HOLE_BY_ID, holeLabel, isSot, packageName, pinLayoutText, pinOffsets } 
 import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
 import { resolveChip, toolChips } from "../chips/registry";
-import { CMOS_INPUT, MODEL_MAX_OUT, MODEL_OFF, REF_ABS_MAX, X_FACTOR, modelAt, type ChipModel, type ModelState } from "../chips/model";
+import { CMOS_INPUT, INPUT_BAND, MAX_FLIPS, MODEL_MAX_OUT, MODEL_OFF, REF_ABS_MAX, X_FACTOR, modelAt, type ChipModel, type ModelState } from "../chips/model";
 import type { Simulation } from "../sim/simulation";
 import { pinNode } from "../sim/nodes";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
@@ -130,7 +130,7 @@ export const chip: PartDef<Chip> = {
     let q = -1;
     if (span > 0.5) {
       const prev = sim.memory.get(`${c.id}:seq`) as ModelState | undefined;
-      const levels = inputLevels(c, model, sim);
+      const levels = inputLevels(c, model, sim, prev);
       const open = levels.map((l, i) => (l === undefined ? i : -1)).filter((i) => i >= 0);
       const tries = open.length > 4 ? [] : Array.from({ length: 1 << open.length }, (_, m) => levels.map((l, i) => l ?? !!(m & (1 << open.indexOf(i)))));
       const results = tries.map((bits) => model.logic(bits, prev));
@@ -143,6 +143,15 @@ export const chip: PartDef<Chip> = {
     }
     const key = `${c.id}:q`;
     if (sim.junction.get(key) === q || shared.flips >= 64) return true;
+    // Качается в петле без задержки — генерирует быстрее, чем видно: выходы «не определены»
+    const per = (shared.per ??= new Map());
+    const n = (per.get(c.id) ?? 0) + 1;
+    per.set(c.id, n);
+    if (n > MAX_FLIPS && q >= 0) {
+      const x = model.outputs.reduce((m, _, k) => m | (1 << (k + 16)), 0);
+      if (sim.junction.get(key) === x) return true;
+      q = x;
+    }
     sim.junction.set(key, q);
     shared.flips++;
     return false;
@@ -152,7 +161,8 @@ export const chip: PartDef<Chip> = {
     const model = sim.modelOf(c.id);
     const q = sim.junction.get(`${c.id}:q`);
     if (!model || q === undefined || q < 0) return;
-    sim.memory.set(`${c.id}:seq`, { inputs: inputLevels(c, model, sim).map((l) => !!l), outputs: model.outputs.map((_, k) => !!(q & (1 << k))) } satisfies ModelState);
+    const prev = sim.memory.get(`${c.id}:seq`) as ModelState | undefined;
+    sim.memory.set(`${c.id}:seq`, { inputs: inputLevels(c, model, sim, prev).map((l) => !!l), outputs: model.outputs.map((_, k) => !!(q & (1 << k))) } satisfies ModelState);
   },
   // Перегрузка: самый нагруженный выход модели (предел как у логики 74-й серии) и питание сверх предельного
   load(c, sim) {
@@ -217,14 +227,25 @@ function defSupply(c: Chip, def: ChipDef, sim: Simulation): number | undefined {
   return a === undefined || b === undefined ? undefined : a - b;
 }
 
-/** Уровни входов модели: единица — выше 70 % питания, ноль — ниже 30 %, между — undefined (не определён). */
-function inputLevels(c: Chip, model: ChipModel, sim: Simulation): (boolean | undefined)[] {
+/**
+ * Уровни входов модели. Обычный вход: выше полосы INPUT_BAND — единица, ниже — ноль, в ней — не
+ * определён (так ведёт себя висящий). Триггер Шмитта (model.hyst): выше верхнего порога — единица,
+ * ниже нижнего — ноль, между — как было на прошлом расчёте.
+ */
+function inputLevels(c: Chip, model: ChipModel, sim: Simulation, prev?: ModelState): (boolean | undefined)[] {
   const v = (p: number) => sim.solution.voltage.get(pinNode(c, p - 1)) ?? 0;
   const gnd = v(model.gnd), span = v(model.vcc) - gnd;
-  return model.inputs.map((p) => {
+  const [lo, hi] = model.hyst ?? INPUT_BAND;
+  // Гистерезис помнит, где вход был только что — в этом же расчёте (иначе, переключившись, выход
+  // чуть сдвигает вход назад, и тот снова читается по-старому — выход качается)
+  const now = sim.junction.get(`${c.id}:hin`);
+  const levels = model.inputs.map((p, i) => {
     const x = (v(p) - gnd) / (span || 1);
-    return x >= 0.7 ? true : x <= 0.3 ? false : undefined;
+    const was = now !== undefined ? !!(now & (1 << i)) : (prev?.inputs[i] ?? false);
+    return x >= hi ? true : x <= lo ? false : model.hyst ? was : undefined;
   });
+  if (model.hyst) sim.junction.set(`${c.id}:hin`, levels.reduce((m: number, b, i) => m | (b ? 1 << i : 0), 0));
+  return levels;
 }
 
 /** Как считается микросхема: моделью (и с какими параметрами) или целиком. */
@@ -232,7 +253,7 @@ function modelText(m: ChipModel | undefined, sim: Simulation, c: Chip): string {
   if (!m) return "Расчёт — полный, как если бы схема стояла на макетке: детали внутри греются и горят как обычно.";
   const pt = modelAt(m, supply(c, m, sim) ?? m.vmax);
   const r = (xs: number[]) => [...new Set(xs.map((x) => (x >= CMOS_INPUT ? "∞" : formatOhms(x))))].join(", ");
-  return `Она уже прошла проверку, поэтому считается моделью, снятой с этой проверки при питании ${formatSI(m.vmin, "В")}–${formatSI(m.points.at(-1)!.volts, "В")}: сейчас выход — ключ к питанию через ${r(pt.rHigh)} или к общему через ${r(pt.rLow)}, вход — ${r(pt.rIn)}, ток покоя ${formatSI(pt.iq, "А")}. Вне этого диапазона она считается по транзисторам. Висящий вход КМОП не определён — выход тогда ни то ни сё. Перегрузка выхода сверх ${formatSI(MODEL_MAX_OUT, "А")}${m.absMax ? ` или питание выше ${formatSI(m.absMax, "В")}` : ""} выводит её из строя.`;
+  return `Она уже прошла проверку, поэтому считается моделью, снятой с этой проверки при питании ${formatSI(m.vmin, "В")}–${formatSI(m.points.at(-1)!.volts, "В")}: сейчас выход — ключ к питанию через ${r(pt.rHigh)} или к общему через ${r(pt.rLow)}, вход — ${r(pt.rIn)}, ток покоя ${formatSI(pt.iq, "А")}. Вне этого диапазона она считается по транзисторам. Вход переключается около половины питания${m.hyst ? ` — с гистерезисом: вверх при ${Math.round(m.hyst[1] * 100)} %, вниз при ${Math.round(m.hyst[0] * 100)} % питания` : ""}; висящий вход КМОП не определён — выход тогда ни то ни сё. Петля из микросхем без RC-цепи генерирует быстрее, чем видно приборам (у настоящих — десятки мегагерц), — её выход тоже «не определён», посередине. Перегрузка выхода сверх ${formatSI(MODEL_MAX_OUT, "А")}${m.absMax ? ` или питание выше ${formatSI(m.absMax, "В")}` : ""} выводит её из строя.`;
 }
 
 // ─── 3D: корпус DIP ──────────────────────────────────────────────────────────

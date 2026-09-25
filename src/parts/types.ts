@@ -166,7 +166,7 @@ export interface PartDef<C extends Component = Component> {
    * Шаг Ньютона после очередного решения: обновить свои переходы в sim.junction.
    * Возвращает true, если деталь сошлась. Только у нелинейных деталей и только у исправных.
    */
-  newton?(c: C, sim: Simulation, iter: number, shared: { flips: number }): boolean;
+  newton?(c: C, sim: Simulation, iter: number, shared: { flips: number; per?: Map<string, number> }): boolean;
   /** Есть ли у детали ёмкости (тогда время идёт шагами и нужен remember). */
   dynamic?: boolean;
   /** После шага по времени: запомнить заряд своих ёмкостей в sim.capVoltage. */

@@ -56,6 +56,7 @@ export function recipeScene(level: Level, chipFor: (func: LogicFunc) => ChipDef)
       Object.assign(chips, def.scene.chips ?? {});
       c = { id: p.id, type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement };
     } else if (p.ohms) c = { id: p.id, type: "resistor", variant: "tht", ohms: p.ohms, smdSize: "0805", placement };
+    else if (p.uF) c = { id: p.id, type: "capacitor", variant: "ceramic", uF: p.uF, volts: 50, placement };
     else if (p.kind === "BC547" || p.kind === "BC557") c = { id: p.id, type: "transistor", kind: p.kind, placement };
     else c = { id: p.id, type: "mosfet", kind: p.kind as "2N7000", placement };
     scene.components.push(c);
@@ -369,20 +370,140 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
   return rows;
 }
 
+/** Стенд для одной микросхемы: питание volts, вход (если есть) — от второго блока питания, выход — на нагрузку 100 кОм к общему. */
+function bench(def: ChipDef, level: Level, chips: Record<string, ChipDef>, volts = CHECK_VOLTS) {
+  const io = gateIo(level);
+  const free = { mode: "free" as const, x: 0, z: 0, rot: 0 };
+  const u: Chip = { id: "U1", type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement: free };
+  const pin = (p: number): Endpoint => ({ comp: "U1", pin: p - 1 });
+  const plus: Endpoint = { comp: "G1", pin: 1 };
+  const minus: Endpoint = { comp: "G1", pin: 0 };
+  const links: [Endpoint, Endpoint][] = [
+    [plus, pin(io.vcc)],
+    [minus, pin(io.gnd)],
+    [pin(io.outputs[0]), { comp: "RL", pin: 0 }],
+    [{ comp: "RL", pin: 1 }, minus],
+  ];
+  const components: Component[] = [
+    { id: "G1", type: "psu", volts, amps: 1, on: true, placement: free },
+    u,
+    { id: "RL", type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: free },
+  ];
+  if (io.inputs.length) {
+    components.push({ id: "G2", type: "psu", volts: 0, amps: 1, on: true, placement: free });
+    links.push([{ comp: "G2", pin: 1 }, pin(io.inputs[0])], [{ comp: "G2", pin: 0 }, minus]);
+  }
+  const scene: Scene = { components, wires: links.map(([a, b], i) => ({ id: `W${i}`, a, b, color: "" })), boards: [], chips: { ...chips, [def.id]: def } };
+  const sim = new Simulation(scene, undefined, { expand: ["U1"], strictModels: true });
+  const burnt = new Set<string>();
+  const out = () => (sim.solution.voltage.get(pinNode(u, io.outputs[0] - 1)) ?? 0) - (sim.solution.voltage.get(pinNode(u, io.gnd - 1)) ?? 0);
+  const step = (dt: number) => {
+    for (const c of sim.step(dt)) if (c.id.startsWith("U1/")) burnt.add(c.id.slice(3));
+    for (const c of sim.parts) {
+      const limit = heatThreshold(c);
+      if (c.id.startsWith("U1/") && limit && sim.overload(c) > limit) burnt.add(c.id.slice(3));
+    }
+  };
+  return { sim, scene, out, step, burnt };
+}
+
+/** Пороги по даташиту 74LVC1G14 (4,5–5,5 В), В: VT+, VT−, наименьший гистерезис. */
+export const SCHMITT_LIMITS = { up: [2.2, 3.4], down: [1.4, 2.4], hyst: 0.5 } as const;
+
+/**
+ * Пороги входа: вход плавно поднимают от 0 до питания и опускают обратно шагами 0,05 В; где выход
+ * переключился — там и порог. undefined — не переключился.
+ */
+export function thresholds(def: ChipDef, level: Level, chips: Record<string, ChipDef>, volts = CHECK_VOLTS) {
+  const b = bench(def, level, chips, volts);
+  const g2 = b.scene.components.find((c) => c.id === "G2") as Extract<Component, { type: "psu" }>;
+  const at = (v: number) => {
+    g2.volts = v;
+    b.sim.solve();
+    b.step(0.01);
+    return b.out() > volts / 2;
+  };
+  const n = Math.round(volts / 0.05);
+  const start = at(0);
+  let up: number | undefined, down: number | undefined;
+  for (let i = 1; i <= n; i++) if (up === undefined && at(i * 0.05) !== start) up = i * 0.05;
+  const top = at(volts);
+  for (let i = n - 1; i >= 0; i--) if (down === undefined && at(i * 0.05) !== top) down = i * 0.05;
+  return { up, down, burnt: [...b.burnt] };
+}
+
+/** Проверка порогов триггера Шмитта: шаги, как у уроков. */
+function sweepSteps(def: ChipDef, level: Level, chips: Record<string, ChipDef>): { text: string; ok: boolean }[] {
+  const { up, down, burnt } = thresholds(def, level, chips);
+  const L = SCHMITT_LIMITS;
+  const v = (x: number | undefined) => (x === undefined ? "не переключился" : formatSI(x, "В"));
+  const within = (x: number | undefined, [a, b]: readonly number[]) => x !== undefined && x >= a && x <= b;
+  const h = up !== undefined && down !== undefined ? up - down : undefined;
+  return [
+    { text: `Вход растёт — выход переключается при ${L.up[0]}–${L.up[1]} В (VT+): сейчас ${v(up)}`.replace(/\./g, ","), ok: within(up, L.up) },
+    { text: `Вход падает — при ${L.down[0]}–${L.down[1]} В (VT−): сейчас ${v(down)}`.replace(/\./g, ","), ok: within(down, L.down) },
+    { text: `Гистерезис VT+ − VT− не меньше ${formatSI(L.hyst, "В")}: сейчас ${h === undefined ? "—" : formatSI(h, "В")}`, ok: h !== undefined && h >= L.hyst },
+    { text: burnt.length ? `Ничего не сгорело — а сейчас: ${burnt.join(", ")}` : "Ничего не сгорело", ok: !burnt.length },
+  ];
+}
+
+/** Период генератора, с (по фронтам через половину питания), доля времени в единице и размах. */
+export function oscillation(def: ChipDef, level: Level, chips: Record<string, ChipDef>, seconds = 6) {
+  const b = bench(def, level, chips);
+  const dt = 0.005;
+  const vs: number[] = [];
+  for (let t = 0; t < seconds; t += dt) {
+    b.step(dt);
+    vs.push(b.out());
+  }
+  const tail = vs.slice(Math.round(1 / dt));
+  const mid = CHECK_VOLTS / 2;
+  const rises: number[] = [];
+  for (let i = 1; i < tail.length; i++) if (tail[i - 1] < mid && tail[i] >= mid) rises.push(i * dt);
+  const period = rises.length >= 2 ? (rises.at(-1)! - rises[0]) / (rises.length - 1) : 0;
+  const span = rises.length >= 2 ? tail.slice(Math.round(rises[0] / dt), Math.round(rises.at(-1)! / dt)) : tail;
+  const duty = span.length ? span.filter((v) => v >= mid).length / span.length : 0;
+  return { period, duty, lo: Math.min(...tail), hi: Math.max(...tail), burnt: [...b.burnt] };
+}
+
+/** Проверка генератора: период, скважность, размах. */
+function oscSteps(def: ChipDef, level: Level, chips: Record<string, ChipDef>): { text: string; ok: boolean }[] {
+  const o = oscillation(def, level, chips);
+  const pct = (x: number) => `${Math.round(x * 100)} %`;
+  return [
+    { text: o.period ? `Генерирует: период 0,5–2 с — сейчас ${formatSI(o.period, "с")}` : "Генерирует: выход сам меняется то в ноль, то в единицу", ok: o.period >= 0.5 && o.period <= 2 },
+    { text: `В единице 30–70 % времени — сейчас ${o.period ? pct(o.duty) : "—"}`, ok: !!o.period && o.duty >= 0.3 && o.duty <= 0.7 },
+    { text: `Размах: ноль не выше 1,5 В, единица не ниже 3,5 В — сейчас ${formatSI(o.lo, "В")} … ${formatSI(o.hi, "В")}`, ok: o.lo <= 1.5 && o.hi >= 3.5 },
+    { text: o.burnt.length ? `Ничего не сгорело — а сейчас: ${o.burnt.join(", ")}` : "Ничего не сгорело", ok: !o.burnt.length },
+  ];
+}
+
 /** Проверить сборку уровня: корпус, набор, таблица истинности. */
 export function checkLevel(level: Level, scene: Scene, chips: Record<string, ChipDef>, id = `career:${level.id}`): CheckResult {
   const problems = [...packageProblems(scene), ...kitProblems(level, scene)];
   if (problems.length) return { ok: false, problems, rows: [] };
   const def = packageChip(scene, level.part, id);
   def.scene.chips = { ...chipsUsed(scene), ...(scene.chips ?? {}) };
+  if (level.check === "osc") {
+    const all = { ...chips, ...def.scene.chips };
+    const steps = oscSteps(def, level, all);
+    const ok = steps.every((x) => x.ok);
+    return ok
+      ? { ok, problems: [], rows: [], steps, def, metrics: measure(scene, [], def, all) }
+      : { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите шаги с ✗.`], rows: [], steps };
+  }
   const rows = truthTable(def, level, { ...chips, ...def.scene.chips });
-  const ok = rows.every((r) => r.ok);
-  if (!ok) return { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows, diagnosis: diagnose(level, def, rows) };
+  const steps = level.check === "sweep" && rows.every((r) => r.ok) ? sweepSteps(def, level, { ...chips, ...def.scene.chips }) : undefined;
+  const ok = rows.every((r) => r.ok) && (steps ?? []).every((x) => x.ok);
+  if (!ok)
+    return rows.every((r) => r.ok)
+      ? { ok, problems: [`${FUNC_NAMES[level.func]}: таблица сходится, а пороги — нет: смотрите шаги с ✗.`], rows, steps }
+      : { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows, diagnosis: diagnose(level, def, rows) };
   const all = { ...chips, ...def.scene.chips };
   const sweep = supplySweep(def, level, all, rows);
   const pt = pointFromRows(level, rows, CHECK_VOLTS, truthTable(def, level, all, CHECK_VOLTS, HEAVY_LOAD));
   const metrics = { ...measure(scene, rows, def, all), vmin: sweep.at(-1)!.volts, rOut: Math.max(...pt.rHigh, ...pt.rLow) };
-  return { ok, problems: [], rows, def, metrics };
+  return { ok, problems: [], rows, def, metrics, ...(steps ? { steps } : {}) };
 }
 
 /**
@@ -505,7 +626,8 @@ export function supplySweep(def: ChipDef, level: Level, chips: Record<string, Ch
  */
 export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined {
   const level = chipLevel(def.id);
-  if (!level || def.pins !== level.roles.length) return undefined;
+  // Генератор моделью не описать: у него нет таблицы — считается целиком
+  if (!level || def.pins !== level.roles.length || level.check === "osc") return undefined;
   const key = `${def.id}@${def.updatedAt}`;
   const known = models.get(key);
   if (known !== undefined) return known ?? undefined;
@@ -530,6 +652,7 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
         vmin: points[0].volts,
         vmax: 1.1 * CHECK_VOLTS,
         ...(def.id.startsWith("ref:") ? { absMax: level.absMax ?? REF_ABS_MAX } : {}),
+        ...hysteresis(def, level, chipsAll),
       };
     }
   } finally {
@@ -537,6 +660,13 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
   }
   models.set(key, model ?? null);
   return model;
+}
+
+/** Пороги триггера Шмитта для модели — доли питания, снятые при 5 В. */
+function hysteresis(def: ChipDef, level: Level, chips: Record<string, ChipDef>): { hyst?: [number, number] } {
+  if (level.check !== "sweep") return {};
+  const { up, down } = thresholds(def, level, chips);
+  return up !== undefined && down !== undefined && up > down ? { hyst: [down / CHECK_VOLTS, up / CHECK_VOLTS] } : {};
 }
 
 /** Тяжёлая нагрузка для второго замера выхода, Ом: по двум замерам видно, как выход проседает под током. */

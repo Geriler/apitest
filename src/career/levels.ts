@@ -11,7 +11,7 @@ import type { ChipPackage, ChipPinRole } from "../model/breadboard";
 import type { MosfetKind, TransistorKind } from "../model/types";
 
 /** Логическая функция компонента. */
-export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff";
+export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc";
 
 /** Деталь набора: сколько штук и что именно (тип и номинал). */
 export type KitItem =
@@ -33,7 +33,8 @@ export type KitItem =
  * «R1.1/2» — резистор, «D1.3» — вывод 3 микросхемы.
  */
 export interface Recipe {
-  parts: { id: string; holes: string[]; kind?: string; ohms?: number; func?: LogicFunc }[];
+  /** uF — керамический конденсатор такой ёмкости, мкФ. */
+  parts: { id: string; holes: string[]; kind?: string; ohms?: number; uF?: number; func?: LogicFunc }[];
   nets: string[][];
 }
 
@@ -68,6 +69,11 @@ export interface Level {
    * нагрузочную способность — скольких входов хватит одному выходу. Нет — лёгкая нагрузка 100 кОм.
    */
   drive?: number;
+  /**
+   * Что проверять кроме таблицы: sweep — вход плавно растёт и падает, ищутся пороги и гистерезис
+   * (триггер Шмитта); osc — таблицы нет, выход должен генерировать с нужным периодом (генератор).
+   */
+  check?: "sweep" | "osc";
   /** Предельное питание настоящей микросхемы, В (по даташиту): у 74LVC — 6,5 (по умолчанию), у 74HC — 7. */
   absMax?: number;
   /** Как собирается, если вариантов несколько: «КМОП», «только из ИЛИ-НЕ»… */
@@ -141,6 +147,12 @@ const num = (bits: boolean[]) => bits.reduce((sum, b, i) => sum + (b ? 1 << i : 
 export function truth(func: LogicFunc, bits: boolean[]): boolean[] {
   const [a, b, c] = bits;
   switch (func) {
+    // Триггер Шмитта по таблице — инвертор; пороги и гистерезис проверяются отдельно
+    case "schmitt":
+      return [!a];
+    // У генератора таблицы нет
+    case "osc":
+      return [];
     // Схемы с памятью таблицей не описать — у них последовательность (seqNext)
     case "sr":
     case "dlatch":
@@ -921,6 +933,66 @@ export const LEVELS: Level[] = [
       ],
     },
   },
+  // ─── Время: триггер Шмитта → генератор ───────────────────────────────────────────────────
+  {
+    id: "schmitt",
+    func: "schmitt",
+    part: "74LVC1G14",
+    title: "Инвертор с триггером Шмитта",
+    about:
+      "Инвертор, у которого два порога: при растущем входе выход переключается выше (VT+), при падающем — ниже (VT−). Между порогами он помнит, что было. Такой вход не дрожит на медленном или зашумлённом сигнале — и из него получается генератор. Проверка: вход плавно поднимают от 0 до 5 В и опускают обратно. Нужно, как у 74LVC1G14 по даташиту TI (при 4,5–5,5 В): VT+ 2,2–3,4 В, VT− 1,4–2,4 В, гистерезис не меньше 0,5 В.",
+    hints: [
+      "Порог обычного инвертора — около половины питания, и он один. Чтобы порогов стало два, выход должен «подталкивать» свой же вход в ту сторону, куда уже переключился.",
+      "Два инвертора подряд не переворачивают сигнал. Вход — через один резистор к их входу, второй резистор — с их выхода туда же. Третий инвертор делает из этого инвертор.",
+    ],
+    ...GATE1,
+    check: "sweep",
+    room: 40,
+    kit: [
+      { part: "chip", func: "not", count: 3 },
+      { part: "resistor", ohms: 10_000, count: 1 },
+      { part: "resistor", ohms: 47_000, count: 1 },
+    ],
+    recipe: {
+      parts: [sot("D1", "not", "D", 1), sot("D2", "not", "D", 5), sot("D3", "not", "D", 9), res("R1", 10_000, "G1", "G4"), res("R2", 47_000, "G6", "G10")],
+      nets: [
+        ...power("P5", "P3", gates("D1", "D2", "D3")),
+        ["P2", "R1.1"],
+        ["R1.2", "D1.2", "R2.2"],
+        ["D1.4", "D2.2"],
+        ["D2.4", "R2.1", "D3.2"],
+        ["D3.4", "P4"],
+      ],
+    },
+  },
+  {
+    id: "osc",
+    func: "osc",
+    part: "ГЕНЕРАТОР 1 Гц",
+    intermediate: true,
+    title: "Генератор на триггере Шмитта",
+    about:
+      "Первая схема, которая меняется сама: без входов, выход — то ноль, то единица, около раза в секунду (период 0,5–2 с), половину времени в единице. Конденсатор заряжается и разряжается через резистор, а триггер Шмитта переключается на своих порогах. Проверка записывает выход 6 секунд, как осциллограф. Это задача: собранное никуда не выдаётся.",
+    hints: [
+      "Выход триггера Шмитта через резистор заряжает конденсатор на его же входе. Что будет, когда напряжение на конденсаторе дойдёт до порога?",
+      "Период ≈ 0,86·R·C (при порогах около 40 и 60 % питания). Конденсатор в наборе один — подберите резистор.",
+    ],
+    roles: ["nc", "nc", "gnd", "out", "vcc"],
+    names: ["", "", "", "Y", ""],
+    check: "osc",
+    room: 24,
+    kit: [
+      { part: "chip", func: "schmitt", count: 1 },
+      { part: "resistor", ohms: 100_000, count: 1 },
+      { part: "resistor", ohms: 1_000_000, count: 1 },
+      { part: "resistor", ohms: 10_000_000, count: 1 },
+      { part: "other", type: "capacitor", tool: "cap", preset: { variant: "ceramic", ceramicUF: 1, ceramicV: 50 }, match: { variant: "ceramic", uF: 1 }, label: "конденсатор 1 мкФ (керамический)", count: 1 },
+    ],
+    recipe: {
+      parts: [sot("D1", "schmitt", "D", 2), res("R1", 1_000_000, "G2", "G6"), { id: "C1", uF: 1, holes: ["k:G8", "k:G10"] }],
+      nets: [...power("P5", "P3", gates("D1")), ["D1.4", "P4", "R1.1"], ["R1.2", "D1.2", "C1.1"], ["C1.2", "P3"]],
+    },
+  },
 ];
 
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
@@ -951,4 +1023,6 @@ export const FUNC_NAMES: Record<LogicFunc, string> = {
   sr: "RS-защёлка",
   dlatch: "D-защёлка",
   dff: "D-триггер",
+  schmitt: "Триггер Шмитта",
+  osc: "Генератор",
 };
