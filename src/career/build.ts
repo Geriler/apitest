@@ -24,9 +24,13 @@ export function levelCase(level: Level): BoardSpec {
   return { ...b, roles: [...level.roles], names: [...level.names], label: level.part, fixed: true, ...(level.room ? { room: level.room } : {}) };
 }
 
-/** Стол уровня: только корпус. */
-export function levelScene(level: Level): Scene {
-  return { components: [], wires: [], boards: [levelCase(level)], career: { level: level.id } };
+/**
+ * Стол уровня: только корпус. Поле корпуса по умолчанию — под SMD (детали набора — в SMD-корпусах);
+ * сетку 2,54 мм под выводные детали можно выбрать в панели корпуса.
+ */
+export function levelScene(level: Level, smd = true): Scene {
+  const box = levelCase(level);
+  return { components: [], wires: [], boards: [smd ? { ...box, smd: true, seats: [] } : box], career: { level: level.id } };
 }
 
 /** Сделать что-то при наборе плат boards и вернуть прежние (отверстия общие на всё приложение). */
@@ -45,7 +49,8 @@ export function withBoards<T>(boards: BoardSpec[], fn: () => T): T {
  * chipFor — какую микросхему ставить на место детали-микросхемы нужной функции.
  */
 export function recipeScene(level: Level, chipFor: (func: LogicFunc) => ChipDef): Scene {
-  const scene = levelScene(level);
+  // Эталонная сборка стоит на сетке площадок (выводные детали)
+  const scene = levelScene(level, false);
   const chips: Record<string, ChipDef> = {};
   for (const p of level.recipe.parts) {
     const placement = { mode: "board" as const, holes: p.holes };

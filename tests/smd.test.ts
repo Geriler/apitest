@@ -4,7 +4,7 @@ import { HOLE_BY_ID, applyBoards, footprintPads, padsAlong, seatHole, seatProble
 import { MOSFETS, TRANSISTORS, footprintOf, padNumbers, smdOnly, type Component, type Scene } from "../src/model/types";
 import { Simulation, pinNode, traceResistance } from "../src/sim/simulation";
 import { LEVELS, SMD_TWIN, type Level, type LogicFunc } from "../src/career/levels";
-import { checkLevel, kitIndex, levelCase, recipeScene, referenceChips } from "../src/career/build";
+import { checkLevel, kitIndex, levelCase, levelScene, recipeScene, referenceChips } from "../src/career/build";
 import { kitTools } from "../src/career/session";
 
 setLibrary([]);
@@ -111,6 +111,13 @@ describe("карьера на SMD", () => {
   const refById = new Map(refs.map((d) => [d.id, d]));
   const allChips = Object.fromEntries(refs.map((d) => [d.id, d]));
   const chipFor = (func: LogicFunc) => refById.get(`ref:${func}-cmos`) ?? refById.get(`ref:${LEVELS.find((l) => l.func === func)!.id}`)!;
+
+  it("стол уровня по умолчанию — корпус с полем под SMD; эталонная сборка — на сетке", () => {
+    const level = LEVELS.find((l) => l.id === "nand-cmos")!;
+    expect(levelScene(level).boards![0].smd).toBe(true);
+    expect(levelScene(level, false).boards![0].smd).toBeFalsy();
+    expect(recipeScene(level, chipFor).boards![0].smd).toBeFalsy();
+  });
 
   it("корпус с полем под SMD: набор выдаёт SMD-пары — 2N7002, BSS84, резисторы 0805; они засчитываются в ту же строку", () => {
     const level = LEVELS.find((l) => l.id === "nand-cmos")!;

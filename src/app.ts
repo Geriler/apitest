@@ -848,7 +848,8 @@ export class App {
     const here = this.scene.editingChip ? resolveChip(this.scene, this.scene.editingChip)?.name : undefined;
     const id = `new:${Date.now().toString(36)}`;
     this.chipStack.push({ id, scene: JSON.stringify(this.scene), projectName: this.projects.name, title: here ?? (this.projects.name || "Стол"), opened: "" });
-    this.replaceScene({ components: [], wires: [], boards: [newChipBoard(pins, 0, 0, "K1", kind)], editingChip: id });
+    // Поле нового корпуса — под SMD; сетка 2,54 мм — в панели корпуса («Поле»)
+    this.replaceScene({ components: [], wires: [], boards: [{ ...newChipBoard(pins, 0, 0, "K1", kind), smd: true, seats: [] }], editingChip: id });
     this.chipStack.at(-1)!.opened = JSON.stringify(this.scene);
     this.saveChipStack();
     this.renderChipBar();
@@ -1225,8 +1226,7 @@ export class App {
     const lesson = this.careerLesson();
     if (level) {
       // Поле корпуса (сетка или под SMD) остаётся, каким его выбрали
-      const fresh = levelScene(level);
-      if (caseOf(this.scene)?.smd) fresh.boards = fresh.boards!.map((b) => (b.kind === "chip" ? { ...b, smd: true, seats: [] } : b));
+      const fresh = levelScene(level, caseOf(this.scene)?.smd ?? true);
       this.replaceScene(fresh);
     } else if (lesson) this.replaceScene(lesson.start());
     else if (this.scene.career?.workshop) this.replaceScene(workshopScene());

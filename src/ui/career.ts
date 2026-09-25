@@ -144,7 +144,7 @@ export class CareerPanel {
       <div class="eyebrow">набор</div><ul class="kitlist">${kit}</ul>
       <div class="eyebrow">выводы корпуса</div><ul class="list">${pins}</ul>
       <p class="sub">Детали — из группы «Набор» слева, ставьте их на площадки корпуса и соединяйте дорожками (T) или проводами. Для своей проверки можно взять питание и приборы — в микросхему они не входят.</p>
-      <p class="sub">${smd ? "Поле корпуса — <b>под SMD</b>: набор выдаёт SMD-пары (2N7002, BSS84, BC847, резисторы 0805), площадки появляются под деталями. Вернуть сетку — нажмите на корпус, «Поле»." : "Можно собрать и на SMD: нажмите на корпус и выберите «Поле: под SMD» — набор выдаст те же детали в SMD-корпусах."}</p>
+      <p class="sub">${smd ? "Поле корпуса — <b>под SMD</b>: набор выдаёт SMD-пары (2N7002, BSS84, BC847, резисторы 0805), площадки появляются под деталями. Сетка 2,54 мм под выводные детали (2N7000, BS250, BC547) — нажмите на корпус, «Поле»." : "Поле корпуса — сетка 2,54 мм под выводные детали. Собрать на SMD: нажмите на корпус и выберите «Поле: под SMD» — набор выдаст те же детали в SMD-корпусах."}</p>
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
       <button class="btn inline" data-career-act="leave">К карте</button></div>
       ${table}${steps}${verdict}${hints}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;
