@@ -105,6 +105,9 @@ const PLACE: Record<string, [number, number]> = {
   full: [5, 3.5],
   eq2: [6, 1],
   hc283: [6, 3.5],
+  sr: [4, 7.5],
+  dlatch: [5, 7.5],
+  dff: [6, 7.5],
 };
 /** Короткие подписи уроков на карте. */
 const SHORT: Record<string, string> = {
@@ -124,7 +127,7 @@ const needs = (l: Level): LogicFunc[] => l.kit.flatMap((k) => (k.part === "chip"
 const variant = (l: Level) => l.variant ?? (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
 
 /** Короткие названия функций для узлов карты. */
-const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит" };
+const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту" };
 /** Подпись узла: функция и вариант; не влезает — только вариант. */
 function nodeSub(l: Level): string {
   const full = `${FUNC_SHORT[l.func] ?? FUNC_NAMES[l.func]} · ${variant(l)}`;
@@ -263,7 +266,7 @@ export class CareerMap {
       <div class="eyebrow">набор</div>
       <ul class="kitlist">${l.kit.map((k) => `<li>${esc(kitLabel(k))} × ${k.count}</li>`).join("")}</ul>
       ${bestOf(l.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(l.id))}` : ""}
-      <div class="eyebrow">корпус ${packageName(l.package ?? "SOT-23-5", l.roles.length)}</div><p class="sub">${esc(pins)}; ${plural(io.inputs.length, "вход", "входа", "входов")}${io.outputs.length > 1 ? `, ${plural(io.outputs.length, "выход", "выхода", "выходов")}` : ""}.</p>
+      <div class="eyebrow">корпус ${packageName(l.package ?? "SOT-23-5", l.roles.length)}</div><p class="sub">${esc(pins)}; ${plural(io.inputs.length, "вход", "входа", "входов")}${io.outputs.length > 1 ? `, ${plural(io.outputs.length, "выход", "выхода", "выходов")}` : ""}.${l.sequence ? " С памятью: проверяется последовательностью шагов." : ""}</p>
       ${buttons}`;
   }
 }

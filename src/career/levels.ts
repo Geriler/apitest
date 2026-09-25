@@ -11,7 +11,7 @@ import type { ChipPackage, ChipPinRole } from "../model/breadboard";
 import type { MosfetKind, TransistorKind } from "../model/types";
 
 /** Логическая функция компонента. */
-export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4";
+export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff";
 
 /** Деталь набора: сколько штук и что именно (тип и номинал). */
 export type KitItem =
@@ -53,6 +53,12 @@ export interface Level {
    * у настоящих микросхем выводы разбросаны по корпусу.
    */
   io?: { inputs: number[]; outputs: number[] };
+  /**
+   * У схем с памятью вместо таблицы — последовательность шагов: входы по порядку, что нужно на
+   * выходах — считает seqStep. prep — подготовительный шаг: его не проверяют (после включения
+   * триггер хранит что попало).
+   */
+  sequence?: { in: boolean[]; prep?: true }[];
   /** Как собирается, если вариантов несколько: «КМОП», «только из ИЛИ-НЕ»… */
   variant?: string;
   /**
@@ -79,6 +85,41 @@ export function gateIo(level: Level): { inputs: number[]; outputs: number[]; vcc
   return { inputs: level.io?.inputs ?? pin("in"), outputs: level.io?.outputs ?? pin("out"), vcc: pin("vcc")[0], gnd: pin("gnd")[0] };
 }
 
+/** Схемы с памятью: выход зависит не только от входов, но и от того, что было раньше. */
+export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff"];
+
+/**
+ * Следующее состояние схемы с памятью: q — что хранила, prev — входы на прошлом шаге, bits — сейчас.
+ * RS-защёлка (S, R): S — запомнить единицу, R — ноль, оба нуля — хранить. D-защёлка (D, E): при
+ * E = 1 повторяет D, при E = 0 хранит. D-триггер (D, CLK): запоминает D только в момент, когда
+ * CLK переходит из нуля в единицу (по фронту), в остальное время хранит.
+ */
+export function seqNext(func: LogicFunc, q: boolean, prev: boolean[] | undefined, bits: boolean[]): boolean {
+  const [a, b] = bits;
+  if (func === "sr") return a && !b ? true : b && !a ? false : a && b ? false : q;
+  if (func === "dlatch") return b ? a : q;
+  if (func === "dff") return prev && !prev[1] && b ? a : q;
+  return q;
+}
+
+/** Выходы схемы с памятью при состоянии q: Q и (у защёлок) Q̅. У RS при S = R = 1 оба — нули. */
+export function seqOuts(func: LogicFunc, q: boolean, bits: boolean[]): boolean[] {
+  if (func === "sr") return bits[0] && bits[1] ? [false, false] : [q, !q];
+  if (func === "dlatch") return [q, !q];
+  return [q];
+}
+
+/** Что нужно на выходах по шагам последовательности (у подготовительных — тоже, для счёта). */
+export function sequenceExpected(level: Level): boolean[][] {
+  let q = false;
+  let prev: boolean[] | undefined;
+  return (level.sequence ?? []).map((s) => {
+    q = seqNext(level.func, q, prev, s.in);
+    prev = s.in;
+    return seqOuts(level.func, q, s.in);
+  });
+}
+
 /** Число из битов, младший — первый. */
 const num = (bits: boolean[]) => bits.reduce((sum, b, i) => sum + (b ? 1 << i : 0), 0);
 
@@ -89,6 +130,11 @@ const num = (bits: boolean[]) => bits.reduce((sum, b, i) => sum + (b ? 1 << i : 
 export function truth(func: LogicFunc, bits: boolean[]): boolean[] {
   const [a, b, c] = bits;
   switch (func) {
+    // Схемы с памятью таблицей не описать — у них последовательность (seqNext)
+    case "sr":
+    case "dlatch":
+    case "dff":
+      return seqOuts(func, seqNext(func, false, undefined, bits), bits);
     // Четыре независимых XNOR: входы парами (1A, 1B, 2A, 2B…), выходы 1Y…4Y
     case "xnor4":
       return [0, 1, 2, 3].map((k) => bits[2 * k] === bits[2 * k + 1]);
@@ -154,6 +200,9 @@ const power = (vcc: string, gnd: string, parts: { id: string; vcc: number; gnd: 
 ];
 /** Вентили SOT-23-5: питание — 5, общий — 3. */
 const gates = (...ids: string[]) => ids.map((id) => ({ id, vcc: 5, gnd: 3 }));
+
+/** Последовательность шагов: «10» — входы по порядку, «*00» — подготовительный шаг. */
+const seq = (...steps: string[]) => steps.map((st) => ({ in: [...st.replace("*", "")].map((c) => c === "1"), ...(st.startsWith("*") ? { prep: true as const } : {}) }));
 
 /** Строчка «учебный компонент» для описаний промежуточных уровней. */
 const STEP = "Такой микросхемы не выпускают — это учебная ступенька: открытый, он попадёт только в набор следующего уровня.";
@@ -766,6 +815,95 @@ export const LEVELS: Level[] = [
       ],
     },
   },
+  // ─── Память: RS-защёлка → D-защёлка → настоящий D-триггер 74LVC1G79 ──────────────────────
+  {
+    id: "sr",
+    func: "sr",
+    part: "RS-ЗАЩЁЛКА",
+    intermediate: true,
+    title: "RS-защёлка",
+    about: `Первая схема с памятью: выход зависит не только от входов, но и от того, что было раньше. S = 1 — запомнить единицу (Q = 1), R = 1 — запомнить ноль, оба входа в нуле — хранить, что запомнила. Q̅ — всегда наоборот от Q. Проверяется не таблицей, а последовательностью шагов. ${STEP}`,
+    hints: [
+      "Чтобы помнить, выход схемы должен сам себя поддерживать: сигнал идёт по кругу через оба вентиля.",
+      "Выход каждого ИЛИ-НЕ — на вход другого. Второй вход одного из них — S, другого — R. Какой из выходов тогда Q?",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "gnd", "out", "out", "vcc"],
+    names: ["S", "R", "", "Q", "Q̅", ""],
+    room: 40,
+    sequence: seq("10", "00", "01", "00", "10", "11", "01", "00"),
+    kit: [{ part: "chip", func: "nor", count: 2 }],
+    recipe: {
+      parts: [sot("D1", "nor", "D", 2), sot("D2", "nor", "D", 8)],
+      nets: [...power("P6", "P3", gates("D1", "D2")), ["P2", "D1.1"], ["D1.4", "P4", "D2.2"], ["P1", "D2.1"], ["D2.4", "P5", "D1.2"]],
+    },
+  },
+  {
+    id: "dlatch",
+    func: "dlatch",
+    part: "D-ЗАЩЁЛКА",
+    intermediate: true,
+    title: "D-защёлка",
+    about: `Пока E = 1, выход Q повторяет вход D («защёлка открыта»); когда E становится нулём, Q запоминает последнее значение и держит его, что бы ни делал D. Q̅ — наоборот от Q. Такая же защёлка, только с выходом, который можно отключать, — внутри 74LVC1G373. ${STEP}`,
+    hints: [
+      "RS-защёлке нужно сказать «запомни единицу» (S) или «запомни ноль» (R). Когда и что именно, если на входе D, а разрешает E?",
+      "S = D и E одновременно; R = «не D» и E одновременно. При E = 0 оба в нуле — защёлка хранит.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "gnd", "out", "out", "vcc"],
+    names: ["D", "E", "", "Q", "Q̅", ""],
+    room: 160,
+    sequence: seq("01", "11", "10", "00", "01", "11", "01", "00", "10"),
+    kit: [
+      { part: "chip", func: "sr", count: 1 },
+      { part: "chip", func: "and", count: 2 },
+      { part: "chip", func: "not", count: 1 },
+    ],
+    recipe: {
+      parts: [sot("D1", "not", "D", 1), sot("D2", "and", "D", 5), sot("D3", "and", "D", 9), ic("L", "sr", 6, "H", 1)],
+      nets: [
+        ...power("P6", "P3", [...gates("D1", "D2", "D3"), { id: "L", vcc: 6, gnd: 3 }]),
+        ["P1", "D1.2", "D2.1"],
+        ["P2", "D2.2", "D3.2"],
+        ["D1.4", "D3.1"],
+        ["D2.4", "L.1"],
+        ["D3.4", "L.2"],
+        ["L.4", "P4"],
+        ["L.5", "P5"],
+      ],
+    },
+  },
+  {
+    id: "dff",
+    func: "dff",
+    part: "74LVC1G79",
+    title: "D-триггер",
+    about:
+      "Настоящая микросхема: запоминает D только в тот миг, когда CLK переходит из нуля в единицу (по фронту), и держит до следующего фронта — что бы ни делал D в остальное время. Из таких триггеров собирают регистры и счётчики. Выводы — как у 74LVC1G79: 1 D, 2 CLK, 3 GND, 4 Q, 5 VCC.",
+    hints: [
+      "Одна D-защёлка пропускает D всё время, пока открыта, — а нужно только в миг фронта. Что, если поставить две друг за другом и открывать их по очереди?",
+      "Первая защёлка открыта, пока CLK = 0, вторая — пока CLK = 1; вторая берёт то, что успела запомнить первая. Первой нужен CLK «наоборот».",
+    ],
+    ...GATE2,
+    names: ["D", "CLK", "", "Q", ""],
+    room: 400,
+    sequence: seq("*00", "01", "11", "10", "11", "01", "00", "01", "11", "10", "11"),
+    kit: [
+      { part: "chip", func: "dlatch", count: 2 },
+      { part: "chip", func: "not", count: 1 },
+    ],
+    recipe: {
+      parts: [sot("N", "not", "D", 1), ic("M", "dlatch", 6, "D", 5), ic("S", "dlatch", 6, "D", 9)],
+      nets: [
+        ...power("P5", "P3", [...gates("N"), { id: "M", vcc: 6, gnd: 3 }, { id: "S", vcc: 6, gnd: 3 }]),
+        ["P2", "N.2", "S.2"],
+        ["N.4", "M.2"],
+        ["P1", "M.1"],
+        ["M.4", "S.1"],
+        ["S.4", "P4"],
+      ],
+    },
+  },
 ];
 
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
@@ -793,4 +931,7 @@ export const FUNC_NAMES: Record<LogicFunc, string> = {
   half: "Полусумматор",
   full: "Полный сумматор",
   add4: "Сумматор 4 бит",
+  sr: "RS-защёлка",
+  dlatch: "D-защёлка",
+  dff: "D-триггер",
 };

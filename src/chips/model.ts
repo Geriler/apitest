@@ -12,14 +12,23 @@
 
 import type { ChipDef, Scene } from "../model/types";
 
+/** Установившееся состояние модели: входы и выходы после прошлого расчёта. */
+export interface ModelState {
+  inputs: boolean[];
+  outputs: boolean[];
+}
+
 export interface ChipModel {
   /** Выводы (с 1): входы и выходы в порядке таблицы истинности, питание и общий. */
   inputs: number[];
   outputs: number[];
   vcc: number;
   gnd: number;
-  /** Что на выходах при данных входах. */
-  logic(bits: boolean[]): boolean[];
+  /**
+   * Что на выходах при данных входах. prev — установившееся состояние с прошлого расчёта (входы
+   * и выходы): по нему триггеры помнят, что хранят, и узнают фронт. У вентилей не нужен.
+   */
+  logic(bits: boolean[], prev?: ModelState): boolean[];
   /** Сопротивление выхода к питанию (когда единица) и к общему (когда ноль), Ом. */
   rHigh: number[];
   rLow: number[];

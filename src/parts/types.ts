@@ -171,6 +171,11 @@ export interface PartDef<C extends Component = Component> {
   dynamic?: boolean;
   /** После шага по времени: запомнить заряд своих ёмкостей в sim.capVoltage. */
   remember?(c: C, sim: Simulation): void;
+  /**
+   * После каждого сошедшегося расчёта (solve и step): запомнить установившееся состояние —
+   * например, входы и выходы модели триггера, чтобы следующий расчёт узнал фронт.
+   */
+  commit?(c: C, sim: Simulation): void;
   /** Напряжение между выводами 0 и 1, В (по умолчанию — по своей ветви). */
   voltage?(c: C, sim: Simulation): number;
   /** Ток от вывода 0 к выводу 1, А (по умолчанию — по своей ветви). */

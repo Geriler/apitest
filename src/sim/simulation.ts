@@ -251,6 +251,12 @@ export class Simulation {
       for (const key of [...m.keys()]) if (!alive.has(key.split(":")[0])) m.delete(key);
     }
     this.solveAt(SUBSTEP);
+    this.commit();
+  }
+
+  /** Расчёт установился: детали запоминают своё состояние (см. PartDef.commit). */
+  private commit(): void {
+    for (const c of this.flat) if (!this.state(c.id).burned) part(c).commit?.(c, this);
   }
 
   branch(id: string): BranchResult {
@@ -316,6 +322,7 @@ export class Simulation {
     }
     if (transient) this.solveAt(SUBSTEP);
     this.budget = Infinity;
+    this.commit();
     return failed;
   }
 

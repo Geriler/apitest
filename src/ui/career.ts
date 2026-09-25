@@ -110,10 +110,10 @@ export class CareerPanel {
     const table = check?.rows.length && compact
       ? this.compactTable(names, outs, check)
       : check?.rows.length
-      ? `<table class="truth"><tr>${names.map((n) => `<th>${esc(n)}</th>`).join("")}${outs.map((n) => `<th>${esc(n)} нужно</th><th>${esc(n)}</th>`).join("")}<th></th></tr>${check.rows
+      ? `${level.sequence ? `<p class="sub">Проверка — шаги сверху вниз, по очереди: схема должна помнить, что было на прошлых шагах.</p>` : ""}<table class="truth"><tr>${level.sequence ? "<th>шаг</th>" : ""}${names.map((n) => `<th>${esc(n)}</th>`).join("")}${outs.map((n) => `<th>${esc(n)} нужно</th><th>${esc(n)}</th>`).join("")}<th></th></tr>${check.rows
           .map(
             (r) =>
-              `<tr>${r.inputs.map((b) => `<td>${b ? 1 : 0}</td>`).join("")}${r.expected
+              `<tr>${r.step ? `<td>${r.step}</td>` : ""}${r.inputs.map((b) => `<td>${b ? 1 : 0}</td>`).join("")}${r.expected
                 .map((e, k) => `<td>${e ? 1 : 0}</td><td class="${r.each[k] ? "" : "bad"}" title="${esc(rowText(r))}">${r.volts[k].toFixed(2).replace(".", ",")} В</td>`)
                 .join("")}<td class="${r.ok ? "ok" : "bad"}">${r.ok ? "✓" : "✗"}</td></tr>`,
           )

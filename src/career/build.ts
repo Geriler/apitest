@@ -10,7 +10,7 @@ import { chipsUsed } from "../chips/registry";
 import { countChip, plural } from "../chips/count";
 import { Simulation, heatThreshold, pinNode } from "../sim/simulation";
 import { formatSI } from "../sim/resistorCodes";
-import { FUNC_NAMES, LEVELS, gateIo, kitLabel, truth, type KitItem, type Level, type LogicFunc } from "./levels";
+import { FUNC_NAMES, LEVELS, SEQUENTIAL, gateIo, kitLabel, seqNext, seqOuts, sequenceExpected, truth, type KitItem, type Level, type LogicFunc } from "./levels";
 import { PIN_ROLES } from "../chips/roles";
 import { MODEL_OFF, setModelSource, type ChipModel } from "../chips/model";
 
@@ -147,6 +147,8 @@ export function kitProblems(level: Level, scene: Scene): string[] {
 // ─── Проверка ───────────────────────────────────────────────────────────────
 
 export interface CheckRow {
+  /** Номер шага последовательности (у схем с памятью), с 1. */
+  step?: number;
   inputs: boolean[];
   /** По выходам (в порядке номеров выводов): что нужно и что есть, В. */
   expected: boolean[];
@@ -317,10 +319,16 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     const inAmps = io.inputs.map((_, i) => -(sim.solution.branches.get(`W${2 + i}`)?.current ?? 0));
     return { volts, amps, burnt, inAmps };
   };
-  for (const inputs of inputVectors(n)) {
-    const expected = truth(level.func, inputs);
+  // Схема с памятью — шаги по порядку (подготовительные не проверяются); остальные — таблица
+  const expectedSeq = sequenceExpected(level);
+  const steps = level.sequence
+    ? level.sequence.map((s, i) => ({ inputs: s.in, expected: expectedSeq[i], prep: !!s.prep }))
+    : inputVectors(n).map((inputs) => ({ inputs, expected: truth(level.func, inputs), prep: false }));
+  let stepNo = 0;
+  for (const { inputs, expected, prep } of steps) {
     const good = (k: number, v: number) => (expected[k] ? isHigh(v, CHECK_VOLTS) : isLow(v, CHECK_VOLTS));
     const first = run(inputs, expected.map((e) => !e));
+    if (prep) continue;
     const each = expected.map((_, k) => good(k, first.volts[k]));
     const burnt = new Set(first.burnt);
     let floating = expected.map(() => false);
@@ -331,6 +339,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
       floating = expected.map((_, k) => !each[k] && good(k, second.volts[k]));
     }
     rows.push({
+      ...(level.sequence ? { step: ++stepNo } : {}),
       inputs,
       expected,
       volts: first.volts,
@@ -377,7 +386,8 @@ export function diagnose(level: Level, def: ChipDef, rows: CheckRow[]): string[]
   const cases: string[] = [];
   for (const r of rows) {
     if (r.ok || r.burned.length) continue;
-    const when = r.inputs.map((b, i) => `${names[i]} = ${b ? 1 : 0}`).join(", ");
+    const inputs = r.inputs.map((b, i) => `${names[i]} = ${b ? 1 : 0}`).join(", ");
+    const when = r.step ? `шаге ${r.step} (${inputs})` : inputs;
     r.expected.forEach((want, k) => {
       if (r.each[k]) return;
       const v = formatSI(r.volts[k], "В");
@@ -389,7 +399,7 @@ export function diagnose(level: Level, def: ChipDef, rows: CheckRow[]): string[]
           : isHigh(r.volts[k], CHECK_VOLTS)
             ? `${what} у питания (${v})`
             : `${what} висит посередине (${v}) — его никто уверенно не тянет или тянут сразу в обе стороны`;
-      cases.push(`При ${when} ${many ? `на ${outNames[k]} ` : ""}нужен ${want ? "единица" : "ноль"}, а ${got}.`.replace("нужен единица", "нужна единица"));
+      cases.push(`${r.step ? "На" : "При"} ${when} ${many ? `на ${outNames[k]} ` : ""}нужен ${want ? "единица" : "ноль"}, а ${got}.`.replace("нужен единица", "нужна единица"));
     });
   }
   // У большой микросхемы неверных случаев может быть десятки: сначала — какие выходы и сколько раз
@@ -470,7 +480,9 @@ function modelFromRows(level: Level, rows: CheckRow[]): ChipModel {
   });
   // Ток покоя: от питания без токов входов (они тоже идут от «плюса» стенда)
   const iq = avg(rows.map((r) => Math.max(0, r.amps - r.inputs.reduce((sum, b, i) => sum + (b ? Math.max(0, r.inAmps[i]) : 0), 0))), 0);
-  return { inputs: io.inputs, outputs: io.outputs, vcc: io.vcc, gnd: io.gnd, logic: (bits) => truth(level.func, bits), rHigh, rLow, rIn, iq, volts: V };
+  return { inputs: io.inputs, outputs: io.outputs, vcc: io.vcc, gnd: io.gnd, logic: SEQUENTIAL.includes(level.func)
+      ? (bits, prev) => seqOuts(level.func, seqNext(level.func, prev?.outputs[0] ?? false, prev?.inputs, bits), bits)
+      : (bits) => truth(level.func, bits), rHigh, rLow, rIn, iq, volts: V };
 }
 
 setModelSource(characterize);

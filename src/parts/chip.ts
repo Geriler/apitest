@@ -3,7 +3,8 @@ import { HOLE_BY_ID, holeLabel, isSot, packageName, pinLayoutText, pinOffsets } 
 import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
 import { resolveChip, toolChips } from "../chips/registry";
-import { MODEL_MAX_OUT, MODEL_OFF, type ChipModel } from "../chips/model";
+import { MODEL_MAX_OUT, MODEL_OFF, type ChipModel, type ModelState } from "../chips/model";
+import type { Simulation } from "../sim/simulation";
 import { pinNode } from "../sim/nodes";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
 import { type ComponentView, blackPlastic, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
@@ -118,7 +119,8 @@ export const chip: PartDef<Chip> = {
     // Без питания (меньше 40 % от того, при котором сняты параметры) выходы отключены
     let q = -1;
     if (span > 0.4 * model.volts) {
-      const outs = model.logic(model.inputs.map((p) => v(p) - gnd > span / 2));
+      const prev = sim.memory.get(`${c.id}:seq`) as ModelState | undefined;
+      const outs = model.logic(inputBits(c, model, sim), prev);
       q = outs.reduce((m, b, k) => m | (b ? 1 << k : 0), 0);
     }
     const key = `${c.id}:q`;
@@ -126,6 +128,13 @@ export const chip: PartDef<Chip> = {
     sim.junction.set(key, q);
     shared.flips++;
     return false;
+  },
+  // Расчёт установился: запомнить входы и выходы — по ним триггер помнит своё и узнаёт фронт
+  commit(c, sim) {
+    const model = sim.modelOf(c.id);
+    const q = sim.junction.get(`${c.id}:q`);
+    if (!model || q === undefined || q < 0) return;
+    sim.memory.set(`${c.id}:seq`, { inputs: inputBits(c, model, sim), outputs: model.outputs.map((_, k) => !!(q & (1 << k))) } satisfies ModelState);
   },
   // Перегрузка модели — по самому нагруженному выходу (предел как у логики 74-й серии)
   load(c, sim) {
@@ -168,6 +177,13 @@ export const chip: PartDef<Chip> = {
     };
   },
 };
+
+/** Входы модели по текущему решению: единица — выше половины питания. */
+function inputBits(c: Chip, model: ChipModel, sim: Simulation): boolean[] {
+  const v = (p: number) => sim.solution.voltage.get(pinNode(c, p - 1)) ?? 0;
+  const gnd = v(model.gnd), span = v(model.vcc) - gnd;
+  return model.inputs.map((p) => v(p) - gnd > span / 2);
+}
 
 /** Как считается микросхема: моделью (и с какими параметрами) или целиком. */
 function modelText(m: ChipModel | undefined): string {
