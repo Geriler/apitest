@@ -29,16 +29,52 @@ export interface ChipModel {
    * и выходы): по нему триггеры помнят, что хранят, и узнают фронт. У вентилей не нужен.
    */
   logic(bits: boolean[], prev?: ModelState): boolean[];
+  /** Параметры, снятые при разных напряжениях питания, — по возрастанию напряжения. */
+  points: ModelPoint[];
+  /**
+   * В каком диапазоне питания модель проверена, В. Вне его (и выше 0,5 В) в свободной схеме
+   * микросхема считается по транзисторам — модели там верить нельзя.
+   */
+  vmin: number;
+  vmax: number;
+  /** Предельное питание, В: выше — выходит из строя (у заводских 74LVC — 6,5 В, как в паспорте). */
+  absMax?: number;
+}
+
+/** Параметры модели при одном напряжении питания. */
+export interface ModelPoint {
+  volts: number;
   /** Сопротивление выхода к питанию (когда единица) и к общему (когда ноль), Ом. */
   rHigh: number[];
   rLow: number[];
-  /** Сопротивление входа на общий, Ом. */
+  /** Просадка выхода без нагрузки, В: единица — питание минус dHigh, ноль — общий плюс dLow. */
+  dHigh: number[];
+  dLow: number[];
+  /** Сопротивление входа, Ом: у РТЛ — на общий (ток базы), у КМОП — почти бесконечное. */
   rIn: number[];
   /** Ток покоя от питания, А (в среднем по таблице). */
   iq: number;
-  /** При каком питании сняты параметры, В. */
-  volts: number;
 }
+
+/** Параметры при питании span: между снятыми точками — по прямой, за краями — как у крайней. */
+export function modelAt(m: ChipModel, span: number): ModelPoint {
+  const ps = m.points;
+  if (span <= ps[0].volts) return ps[0];
+  if (span >= ps[ps.length - 1].volts) return ps[ps.length - 1];
+  const i = ps.findIndex((p) => p.volts >= span);
+  const a = ps[i - 1], b = ps[i];
+  const t = (span - a.volts) / (b.volts - a.volts);
+  const mix = (x: number[], y: number[]) => x.map((v, k) => v + (y[k] - v) * t);
+  return { volts: span, rHigh: mix(a.rHigh, b.rHigh), rLow: mix(a.rLow, b.rLow), dHigh: mix(a.dHigh, b.dHigh), dLow: mix(a.dLow, b.dLow), rIn: mix(a.rIn, b.rIn), iq: a.iq + (b.iq - a.iq) * t };
+}
+
+/** Предельное питание заводских 74LVC, В (абсолютный максимум по паспорту). */
+export const REF_ABS_MAX = 6.5;
+/** Во сколько раз слабее ключи неопределённого выхода: оба приоткрыты. */
+export const X_FACTOR = 20;
+
+/** Вход КМОП (сопротивление больше этого) не тянется ни к чему: висящий уходит к середине питания. */
+export const CMOS_INPUT = 1e8;
 
 /** Выход сверх такого тока перегружен: как предел по току выхода у логики 74-й серии. */
 export const MODEL_MAX_OUT = 0.05;

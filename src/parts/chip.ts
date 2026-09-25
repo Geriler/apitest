@@ -3,7 +3,7 @@ import { HOLE_BY_ID, holeLabel, isSot, packageName, pinLayoutText, pinOffsets } 
 import type { Chip, ChipDef } from "../model/types";
 import { countChip, countChips, countDetails, countShort } from "../chips/count";
 import { resolveChip, toolChips } from "../chips/registry";
-import { MODEL_MAX_OUT, MODEL_OFF, type ChipModel, type ModelState } from "../chips/model";
+import { CMOS_INPUT, MODEL_MAX_OUT, MODEL_OFF, REF_ABS_MAX, X_FACTOR, modelAt, type ChipModel, type ModelState } from "../chips/model";
 import type { Simulation } from "../sim/simulation";
 import { pinNode } from "../sim/nodes";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
@@ -81,18 +81,28 @@ export const chip: PartDef<Chip> = {
   // Проверенная микросхема считается моделью: ключи выходов, входы и ток покоя
   stamp(c, sim, { links, out }) {
     const model = sim.modelOf(c.id);
+    if (sim.state(c.id).burned) return;
     if (model) {
-      if (sim.state(c.id).burned) return;
       const node = (p: number) => pinNode(c, p - 1);
       const q = sim.junction.get(`${c.id}:q`);
       const on = q !== undefined && q >= 0;
-      out.push({ id: `${c.id}:iq`, a: node(model.vcc), b: node(model.gnd), r: model.volts / Math.max(model.iq, model.volts / MODEL_OFF) });
-      model.inputs.forEach((p, i) => out.push({ id: `${c.id}:in${i}`, a: node(p), b: node(model.gnd), r: model.rIn[i] }));
+      const pt = modelAt(model, supply(c, model, sim) ?? model.vmax);
+      out.push({ id: `${c.id}:iq`, a: node(model.vcc), b: node(model.gnd), r: pt.volts / Math.max(pt.iq, pt.volts / MODEL_OFF) });
+      model.inputs.forEach((p, i) => {
+        // Вход КМОП ни к чему не тянется: висящий уходит к середине питания — там он «ни то ни сё»
+        if (pt.rIn[i] >= CMOS_INPUT) {
+          out.push({ id: `${c.id}:in${i}`, a: node(p), b: node(model.gnd), r: 2 * pt.rIn[i] });
+          out.push({ id: `${c.id}:iv${i}`, a: node(model.vcc), b: node(p), r: 2 * pt.rIn[i] });
+        } else out.push({ id: `${c.id}:in${i}`, a: node(p), b: node(model.gnd), r: pt.rIn[i] });
+      });
       model.outputs.forEach((p, k) => {
-        const high = on && !!(q! & (1 << k));
-        const low = on && !high;
-        out.push({ id: `${c.id}:h${k}`, a: node(model.vcc), b: node(p), r: high ? model.rHigh[k] : MODEL_OFF });
-        out.push({ id: `${c.id}:l${k}`, a: node(p), b: node(model.gnd), r: low ? model.rLow[k] : MODEL_OFF });
+        // Неопределённый выход (вход «висит»): оба ключа приоткрыты — выход посередине, и течёт сквозной ток
+        const x = on && !!(q! & (1 << (k + 16)));
+        const high = on && !x && !!(q! & (1 << k));
+        const low = on && !x && !high;
+        // Включённый ключ — источник: единица на dHigh ниже питания, ноль на dLow выше общего, и сопротивление
+        out.push({ id: `${c.id}:h${k}`, a: node(model.vcc), b: node(p), r: high ? pt.rHigh[k] : x ? X_FACTOR * pt.rHigh[k] : MODEL_OFF, emf: high ? -pt.dHigh[k] : 0 });
+        out.push({ id: `${c.id}:l${k}`, a: node(p), b: node(model.gnd), r: low ? pt.rLow[k] : x ? X_FACTOR * pt.rLow[k] : MODEL_OFF, emf: low ? -pt.dLow[k] : 0 });
       });
       return;
     }
@@ -114,14 +124,22 @@ export const chip: PartDef<Chip> = {
   newton(c, sim, _iter, shared) {
     const model = sim.modelOf(c.id);
     if (!model || sim.state(c.id).burned) return true;
-    const v = (p: number) => sim.solution.voltage.get(pinNode(c, p - 1)) ?? 0;
-    const gnd = v(model.gnd), span = v(model.vcc) - gnd;
-    // Без питания (меньше 40 % от того, при котором сняты параметры) выходы отключены
+    const span = supply(c, model, sim) ?? 0;
+    // Без питания выходы отключены. Вход: ниже 30 % питания — ноль, выше 70 % — единица, между — не
+    // определён; выход, который от него зависит, тоже не определён
     let q = -1;
-    if (span > 0.4 * model.volts) {
+    if (span > 0.5) {
       const prev = sim.memory.get(`${c.id}:seq`) as ModelState | undefined;
-      const outs = model.logic(inputBits(c, model, sim), prev);
-      q = outs.reduce((m, b, k) => m | (b ? 1 << k : 0), 0);
+      const levels = inputLevels(c, model, sim);
+      const open = levels.map((l, i) => (l === undefined ? i : -1)).filter((i) => i >= 0);
+      const tries = open.length > 4 ? [] : Array.from({ length: 1 << open.length }, (_, m) => levels.map((l, i) => l ?? !!(m & (1 << open.indexOf(i)))));
+      const results = tries.map((bits) => model.logic(bits, prev));
+      q = 0;
+      model.outputs.forEach((_, k) => {
+        const vals = new Set(results.map((r) => r[k]));
+        if (vals.size !== 1) q |= 1 << (k + 16);
+        else if ([...vals][0]) q |= 1 << k;
+      });
     }
     const key = `${c.id}:q`;
     if (sim.junction.get(key) === q || shared.flips >= 64) return true;
@@ -134,17 +152,23 @@ export const chip: PartDef<Chip> = {
     const model = sim.modelOf(c.id);
     const q = sim.junction.get(`${c.id}:q`);
     if (!model || q === undefined || q < 0) return;
-    sim.memory.set(`${c.id}:seq`, { inputs: inputBits(c, model, sim), outputs: model.outputs.map((_, k) => !!(q & (1 << k))) } satisfies ModelState);
+    sim.memory.set(`${c.id}:seq`, { inputs: inputLevels(c, model, sim).map((l) => !!l), outputs: model.outputs.map((_, k) => !!(q & (1 << k))) } satisfies ModelState);
   },
-  // Перегрузка модели — по самому нагруженному выходу (предел как у логики 74-й серии)
+  // Перегрузка: самый нагруженный выход модели (предел как у логики 74-й серии) и питание сверх предельного
   load(c, sim) {
     const model = sim.modelOf(c.id);
-    if (!model) return undefined;
+    const absMax = model?.absMax ?? (c.def.startsWith("ref:") ? REF_ABS_MAX : undefined);
     let worst = 0;
-    model.outputs.forEach((_, k) => {
+    model?.outputs.forEach((_, k) => {
       for (const key of [`${c.id}:h${k}`, `${c.id}:l${k}`]) worst = Math.max(worst, Math.abs(sim.branch(key).current));
     });
-    return { ratio: worst / MODEL_MAX_OUT, what: "ток", limit: formatSI(MODEL_MAX_OUT, "А") };
+    const def = model ? undefined : resolveChip(sim.scene, c.def);
+    const span = model ? supply(c, model, sim) : def ? defSupply(c, def, sim) : undefined;
+    const byVolts = absMax && span ? span / absMax : 0;
+    if (!model && !byVolts) return undefined;
+    return byVolts > worst / MODEL_MAX_OUT
+      ? { ratio: byVolts, what: "напряжение", limit: formatSI(absMax!, "В") }
+      : { ratio: worst / MODEL_MAX_OUT, what: "ток", limit: formatSI(MODEL_MAX_OUT, "А") };
   },
   thermal: { threshold: 1, rate: 0.6, cooling: 0.5 },
   voltage: () => 0,
@@ -172,24 +196,43 @@ export const chip: PartDef<Chip> = {
         <p class="sub">${countDetails(k)}${k.chips.size ? `. Собрана из своих микросхем: ${countChips(k)}` : ""}.</p>
         ${burned.length ? kv("Сгорело внутри", burned.join(", ")) : ""}
         <div class="eyebrow">выводы (потенциал)</div>${rows}
-        <p class="sub">${def.id.startsWith("ref:") ? "Заводская: внутри эталонная сборка из карьеры." : def.id.startsWith("career:") ? "Открыта в карьере: внутри ваша сборка." : "Собрана вами."} ${modelText(sim.modelOf(c.id))}</p>`,
+        <p class="sub">${def.id.startsWith("ref:") ? "Заводская: внутри эталонная сборка из карьеры." : def.id.startsWith("career:") ? "Открыта в карьере: внутри ваша сборка." : "Собрана вами."} ${modelText(sim.modelOf(c.id), sim, c)}</p>`,
       editor: `<div class="row"><button class="btn inline" data-act="openChip" id="btn-open-chip">Открыть схему</button></div>`,
     };
   },
 };
 
-/** Входы модели по текущему решению: единица — выше половины питания. */
-function inputBits(c: Chip, model: ChipModel, sim: Simulation): boolean[] {
+/** Питание модели по текущему решению (VCC − GND), В; undefined — решения ещё нет. */
+function supply(c: Chip, model: ChipModel, sim: Simulation): number | undefined {
+  const v = (p: number) => sim.solution.voltage.get(pinNode(c, p - 1));
+  const a = v(model.vcc), b = v(model.gnd);
+  return a === undefined || b === undefined ? undefined : a - b;
+}
+
+/** Питание раскрытой микросхемы — по выводам, назначенным питанием и общим. */
+function defSupply(c: Chip, def: ChipDef, sim: Simulation): number | undefined {
+  const vcc = def.pinRoles?.indexOf("vcc") ?? -1, gnd = def.pinRoles?.indexOf("gnd") ?? -1;
+  if (vcc < 0 || gnd < 0) return undefined;
+  const a = sim.solution.voltage.get(pinNode(c, vcc)), b = sim.solution.voltage.get(pinNode(c, gnd));
+  return a === undefined || b === undefined ? undefined : a - b;
+}
+
+/** Уровни входов модели: единица — выше 70 % питания, ноль — ниже 30 %, между — undefined (не определён). */
+function inputLevels(c: Chip, model: ChipModel, sim: Simulation): (boolean | undefined)[] {
   const v = (p: number) => sim.solution.voltage.get(pinNode(c, p - 1)) ?? 0;
   const gnd = v(model.gnd), span = v(model.vcc) - gnd;
-  return model.inputs.map((p) => v(p) - gnd > span / 2);
+  return model.inputs.map((p) => {
+    const x = (v(p) - gnd) / (span || 1);
+    return x >= 0.7 ? true : x <= 0.3 ? false : undefined;
+  });
 }
 
 /** Как считается микросхема: моделью (и с какими параметрами) или целиком. */
-function modelText(m: ChipModel | undefined): string {
+function modelText(m: ChipModel | undefined, sim: Simulation, c: Chip): string {
   if (!m) return "Расчёт — полный, как если бы схема стояла на макетке: детали внутри греются и горят как обычно.";
-  const r = (xs: number[]) => [...new Set(xs.map((x) => (x >= MODEL_OFF ? "∞" : formatOhms(x))))].join(", ");
-  return `Она уже прошла проверку, поэтому считается моделью, снятой с этой проверки при ${formatSI(m.volts, "В")}: выход — ключ к питанию через ${r(m.rHigh)} или к общему через ${r(m.rLow)}, вход — ${r(m.rIn)} на общий, ток покоя ${formatSI(m.iq, "А")}. Так расчёт быстрый, даже если внутри сотни транзисторов. Перегрузка выхода сверх ${formatSI(MODEL_MAX_OUT, "А")} выводит её из строя.`;
+  const pt = modelAt(m, supply(c, m, sim) ?? m.vmax);
+  const r = (xs: number[]) => [...new Set(xs.map((x) => (x >= CMOS_INPUT ? "∞" : formatOhms(x))))].join(", ");
+  return `Она уже прошла проверку, поэтому считается моделью, снятой с этой проверки при питании ${formatSI(m.vmin, "В")}–${formatSI(m.points.at(-1)!.volts, "В")}: сейчас выход — ключ к питанию через ${r(pt.rHigh)} или к общему через ${r(pt.rLow)}, вход — ${r(pt.rIn)}, ток покоя ${formatSI(pt.iq, "А")}. Вне этого диапазона она считается по транзисторам. Висящий вход КМОП не определён — выход тогда ни то ни сё. Перегрузка выхода сверх ${formatSI(MODEL_MAX_OUT, "А")}${m.absMax ? ` или питание выше ${formatSI(m.absMax, "В")}` : ""} выводит её из строя.`;
 }
 
 // ─── 3D: корпус DIP ──────────────────────────────────────────────────────────

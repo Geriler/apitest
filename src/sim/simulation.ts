@@ -116,14 +116,30 @@ export class Simulation {
   /** Микросхемы, которые считаются моделью (см. chips/model), — по обозначению в расчёте. */
   private models = new Map<string, ChipModel>();
 
+  /** Модели — всегда, даже вне проверенного диапазона питания (стенды проверки сами следят за ним). */
+  readonly strictModels: boolean;
+
   constructor(
     public scene: Scene,
     /** Режим «реальные допуски». После изменения вызвать solve(). */
     public tolerance: Tolerance = NO_TOLERANCE,
-    options: { expand?: Iterable<string> } = {},
+    options: { expand?: Iterable<string>; strictModels?: boolean } = {},
   ) {
     this.expandChips = new Set(options.expand ?? []);
+    this.strictModels = !!options.strictModels;
     this.solve();
+  }
+
+  /**
+   * Можно ли считать микросхему моделью: питание по прошлому решению в проверенном диапазоне
+   * (или почти нуль — тогда выходы просто отключены; или решения ещё нет).
+   */
+  private inRange(c: Component, model: ChipModel): boolean {
+    const a = this.solution.voltage.get(pinNode(c, model.vcc - 1));
+    const b = this.solution.voltage.get(pinNode(c, model.gnd - 1));
+    if (a === undefined || b === undefined) return true;
+    const span = a - b;
+    return span < 0.5 || (span >= 0.95 * model.vmin && span <= model.vmax);
   }
 
   /** Модель, которой считается микросхема id (undefined — считается её начинка). */
@@ -162,10 +178,12 @@ export class Simulation {
         out.push(x);
         if (x.type !== "chip" || depth > 8) continue;
         const def = resolveChip(this.scene, x.def);
-        if (!def) continue;
-        // Проверенная микросхема — моделью; начинку считаем только у тех, кого попросили раскрыть
+        // Сгоревшая микросхема — обрыв на всех выводах, начинка не считается
+        if (!def || this.state(x.id).burned) continue;
+        // Проверенная микросхема — моделью; начинку считаем у тех, кого попросили раскрыть, и у тех,
+        // чьё питание сейчас вне диапазона, где модель проверена
         const model = this.expandChips.has(x.id) ? undefined : chipModel(def, this.scene);
-        if (model) this.models.set(x.id, model);
+        if (model && (this.strictModels || this.inRange(x, model))) this.models.set(x.id, model);
         else add(def.parts, `${x.id}/`, depth + 1);
       }
     };

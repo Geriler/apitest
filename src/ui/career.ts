@@ -1,7 +1,7 @@
 /** Панель «Карьера»: список уровней или, на столе уровня, задание, набор и результат проверки. */
 
 import { CHECK_VOLTS, kitUsed, rowText, type CheckResult, type Metrics } from "../career/build";
-import { formatSI } from "../sim/resistorCodes";
+import { formatOhms, formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level } from "../career/levels";
 import { HINT_AFTER, bestOf, failsOf, hintsOf, isDone } from "../career/session";
 import type { Lesson } from "../career/lessons";
@@ -36,6 +36,8 @@ export function metricsHtml(m: Metrics | undefined, best: Metrics | undefined, b
     ["соединений", (x) => String(x.links), "links"],
     ["ток покоя", (x) => formatSI(x.idle, "А"), "idle"],
     ["транзисторов", (x) => String(x.transistors), "transistors"],
+    ["работает от", (x) => (x.vmin === undefined ? "—" : formatSI(x.vmin, "В")), "vmin"],
+    ["выходное сопр.", (x) => (x.rOut === undefined ? "—" : formatOhms(x.rOut)), "rOut"],
   ];
   return `<table class="truth metrics"><tr><th></th>${m ? "<th>сейчас</th>" : ""}<th>лучшее</th></tr>${rows
     .map(([label, f, k]) => `<tr><td>${label}</td>${m ? `<td${better.includes(k) ? ' class="ok"' : ""}>${cell(m, f)}${better.includes(k) ? " ↓" : ""}</td>` : ""}<td>${cell(best, f)}</td></tr>`)
@@ -126,7 +128,7 @@ export class CareerPanel {
       ? check.ok
         ? `<p class="sub"><b>Работает!</b> ${esc(level.part)} открыт: теперь он в группе «Набор» уровней, где нужен, и остаётся вашим — внутри ваша сборка.</p>
           <div class="eyebrow">цифры сборки</div>${metricsHtml(check.metrics, bestOf(level.id), check.better)}
-          <p class="sub">Меньше — лучше. Площадь — прямоугольник, в который помещается всё на поле корпуса; соединения — провода и дорожки внутри. Ток покоя и число транзисторов показывают разницу между КМОП и РТЛ.</p>`
+          <p class="sub">Меньше — лучше. Площадь — прямоугольник, в который помещается всё на поле корпуса; соединения — провода и дорожки внутри. Ток покоя и число транзисторов показывают разницу между КМОП и РТЛ. «Работает от» — наименьшее питание из 5; 4; 3,3; 2,5 и 2 В, при котором таблица ещё сходится (настоящие 74LVC — от 1,65 В). Выходное сопротивление — насколько твёрдо выход держит уровень под нагрузкой: чем меньше, тем больше входов он потянет.</p>`
         : check.problems.map((t) => `<p class="sub bad">${esc(t)}</p>`).join("") +
           (check.diagnosis?.length ? `<div class="eyebrow">что проверить</div><ul class="kitlist">${check.diagnosis.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : "")
       : "";

@@ -99,9 +99,13 @@ export function recordMetrics(levelId: string, m: Metrics): (keyof Metrics)[] {
       best.height = m.height;
       better.push("width");
     }
-    for (const k of ["links", "idle", "transistors"] as const) {
-      if (m[k] < old[k] * (k === "idle" ? 0.99 : 1)) {
-        best[k] = m[k];
+    for (const k of ["links", "idle", "transistors", "vmin", "rOut"] as const) {
+      const now = m[k], was = old[k];
+      if (now === undefined) continue;
+      // Цифр, которых раньше не было (старое прохождение), — просто запоминаем
+      if (was === undefined) best[k] = now;
+      else if (now < was * (k === "idle" || k === "rOut" ? 0.99 : 1)) {
+        best[k] = now;
         better.push(k);
       }
     }

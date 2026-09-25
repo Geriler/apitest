@@ -12,7 +12,7 @@ import { Simulation, heatThreshold, pinNode } from "../sim/simulation";
 import { formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, SEQUENTIAL, gateIo, kitLabel, seqNext, seqOuts, sequenceExpected, truth, type KitItem, type Level, type LogicFunc } from "./levels";
 import { PIN_ROLES } from "../chips/roles";
-import { MODEL_OFF, setModelSource, type ChipModel } from "../chips/model";
+import { MODEL_OFF, REF_ABS_MAX, chipModel, setModelSource, type ChipModel, type ModelPoint } from "../chips/model";
 
 /** Напряжение питания при проверке, В. */
 export const CHECK_VOLTS = 5;
@@ -181,6 +181,13 @@ export interface Metrics {
   idle: number;
   /** Транзисторов внутри, с раскрытием вложенных микросхем. */
   transistors: number;
+  /** Наименьшее питание из SUPPLY_STEPS, при котором сборка ещё работает, В. */
+  vmin?: number;
+  /**
+   * Выходное сопротивление, Ом: худшее из «к питанию» и «к общему» по всем выходам при 5 В. Чем
+   * меньше, тем больше входов выдержит выход и тем твёрже держит уровень.
+   */
+  rOut?: number;
 }
 
 export interface CheckResult {
@@ -222,6 +229,13 @@ export function measure(scene: Scene, rows: CheckRow[], def: ChipDef, chips: Rec
   };
 }
 
+/**
+ * Нагрузка выхода на стенде, Ом. Обычно 100 кОм — лёгкая, как вход КМОП с утечками. У уровня с
+ * требованием к току (level.drive, при 5 В) — такая, что выход, удержавший 70 % питания (или 30 %),
+ * отдаёт (или принимает) не меньше этого тока: так проверяют, скольких входов хватит выходу.
+ */
+export const loadOhms = (level: Level) => (level.drive ? (0.7 * CHECK_VOLTS) / level.drive : 100_000);
+
 /** Уровни логики при питании vcc: единица — не ниже 70 %, ноль — не выше 30 %. */
 const isHigh = (v: number, vcc: number) => v >= 0.7 * vcc;
 const isLow = (v: number, vcc: number) => v <= 0.3 * vcc;
@@ -262,7 +276,7 @@ export function inputVectors(n: number): boolean[][] {
  * если нужен ноль, и наоборот): выход должен сам удержать чёткий ноль или единицу, и ничего
  * внутри не должно сгореть.
  */
-export function truthTable(def: ChipDef, level: Level, chips: Record<string, ChipDef>): CheckRow[] {
+export function truthTable(def: ChipDef, level: Level, chips: Record<string, ChipDef>, volts = CHECK_VOLTS, load = loadOhms(level)): CheckRow[] {
   const io = gateIo(level);
   const rows: CheckRow[] = [];
   const n = io.inputs.length;
@@ -286,9 +300,9 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     ).map(([a, b], i) => ({ id: `W${i}`, a, b, color: "" }));
   const scene: Scene = {
     components: [
-      { id: "G1", type: "psu", volts: CHECK_VOLTS, amps: 1, on: true, placement: { mode: "free", x: 0, z: 0, rot: 0 } },
+      { id: "G1", type: "psu", volts, amps: 1, on: true, placement: { mode: "free", x: 0, z: 0, rot: 0 } },
       u,
-      ...loads.map((id): Component => ({ id, type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: { mode: "free", x: 0, z: 0, rot: 0 } })),
+      ...loads.map((id): Component => ({ id, type: "resistor", variant: "tht", ohms: load, smdSize: "0805", placement: { mode: "free", x: 0, z: 0, rot: 0 } })),
     ],
     wires: wiring(Array(n).fill(false), io.outputs.map(() => false)),
     boards: [],
@@ -297,7 +311,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
   // Один стенд на всю таблицу, как на столе: входы и нагрузки переключаются, а расчёт продолжается
   // с прошлого состояния — так он сходится в разы быстрее, чем каждый раз с нуля
   // Проверяемая микросхема — до транзисторов; микросхемы внутри неё, уже проверенные, — моделью
-  const sim = new Simulation(scene, undefined, { expand: ["U1"] });
+  const sim = new Simulation(scene, undefined, { expand: ["U1"], strictModels: true });
   /** Один прогон: переключить стенд и дать схеме установиться. */
   const run = (inputs: boolean[], up: boolean[]) => {
     scene.wires = wiring(inputs, up);
@@ -312,13 +326,13 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
       if (limit && sim.overload(c) > limit) burnt.add(c.id.slice(3));
     }
     const gnd = sim.solution.voltage.get(pinNode(u, io.gnd - 1)) ?? 0;
-    const volts = io.outputs.map((p) => (sim.solution.voltage.get(pinNode(u, p - 1)) ?? 0) - gnd);
+    const outV = io.outputs.map((p) => (sim.solution.voltage.get(pinNode(u, p - 1)) ?? 0) - gnd);
     // Ток от питания без токов нагрузок: то, что потребляет сама микросхема
     const loadAmps = loads.reduce((sum, _, k) => sum + Math.abs(sim.current(scene.components[2 + k])), 0);
     const amps = Math.max(0, Math.abs(sim.current(scene.components[0])) - loadAmps);
     // Провода входов идут от вывода к источнику: ток в вывод — с обратным знаком
     const inAmps = io.inputs.map((_, i) => -(sim.solution.branches.get(`W${2 + i}`)?.current ?? 0));
-    return { volts, amps, burnt, inAmps };
+    return { volts: outV, amps, burnt, inAmps };
   };
   // Схема с памятью — шаги по порядку (подготовительные не проверяются); остальные — таблица
   const expectedSeq = sequenceExpected(level);
@@ -327,7 +341,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     : inputVectors(n).map((inputs) => ({ inputs, expected: truth(level.func, inputs), prep: false }));
   let stepNo = 0;
   for (const { inputs, expected, prep } of steps) {
-    const good = (k: number, v: number) => (expected[k] ? isHigh(v, CHECK_VOLTS) : isLow(v, CHECK_VOLTS));
+    const good = (k: number, v: number) => (expected[k] ? isHigh(v, volts) : isLow(v, volts));
     const first = run(inputs, expected.map((e) => !e));
     if (prep) continue;
     const each = expected.map((_, k) => good(k, first.volts[k]));
@@ -364,7 +378,11 @@ export function checkLevel(level: Level, scene: Scene, chips: Record<string, Chi
   const rows = truthTable(def, level, { ...chips, ...def.scene.chips });
   const ok = rows.every((r) => r.ok);
   if (!ok) return { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows, diagnosis: diagnose(level, def, rows) };
-  return { ok, problems: [], rows, def, metrics: measure(scene, rows, def, { ...chips, ...def.scene.chips }) };
+  const all = { ...chips, ...def.scene.chips };
+  const sweep = supplySweep(def, level, all, rows);
+  const pt = pointFromRows(level, rows, CHECK_VOLTS, truthTable(def, level, all, CHECK_VOLTS, HEAVY_LOAD));
+  const metrics = { ...measure(scene, rows, def, all), vmin: sweep.at(-1)!.volts, rOut: Math.max(...pt.rHigh, ...pt.rLow) };
+  return { ok, problems: [], rows, def, metrics };
 }
 
 /**
@@ -442,10 +460,46 @@ export function publicChips(defs: ChipDef[]): ChipDef[] {
 const models = new Map<string, ChipModel | null>();
 const measuring = new Set<string>();
 
+/** Напряжения питания, при которых снимают параметры и ищут наименьшее рабочее, В — по убыванию. */
+export const SUPPLY_STEPS = [5, 4, 3.3, 2.5, 2];
+
+/**
+ * Наименьшее питание, при котором работают все проверенные микросхемы внутри def (у каждой своя
+ * модель со своим диапазоном), В; 0 — ограничений нет. Ниже него проверять сборку нет смысла.
+ */
+function innerVmin(def: ChipDef, scene: Scene): number {
+  const s: Scene = { components: [], wires: [], chips: { ...(scene.chips ?? {}), ...(def.scene.chips ?? {}) } };
+  let v = 0;
+  for (const c of def.parts) {
+    if (c.type !== "chip") continue;
+    const d = s.chips![c.def] ?? chipsUsed({ components: [c], wires: [], chips: s.chips })[c.def];
+    const m = d ? chipModel(d, s) : undefined;
+    if (m) v = Math.max(v, m.vmin);
+  }
+  return v;
+}
+
+/**
+ * Прогнать таблицу при питании от 5 В вниз, пока микросхема работает (и пока хватает внутренним);
+ * вернуть строки при каждом рабочем напряжении, по убыванию. Пусто — не работает и при 5 В.
+ */
+export function supplySweep(def: ChipDef, level: Level, chips: Record<string, ChipDef>, first?: CheckRow[]): { volts: number; rows: CheckRow[] }[] {
+  const out: { volts: number; rows: CheckRow[] }[] = [];
+  const floor = innerVmin(def, { components: [], wires: [], chips });
+  for (const volts of SUPPLY_STEPS) {
+    if (volts < 0.95 * floor) break;
+    const rows = volts === CHECK_VOLTS && first ? first : truthTable(def, level, chips, volts);
+    if (!rows.every((r) => r.ok)) break;
+    out.push({ volts, rows });
+  }
+  return out;
+}
+
 /**
  * Модель микросхемы из карьеры: прогнать её таблицу истинности по транзисторам (вложенные — уже
- * моделями) и снять с неё выходные и входные сопротивления и ток покоя. Если таблица не проходит,
- * модели нет — такая микросхема считается целиком, со всеми своими ошибками.
+ * моделями) при питании от 5 В вниз, пока работает, и снять выходные и входные сопротивления и ток
+ * покоя при каждом напряжении. Если не проходит и при 5 В, модели нет — такая микросхема считается
+ * целиком, со всеми своими ошибками.
  */
 export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined {
   const level = chipLevel(def.id);
@@ -457,8 +511,25 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
   measuring.add(key);
   let model: ChipModel | undefined;
   try {
-    const rows = truthTable(def, level, { ...(scene.chips ?? {}), ...(def.scene.chips ?? {}) });
-    if (rows.every((r) => r.ok)) model = modelFromRows(level, rows);
+    const sweep = supplySweep(def, level, { ...(scene.chips ?? {}), ...(def.scene.chips ?? {}) });
+    if (sweep.length) {
+      const io = gateIo(level);
+      const chipsAll = { ...(scene.chips ?? {}), ...(def.scene.chips ?? {}) };
+      const points = sweep.map((s) => pointFromRows(level, s.rows, s.volts, truthTable(def, level, chipsAll, s.volts, HEAVY_LOAD))).reverse();
+      model = {
+        inputs: io.inputs,
+        outputs: io.outputs,
+        vcc: io.vcc,
+        gnd: io.gnd,
+        logic: SEQUENTIAL.includes(level.func)
+          ? (bits, prev) => seqOuts(level.func, seqNext(level.func, prev?.outputs[0] ?? false, prev?.inputs, bits), bits)
+          : (bits) => truth(level.func, bits),
+        points,
+        vmin: points[0].volts,
+        vmax: 1.1 * CHECK_VOLTS,
+        ...(def.id.startsWith("ref:") ? { absMax: REF_ABS_MAX } : {}),
+      };
+    }
   } finally {
     measuring.delete(key);
   }
@@ -466,24 +537,41 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
   return model;
 }
 
-/** Параметры модели по строкам проверки (нагрузка 100 кОм тянула против нужного уровня). */
-function modelFromRows(level: Level, rows: CheckRow[]): ChipModel {
+/** Тяжёлая нагрузка для второго замера выхода, Ом: по двум замерам видно, как выход проседает под током. */
+const HEAVY_LOAD = 1000;
+
+/**
+ * Параметры модели по строкам проверки при питании V (нагрузка тянула против нужного уровня) и по
+ * тем же строкам с тяжёлой нагрузкой HEAVY_LOAD: выход — источник, U = U0 ∓ I·R. Два замера
+ * отделяют «напряжение без нагрузки» от сопротивления: у насыщенного транзистора РТЛ ноль —
+ * 0,05 В почти при любом токе, а не «резистор 1 кОм», как вышло бы по одному лёгкому замеру.
+ */
+export function pointFromRows(level: Level, rows: CheckRow[], V: number, heavy: CheckRow[]): ModelPoint {
   const io = gateIo(level);
-  const V = CHECK_VOLTS, RL = 100_000;
+  const R1 = loadOhms(level), R2 = HEAVY_LOAD;
   const avg = (xs: number[], empty: number) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : empty);
   const clamp = (r: number) => Math.min(MODEL_OFF, Math.max(0.5, r));
-  // Единица: нагрузка на общий, V = V·RL/(Rh + RL). Ноль: нагрузка к питанию, V = V·Rl/(Rl + RL)
-  const rHigh = io.outputs.map((_, k) => clamp(avg(rows.filter((r) => r.expected[k]).map((r) => (RL * (V - r.volts[k])) / Math.max(r.volts[k], 1e-9)), 10)));
-  const rLow = io.outputs.map((_, k) => clamp(avg(rows.filter((r) => !r.expected[k]).map((r) => (RL * r.volts[k]) / Math.max(V - r.volts[k], 1e-9)), 10)));
+  const fit = (k: number, high: boolean) => {
+    const pairs = rows.map((r, i) => [r, heavy[i]] as const).filter(([r]) => r.expected[k] === high);
+    // Единица: нагрузка на общий, ток I = U/R, U = V − d − I·R. Ноль: к питанию, I = (V − U)/R, U = d + I·R
+    const amps = (u: number, rl: number) => (high ? u : V - u) / rl;
+    const rs = pairs.map(([a, b]) => {
+      const i1 = amps(a.volts[k], R1), i2 = amps(b.volts[k], R2);
+      return Math.abs(i2 - i1) > 1e-9 ? Math.abs(a.volts[k] - b.volts[k]) / Math.abs(i2 - i1) : MODEL_OFF;
+    });
+    const r = clamp(avg(rs, 10));
+    const ds = pairs.map(([a]) => (high ? V - a.volts[k] - amps(a.volts[k], R1) * r : a.volts[k] - amps(a.volts[k], R1) * r));
+    return { r, d: Math.min(V / 2, Math.max(0, avg(ds, 0))) };
+  };
+  const hi = io.outputs.map((_, k) => fit(k, true));
+  const lo = io.outputs.map((_, k) => fit(k, false));
   const rIn = io.inputs.map((_, i) => {
     const amps = avg(rows.filter((r) => r.inputs[i]).map((r) => r.inAmps[i]), 0);
     return amps > 1e-9 ? clamp(V / amps) : MODEL_OFF;
   });
   // Ток покоя: от питания без токов входов (они тоже идут от «плюса» стенда)
   const iq = avg(rows.map((r) => Math.max(0, r.amps - r.inputs.reduce((sum, b, i) => sum + (b ? Math.max(0, r.inAmps[i]) : 0), 0))), 0);
-  return { inputs: io.inputs, outputs: io.outputs, vcc: io.vcc, gnd: io.gnd, logic: SEQUENTIAL.includes(level.func)
-      ? (bits, prev) => seqOuts(level.func, seqNext(level.func, prev?.outputs[0] ?? false, prev?.inputs, bits), bits)
-      : (bits) => truth(level.func, bits), rHigh, rLow, rIn, iq, volts: V };
+  return { volts: V, rHigh: hi.map((x) => x.r), rLow: lo.map((x) => x.r), dHigh: hi.map((x) => x.d), dLow: lo.map((x) => x.d), rIn, iq };
 }
 
 setModelSource(characterize);

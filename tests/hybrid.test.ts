@@ -3,6 +3,7 @@ import { setLibrary } from "../src/chips/registry";
 import { applyBoards, packageName, parsePackage, pinOffsets } from "../src/model/breadboard";
 import type { Chip, ChipDef, Endpoint, Scene } from "../src/model/types";
 import { Simulation, pinNode } from "../src/sim/simulation";
+import { modelAt } from "../src/chips/model";
 import { LEVELS, levelById, type LogicFunc } from "../src/career/levels";
 import { characterize, checkLevel, inputVectors, publicChips, recipeScene, referenceChips } from "../src/career/build";
 
@@ -44,8 +45,8 @@ function stand(def: ChipDef, inputs: Record<number, boolean>, out: number, rl: n
 describe("гибридный расчёт: проверенные микросхемы — моделью", () => {
   it("модель снимается с проверки: у КМОП вход — разрыв и ток покоя почти ноль, у РТЛ — ток базы и миллиамперы", () => {
     const scene: Scene = { components: [], wires: [], chips: allChips };
-    const cmos = characterize(refById.get("ref:nand-cmos")!, scene)!;
-    const rtl = characterize(refById.get("ref:nand-rtl")!, scene)!;
+    const cmos = modelAt(characterize(refById.get("ref:nand-cmos")!, scene)!, 5);
+    const rtl = modelAt(characterize(refById.get("ref:nand-rtl")!, scene)!, 5);
     expect(cmos.rIn.every((r) => r >= 1e8)).toBe(true);
     expect(cmos.iq).toBeLessThan(1e-6);
     expect(cmos.rHigh[0]).toBeLessThan(100);
