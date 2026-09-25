@@ -116,6 +116,9 @@ const PLACE: Record<string, [number, number]> = {
   "fix-blinker": [6, 10],
   schmitt: [5, 5.5],
   osc: [6, 5.5],
+  div2: [7, 7],
+  cnt4: [8, 7],
+  sreg4: [7, 8],
   sr: [4, 7.5],
   dlatch: [5, 7.5],
   dff: [6, 7.5],
@@ -138,7 +141,7 @@ const needs = (l: Level): LogicFunc[] => l.kit.flatMap((k) => (k.part === "chip"
 const variant = (l: Level) => l.variant ?? (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
 
 /** Короткие названия функций для узлов карты. */
-const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется" };
+const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг" };
 /** Подпись узла: функция и вариант; не влезает — только вариант. */
 function nodeSub(l: Level): string {
   const full = `${FUNC_SHORT[l.func] ?? FUNC_NAMES[l.func]} · ${variant(l)}`;

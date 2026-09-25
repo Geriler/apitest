@@ -11,7 +11,7 @@ import type { ChipPackage, ChipPinRole } from "../model/breadboard";
 import type { MosfetKind, TransistorKind } from "../model/types";
 
 /** Логическая функция компонента. */
-export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc";
+export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc" | "div2" | "cnt4" | "sreg4";
 
 /** Деталь набора: сколько штук и что именно (тип и номинал). */
 export type KitItem =
@@ -103,34 +103,55 @@ export function gateIo(level: Level): { inputs: number[]; outputs: number[]; vcc
 }
 
 /** Схемы с памятью: выход зависит не только от входов, но и от того, что было раньше. */
-export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff"];
+export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff", "div2", "cnt4", "sreg4"];
+
+/** Был ли фронт (переход из нуля в единицу) на входе k между прошлым шагом и этим. */
+const rising = (prev: boolean[] | undefined, bits: boolean[], k: number) => !!prev && !prev[k] && bits[k];
 
 /**
- * Следующее состояние схемы с памятью: q — что хранила, prev — входы на прошлом шаге, bits — сейчас.
+ * Следующее состояние схемы с памятью — число (у однобитных 0 или 1, у счётчика и регистра — их
+ * содержимое, младший разряд — Q0): q — что хранила, prev — входы на прошлом шаге, bits — сейчас.
  * RS-защёлка (S, R): S — запомнить единицу, R — ноль, оба нуля — хранить. D-защёлка (D, E): при
- * E = 1 повторяет D, при E = 0 хранит. D-триггер (D, CLK): запоминает D только в момент, когда
- * CLK переходит из нуля в единицу (по фронту), в остальное время хранит.
+ * E = 1 повторяет D, при E = 0 хранит. D-триггер (D, CLK): запоминает D только в момент, когда CLK
+ * переходит из нуля в единицу (по фронту). Делитель на 2 (CLK): по фронту меняется на
+ * противоположное. Счётчик (CLK): по фронту +1 по модулю 16. Регистр сдвига (D, CLK): по фронту
+ * всё сдвигается на разряд, в Q0 — D.
  */
-export function seqNext(func: LogicFunc, q: boolean, prev: boolean[] | undefined, bits: boolean[]): boolean {
+export function seqNext(func: LogicFunc, q: number, prev: boolean[] | undefined, bits: boolean[]): number {
   const [a, b] = bits;
-  if (func === "sr") return a && !b ? true : b && !a ? false : a && b ? false : q;
-  if (func === "dlatch") return b ? a : q;
-  if (func === "dff") return prev && !prev[1] && b ? a : q;
+  if (func === "sr") return a && !b ? 1 : b && !a ? 0 : a && b ? 0 : q;
+  if (func === "dlatch") return b ? +a : q;
+  // По фронту триггер берёт D таким, каким оно было перед фронтом (время предустановки), — а не то,
+  // что успело измениться от его же нового выхода: иначе регистр сдвига пропустил бы бит насквозь
+  if (func === "dff") return rising(prev, bits, 1) ? +prev![0] : q;
+  if (func === "div2") return rising(prev, bits, 0) ? q ^ 1 : q;
+  if (func === "cnt4") return rising(prev, bits, 0) ? (q + 1) & 15 : q;
+  if (func === "sreg4") return rising(prev, bits, 1) ? ((q << 1) | +prev![0]) & 15 : q;
   return q;
 }
 
-/** Выходы схемы с памятью при состоянии q: Q и (у защёлок) Q̅. У RS при S = R = 1 оба — нули. */
-export function seqOuts(func: LogicFunc, q: boolean, bits: boolean[]): boolean[] {
-  if (func === "sr") return bits[0] && bits[1] ? [false, false] : [q, !q];
-  if (func === "dlatch") return [q, !q];
-  return [q];
+/** Выходы схемы с памятью при состоянии q: Q (у защёлок ещё Q̅; у счётчика и регистра — Q0…Q3). */
+export function seqOuts(func: LogicFunc, q: number, bits: boolean[]): boolean[] {
+  if (func === "sr") return bits[0] && bits[1] ? [false, false] : [!!q, !q];
+  if (func === "dlatch") return [!!q, !q];
+  if (func === "cnt4" || func === "sreg4") return [0, 1, 2, 3].map((k) => !!(q & (1 << k)));
+  return [!!(q & 1)];
 }
 
-/** Что нужно на выходах по шагам последовательности (у подготовительных — тоже, для счёта). */
-export function sequenceExpected(level: Level): boolean[][] {
-  let q = false;
-  let prev: boolean[] | undefined;
-  return (level.sequence ?? []).map((s) => {
+/** Состояние по выходам: у защёлок — Q, у счётчика и регистра — Q0…Q3 числом. */
+export function seqState(func: LogicFunc, outs: boolean[]): number {
+  return func === "cnt4" || func === "sreg4" ? outs.reduce((m, b, k) => m | (b ? 1 << k : 0), 0) : +!!outs[0];
+}
+
+/**
+ * Что нужно на выходах по шагам последовательности. После включения схема хранит что попало, и
+ * подготовительные шаги этого не меняют (у делителя и счётчика — вообще никак не обнулить): начальное
+ * состояние q0 — то, что на выходах после них (проверка его замеряет); дальше считаем от него.
+ */
+export function sequenceExpected(level: Level, q0 = 0, from = 0): boolean[][] {
+  let q = q0;
+  let prev: boolean[] | undefined = from > 0 ? level.sequence![from - 1].in : undefined;
+  return (level.sequence ?? []).slice(from).map((s) => {
     q = seqNext(level.func, q, prev, s.in);
     prev = s.in;
     return seqOuts(level.func, q, s.in);
@@ -157,7 +178,10 @@ export function truth(func: LogicFunc, bits: boolean[]): boolean[] {
     case "sr":
     case "dlatch":
     case "dff":
-      return seqOuts(func, seqNext(func, false, undefined, bits), bits);
+    case "div2":
+    case "cnt4":
+    case "sreg4":
+      return seqOuts(func, seqNext(func, 0, undefined, bits), bits);
     // Четыре независимых XNOR: входы парами (1A, 1B, 2A, 2B…), выходы 1Y…4Y
     case "xnor4":
       return [0, 1, 2, 3].map((k) => bits[2 * k] === bits[2 * k + 1]);
@@ -993,6 +1017,101 @@ export const LEVELS: Level[] = [
       nets: [...power("P5", "P3", gates("D1")), ["D1.4", "P4", "R1.1"], ["R1.2", "D1.2", "C1.1"], ["C1.2", "P3"]],
     },
   },
+  // ─── Счёт: делитель на 2 → счётчик; регистр сдвига ─────────────────────────────────────────
+  {
+    id: "div2",
+    func: "div2",
+    part: "ДЕЛИТЕЛЬ НА 2",
+    intermediate: true,
+    title: "Делитель частоты на 2 (T-триггер)",
+    about: `На каждый фронт CLK (переход из нуля в единицу) выход меняется на противоположный: единица, ноль, единица… Частота на выходе — вдвое ниже, чем на входе. После включения выход — что попало, и сбросить нечем: проверка начинает считать от того, что на нём окажется. ${STEP}`,
+    hints: [
+      "D-триггер запоминает D по фронту. Что должно быть на D, чтобы после фронта выход стал противоположным тому, что был?",
+      "На D — выход триггера, перевёрнутый инвертором.",
+    ],
+    ...GATE1,
+    names: ["", "CLK", "", "Q", ""],
+    room: 400,
+    sequence: seq("*0", "1", "0", "1", "0", "1", "0", "1", "0", "1"),
+    kit: [
+      { part: "chip", func: "dff", count: 1 },
+      { part: "chip", func: "not", count: 1 },
+    ],
+    recipe: {
+      parts: [sot("F", "dff", "D", 2), sot("N", "not", "D", 8)],
+      nets: [...power("P5", "P3", gates("F", "N")), ["P2", "F.2"], ["F.4", "P4", "N.2"], ["N.4", "F.1"]],
+    },
+  },
+  {
+    id: "cnt4",
+    func: "cnt4",
+    part: "СЧЁТЧИК 4 бит",
+    intermediate: true,
+    title: "Двоичный счётчик на 4 бита",
+    about:
+      "Считает фронты CLK: Q3Q2Q1Q0 — число от 0 до 15, на каждом фронте +1, после 15 снова 0. Q0 меняется на каждом фронте, Q1 — вдвое реже, Q2 — ещё вдвое… С генератором на входе светодиоды на выходах мигают всё медленнее. Как и у делителя, начальное число — что попало; проверка — 17 фронтов подряд. Это задача: собранное никуда не выдаётся. Настоящие счётчики (74HC393) умеют ещё сбрасываться в ноль.",
+    hints: [
+      "Каждый разряд — делитель на 2. Когда должен переключиться следующий разряд — при каком переходе предыдущего?",
+      "Следующий разряд меняется, когда предыдущий переходит из 1 в 0 (перенос). Делитель срабатывает по фронту из 0 в 1 — значит, между разрядами нужен инвертор.",
+    ],
+    package: "DIP",
+    roles: ["in", "nc", "out", "gnd", "out", "out", "out", "vcc"],
+    names: ["CLK", "", "Q0", "", "Q1", "Q2", "Q3", ""],
+    io: { inputs: [1], outputs: [3, 5, 6, 7] },
+    room: 2000,
+    sequence: seq("*0", ...Array.from({ length: 17 }, () => ["1", "0"]).flat()),
+    kit: [
+      { part: "chip", func: "div2", count: 4 },
+      { part: "chip", func: "not", count: 3 },
+    ],
+    recipe: {
+      parts: [sot("T0", "div2", "D", 1), sot("T1", "div2", "D", 5), sot("T2", "div2", "D", 9), sot("T3", "div2", "D", 13), sot("N1", "not", "H", 1), sot("N2", "not", "H", 5), sot("N3", "not", "H", 9)],
+      nets: [
+        ...power("P8", "P4", gates("T0", "T1", "T2", "T3", "N1", "N2", "N3")),
+        ["P1", "T0.2"],
+        ["T0.4", "P3", "N1.2"],
+        ["N1.4", "T1.2"],
+        ["T1.4", "P5", "N2.2"],
+        ["N2.4", "T2.2"],
+        ["T2.4", "P6", "N3.2"],
+        ["N3.4", "T3.2"],
+        ["T3.4", "P7"],
+      ],
+    },
+  },
+  {
+    id: "sreg4",
+    func: "sreg4",
+    part: "РЕГИСТР 4 бит",
+    intermediate: true,
+    title: "Регистр сдвига на 4 бита",
+    about:
+      "На каждый фронт CLK всё, что хранится, сдвигается на разряд: Q0 → Q1 → Q2 → Q3, а в Q0 записывается D. Так биты по одному проводу превращаются в число на четырёх выходах — «бегущий огонь», приём данных по одному проводу. Начальное содержимое — что попало; проверка вдвигает известную последовательность. Это задача: собранное никуда не выдаётся. Настоящие регистры (74HC164, 74HC595) умеют ещё сбрасываться.",
+    hints: [
+      "Каждый разряд — D-триггер. Откуда каждый из них должен брать то, что запомнит на фронте?",
+      "CLK у всех общий. D первого — вход D, D каждого следующего — выход предыдущего.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "out", "gnd", "out", "out", "out", "vcc"],
+    names: ["D", "CLK", "Q0", "", "Q1", "Q2", "Q3", ""],
+    io: { inputs: [1, 2], outputs: [3, 5, 6, 7] },
+    room: 2000,
+    // Вдвигаем 1, 0, 1, 1, 0, 0: D меняется при CLK = 0, потом фронт и спад — по одному входу за шаг
+    sequence: seq("*00", "10", "11", "10", "00", "01", "00", "10", "11", "10", "11", "10", "00", "01", "00", "01", "00"),
+    kit: [{ part: "chip", func: "dff", count: 4 }],
+    recipe: {
+      parts: [sot("F0", "dff", "D", 1), sot("F1", "dff", "D", 5), sot("F2", "dff", "D", 9), sot("F3", "dff", "D", 13)],
+      nets: [
+        ...power("P8", "P4", gates("F0", "F1", "F2", "F3")),
+        ["P1", "F0.1"],
+        ["P2", "F0.2", "F1.2", "F2.2", "F3.2"],
+        ["F0.4", "P3", "F1.1"],
+        ["F1.4", "P5", "F2.1"],
+        ["F2.4", "P6", "F3.1"],
+        ["F3.4", "P7"],
+      ],
+    },
+  },
 ];
 
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
@@ -1025,4 +1144,7 @@ export const FUNC_NAMES: Record<LogicFunc, string> = {
   dff: "D-триггер",
   schmitt: "Триггер Шмитта",
   osc: "Генератор",
+  div2: "Делитель на 2",
+  cnt4: "Счётчик",
+  sreg4: "Регистр сдвига",
 };

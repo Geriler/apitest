@@ -10,7 +10,7 @@ import { chipsUsed } from "../chips/registry";
 import { countChip, plural } from "../chips/count";
 import { Simulation, heatThreshold, pinNode } from "../sim/simulation";
 import { formatSI } from "../sim/resistorCodes";
-import { FUNC_NAMES, LEVELS, SEQUENTIAL, gateIo, kitLabel, seqNext, seqOuts, sequenceExpected, truth, type KitItem, type Level, type LogicFunc } from "./levels";
+import { FUNC_NAMES, LEVELS, SEQUENTIAL, gateIo, kitLabel, seqNext, seqOuts, seqState, sequenceExpected, truth, type KitItem, type Level, type LogicFunc } from "./levels";
 import { PIN_ROLES } from "../chips/roles";
 import { MODEL_OFF, REF_ABS_MAX, chipModel, setModelSource, type ChipModel, type ModelPoint } from "../chips/model";
 
@@ -341,10 +341,20 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     ? level.sequence.map((s, i) => ({ inputs: s.in, expected: expectedSeq[i], prep: !!s.prep }))
     : inputVectors(n).map((inputs) => ({ inputs, expected: truth(level.func, inputs), prep: false }));
   let stepNo = 0;
-  for (const { inputs, expected, prep } of steps) {
+  let lastPrep: number[] | undefined;
+  for (const [i, step] of steps.entries()) {
+    // Первый проверяемый шаг после подготовительных: что хранит схема — замеряем, дальше считаем от этого
+    if (level.sequence && !step.prep && lastPrep && i > 0 && steps[i - 1].prep) {
+      const q0 = seqState(level.func, lastPrep.map((v) => v > volts / 2));
+      sequenceExpected(level, q0, i).forEach((e, j) => (steps[i + j].expected = e));
+    }
+    const { inputs, expected, prep } = step;
     const good = (k: number, v: number) => (expected[k] ? isHigh(v, volts) : isLow(v, volts));
     const first = run(inputs, expected.map((e) => !e));
-    if (prep) continue;
+    if (prep) {
+      lastPrep = first.volts;
+      continue;
+    }
     const each = expected.map((_, k) => good(k, first.volts[k]));
     const burnt = new Set(first.burnt);
     let floating = expected.map(() => false);
@@ -646,7 +656,7 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
         vcc: io.vcc,
         gnd: io.gnd,
         logic: SEQUENTIAL.includes(level.func)
-          ? (bits, prev) => seqOuts(level.func, seqNext(level.func, prev?.outputs[0] ?? false, prev?.inputs, bits), bits)
+          ? (bits, prev) => seqOuts(level.func, seqNext(level.func, prev ? seqState(level.func, prev.outputs) : 0, prev?.inputs, bits), bits)
           : (bits) => truth(level.func, bits),
         points,
         vmin: points[0].volts,
