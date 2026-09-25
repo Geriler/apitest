@@ -81,7 +81,7 @@ export function ledSizeSelect(value: LedSize): string {
 }
 
 export function bjtSelect(value: string): string {
-  return selectField("bjt", "Тип", Object.entries(TRANSISTORS).map(([k, v]) => [k, `${v.label} (${v.polarity === "npn" ? "n-p-n" : "p-n-p"})`]), value);
+  return selectField("bjt", "Тип", Object.entries(TRANSISTORS).map(([k, v]) => [k, `${v.label} (${v.polarity === "npn" ? "n-p-n" : "p-n-p"}, ${v.pkg ?? "TO-92"})`]), value);
 }
 
 export function fetSelect(value: string): string {

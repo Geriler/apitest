@@ -1,6 +1,6 @@
 /** Модель песочницы: что стоит на столе и как соединено. Без Three.js. */
 
-import { DEFAULT_BOARDS, HOLE_BY_ID, boardsFromLayout, holeIdsFor, type BoardSpec, type ChipPackage, type ChipPinRole, type Layout } from "./breadboard";
+import { DEFAULT_BOARDS, HOLE_BY_ID, boardsFromLayout, holeIdsFor, type BoardSpec, type ChipPackage, type ChipPinRole, type Footprint, type Layout } from "./breadboard";
 export type { ChipPinRole } from "./breadboard";
 
 export type SmdSize = "1206" | "0805" | "0603" | "0402";
@@ -144,7 +144,29 @@ export function ledSpec(c: { size?: LedSize }) {
 export const TRANSISTORS = {
   BC547: { label: "BC547B", polarity: "npn" as const, is: 2e-14, betaF: 300, betaR: 8, maxIc: 0.1, maxP: 0.5 },
   BC557: { label: "BC557B", polarity: "pnp" as const, is: 2e-14, betaF: 250, betaR: 8, maxIc: 0.1, maxP: 0.5 },
-};
+  /**
+   * BC847B — тот же кристалл, что BC547B, в корпусе SOT-23 (паспорт Diodes DS11108): β 200…450
+   * при 2 мА (типично 290), Uбэ 0,58…0,70 В при 2 мА, Iк до 100 мА, 310 мВт на минимальных площадках.
+   * Выводы корпуса: 1 — база, 2 — эмиттер, 3 — коллектор.
+   */
+  BC847: { label: "BC847B", polarity: "npn" as const, is: 2e-14, betaF: 290, betaR: 8, maxIc: 0.1, maxP: 0.31, pkg: "SOT-23" as const, pads: [3, 1, 2], mark: "K1R" },
+} as Record<"BC547" | "BC557" | "BC847", TransistorSpec>;
+
+export interface TransistorSpec {
+  label: string;
+  polarity: "npn" | "pnp";
+  is: number;
+  betaF: number;
+  betaR: number;
+  maxIc: number;
+  maxP: number;
+  /** SMD-корпус (только на плату под SMD); нет — TO-92. */
+  pkg?: "SOT-23";
+  /** Номера выводов корпуса SOT-23 у коллектора, базы и эмиттера. */
+  pads?: [number, number, number];
+  /** Код маркировки на корпусе SOT-23 (по паспорту). */
+  mark?: string;
+}
 export type TransistorKind = keyof typeof TRANSISTORS;
 
 /**
@@ -162,6 +184,23 @@ export const MOSFETS = {
   BS250: {
     label: "BS250", channel: "p" as const, pkg: "TO-92" as const, pins: ["D", "G", "S"] as const,
     vth: 2.2, k: 0.026, maxId: 0.23, maxP: 0.7, rdsNote: "≈ 5–6 Ом при Uзи = −10 В, по паспорту до 14 Ом",
+  },
+  /**
+   * 2N7002 — SMD-пара к 2N7000 в SOT-23 (паспорт Diodes DS11303): 60 В, 170 мА и 370 мВт на
+   * минимальных площадках, порог 1…2,5 В, Rси типично 3,2 Ом (до 7,5) при Uзи = 5 В.
+   * k = 1 / (Rси·(Uзи − Uпор)) ≈ 0,1. Выводы: 1 — затвор, 2 — исток, 3 — сток.
+   */
+  "2N7002": {
+    label: "2N7002", channel: "n" as const, pkg: "SOT-23" as const, pins: ["G", "S", "D"] as const,
+    vth: 2.1, k: 0.1, maxId: 0.17, maxP: 0.37, rdsNote: "≈ 3,4 Ом при Uзи = 5 В, по паспорту до 7,5 Ом", mark: "K72",
+  },
+  /**
+   * BSS84 — P-канальный в SOT-23 (паспорт Diodes DS30149): −50 В, −130 мА, 300 мВт, порог −0,8…−2 В,
+   * Rси типично 3,2 Ом (до 10) при Uзи = −5 В; k ≈ 1 / (3,2·(5 − 1,6)) ≈ 0,09. Выводы: 1 — затвор, 2 — исток, 3 — сток.
+   */
+  BSS84: {
+    label: "BSS84", channel: "p" as const, pkg: "SOT-23" as const, pins: ["G", "S", "D"] as const,
+    vth: 1.6, k: 0.09, maxId: 0.13, maxP: 0.3, rdsNote: "≈ 3,3 Ом при Uзи = −5 В, по паспорту до 10 Ом", mark: "K84",
   },
   IRLZ44N: {
     label: "IRLZ44N", channel: "n" as const, pkg: "TO-220" as const, pins: ["G", "D", "S"] as const,
@@ -238,6 +277,8 @@ export interface Capacitor extends Base {
   uF: number;
   /** Номинальное напряжение, В (нет — 16 В у электролита, 50 В у керамики). */
   volts?: number;
+  /** Керамический в корпусе 0805 (многослойный чип, без ножек) — только на плату под SMD. */
+  smd?: boolean;
 }
 
 export interface Diode extends Base {
@@ -430,6 +471,10 @@ export interface Trace {
 export const TRACE_WIDTH_MM = 0.72 * 2.54;
 /** Удельное сопротивление дорожки, Ом/мм: ρ(Cu) / (ширина × толщина) = 1,72e−8 / (1,83e−3 × 35e−6) / 1000. */
 export const TRACE_OHM_PER_MM = 1.72e-8 / (TRACE_WIDTH_MM * 1e-3 * 35e-6) / 1000;
+/** Дорожка платы под SMD: 0,3 мм — между выводами SOIC (зазор 0,67 мм) проходит. */
+export const FINE_TRACE_WIDTH_MM = 0.3;
+/** Её сопротивление, Ом/мм: ≈ 1,6 мОм/мм — в 6 раз больше, чем у широкой. */
+export const FINE_TRACE_OHM_PER_MM = 1.72e-8 / (FINE_TRACE_WIDTH_MM * 1e-3 * 35e-6) / 1000;
 
 export interface Scene {
   components: Component[];
@@ -515,4 +560,39 @@ export function boardConflicts(scene: Scene, boards: readonly BoardSpec[]): stri
     if (!ids.has(t.a) || !ids.has(t.b)) out.add(t.id);
   }
   return [...out];
+}
+
+
+/** Корпуса SO-n, для которых есть посадочное место. */
+const SO_PINS = [4, 6, 8, 14, 16];
+
+/**
+ * Посадочное место детали на плате под SMD; undefined — у детали ножки, на SMD-плату не ставится.
+ * Микросхема в DIP на SMD-плате — та же микросхема в корпусе SOIC (SO-n): выводы у них нумеруются одинаково.
+ */
+export function footprintOf(c: Component): Footprint | undefined {
+  if (c.type === "resistor") return c.variant === "smd" ? c.smdSize : undefined;
+  if (c.type === "capacitor") return c.variant === "ceramic" && c.smd ? "0805" : undefined;
+  if (c.type === "transistor") return TRANSISTORS[c.kind].pkg;
+  if (c.type === "mosfet") return MOSFETS[c.kind].pkg === "SOT-23" ? "SOT-23" : undefined;
+  if (c.type === "chip") {
+    if (c.package === "SOT-23-5" || c.package === "SOT-23-6") return c.package;
+    return SO_PINS.includes(c.pins) ? (`SO-${c.pins}` as Footprint) : undefined;
+  }
+  return undefined;
+}
+
+/** Деталь без ножек: только на плату под SMD или на стол (не в макетку и не в отверстия печатной). */
+export function smdOnly(c: Component): boolean {
+  if (c.type === "resistor") return c.variant === "smd";
+  if (c.type === "capacitor") return !!c.smd;
+  if (c.type === "transistor") return !!TRANSISTORS[c.kind].pkg;
+  if (c.type === "mosfet") return MOSFETS[c.kind].pkg === "SOT-23";
+  return false;
+}
+
+/** Номер вывода корпуса (с 1) у каждого вывода детали: у BC847 коллектор — 3, база — 1, эмиттер — 2. */
+export function padNumbers(c: Component, pins: number): number[] {
+  if (c.type === "transistor" && TRANSISTORS[c.kind].pads) return [...TRANSISTORS[c.kind].pads!];
+  return Array.from({ length: pins }, (_, i) => i + 1);
 }

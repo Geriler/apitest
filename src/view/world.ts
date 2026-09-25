@@ -5,7 +5,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { BOARDS, HOLES, boardRect, boardSize, boardsBounds, type BoardSpec, type Hole } from "../model/breadboard";
-import { breadboardTexture, chipTexture, matTexture, pcbTexture, puffTexture } from "./textures";
+import { breadboardTexture, smdBoardTexture, chipTexture, matTexture, pcbTexture, puffTexture } from "./textures";
 
 const MAX_DOTS = 3000;
 const MAX_PUFFS = 240;
@@ -210,10 +210,10 @@ export class World {
   private texture(b: BoardSpec): THREE.CanvasTexture {
     // Корпус у каждого свой (подписи выводов), его текстура живёт, пока живёт плата
     if (b.kind === "chip") return chipTexture(b);
-    const key = b.kind === "breadboard" ? "bb" : `pcb${b.cols}x${b.rows}`;
+    const key = b.kind === "breadboard" ? "bb" : `${b.kind}${b.cols}x${b.rows}`;
     let t = this.textures.get(key);
     if (!t) {
-      t = b.kind === "breadboard" ? breadboardTexture() : pcbTexture(b.cols ?? 24, b.rows ?? 14);
+      t = b.kind === "breadboard" ? breadboardTexture() : b.kind === "smd" ? smdBoardTexture(b.cols ?? 24, b.rows ?? 15) : pcbTexture(b.cols ?? 24, b.rows ?? 14);
       this.textures.set(key, t);
     }
     return t;
@@ -255,6 +255,7 @@ export class World {
       this.boardMeshes.push(body);
       this.boardGroup.add(body);
       if (b.kind === "chip") this.boardGroup.add(chipLegs(b, size.height));
+      if (b.seats?.length) this.boardGroup.add(seatCopper(b, size.height));
       if (b.id === this.highlightId) {
         const frame = new THREE.LineSegments(
           new THREE.EdgesGeometry(new THREE.BoxGeometry(size.width + 0.3, size.height + 0.3, size.depth + 0.3)),
@@ -310,7 +311,9 @@ export class World {
         this.holeMarks.setMatrixAt(i, zero);
         return;
       }
-      m.makeTranslation(h.x, h.y + 0.01, h.z);
+      // Прямоугольная SMD-площадка — метка её размера
+      if (h.w !== undefined && h.d !== undefined) m.makeScale((h.w + 0.06) / 0.62, 1, (h.d + 0.06) / 0.62).setPosition(h.x, h.y + 0.01, h.z);
+      else m.makeTranslation(h.x, h.y + 0.01, h.z);
       this.holeMarks.setMatrixAt(i, m);
       this.holeMarks.setColorAt(i, color.set(c));
     });
@@ -367,6 +370,12 @@ export class World {
     let bestD = 0.6;
     for (const h of HOLES) {
       if (h.boardId !== hit.boardId) continue;
+      if (h.w !== undefined && h.d !== undefined) {
+        // SMD-площадка мелкая: попадание в её прямоугольник важнее близости к центрам соседей
+        const inside = Math.abs(h.x - hit.point.x) <= h.w / 2 + 0.04 && Math.abs(h.z - hit.point.z) <= h.d / 2 + 0.04;
+        if (inside) return h;
+        continue;
+      }
       const d = Math.hypot(h.x - hit.point.x, h.z - hit.point.z);
       if (d < bestD) {
         bestD = d;
@@ -493,4 +502,18 @@ function chipLegs(b: BoardSpec, height: number): THREE.Group {
     legs.add(flat, down);
   }
   return legs;
+}
+
+/** Лужёные площадки посадочных мест SMD (на плате под SMD и на поле корпуса). */
+function seatCopper(b: BoardSpec, height: number): THREE.Group {
+  const g = new THREE.Group();
+  const tin = new THREE.MeshStandardMaterial({ color: 0xd2d4cc, metalness: 0.8, roughness: 0.35 });
+  for (const h of HOLES) {
+    if (h.boardId !== b.id || !h.seat) continue;
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(h.w!, 0.012, h.d!), tin);
+    pad.position.set(h.x, height + 0.006, h.z);
+    pad.receiveShadow = true;
+    g.add(pad);
+  }
+  return g;
 }

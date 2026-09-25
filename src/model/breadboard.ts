@@ -33,6 +33,12 @@ export interface Hole {
   polarity?: "+" | "-";
   /** Площадка вывода корпуса: номер вывода (с 1). */
   pin?: number;
+  /** Площадка посадочного места SMD: обозначение детали и номер вывода корпуса (с 1). */
+  seat?: string;
+  seatPin?: number;
+  /** Прямоугольная SMD-площадка: размер по X и по Z, в шагах (уже с поворотом). Нет — круглая. */
+  w?: number;
+  d?: number;
 }
 
 export const COLUMNS = 30;
@@ -46,12 +52,12 @@ export const BOARD = {
 
 /** Плата на столе (сохраняется вместе со схемой). x, z — центр платы. */
 export interface BoardSpec {
-  /** «BB1», «BB2»… — макетки, «PCB1», «PCB2»… — печатные платы, «K1» — корпус микросхемы. */
+  /** «BB1», «BB2»… — макетки, «PCB1», «PCB2»… — печатные платы, «S1» — платы под SMD, «K1» — корпус микросхемы. */
   id: string;
-  kind: "breadboard" | "pcb" | "chip";
+  kind: "breadboard" | "pcb" | "chip" | "smd";
   x: number;
   z: number;
-  /** Только у печатной платы: число столбцов и рядов площадок. */
+  /** У печатной платы — число столбцов и рядов площадок; у платы под SMD — размер поля в шагах. */
   cols?: number;
   rows?: number;
   /** Только у корпуса: вид корпуса (по умолчанию DIP), число выводов, их назначение и имена, название. */
@@ -64,6 +70,148 @@ export interface BoardSpec {
   fixed?: boolean;
   /** Вместимость, клеток, если не обычная (2 на вывод). */
   room?: number;
+  /** Корпус: поле начинки под SMD (без сетки площадок — площадки появляются под деталями). */
+  smd?: boolean;
+  /** Посадочные места SMD-деталей (у платы под SMD и у корпуса с полем под SMD). */
+  seats?: Seat[];
+}
+
+/**
+ * Посадочное место SMD-детали: площадки её корпуса под ней, где бы она ни стояла.
+ * x, z — центр относительно центра платы, в шагах; rot — поворот в четвертях оборота.
+ */
+export interface Seat {
+  /** Обозначение детали, которая на нём стоит (id площадок — «s:U1.3»). */
+  id: string;
+  fp: Footprint;
+  x: number;
+  z: number;
+  rot: number;
+}
+
+/**
+ * Посадочные места корпусов (IPC-7351, номинальные): SOT-23 (3 вывода, шаг 0,95 мм),
+ * SOT-23-5/6, SO-n (SOIC, шаг 1,27 мм) и двухвыводные чипы 1206…0402.
+ */
+export type Footprint = "SOT-23" | "SOT-23-5" | "SOT-23-6" | "SO-4" | "SO-6" | "SO-8" | "SO-14" | "SO-16" | "1206" | "0805" | "0603" | "0402";
+
+/** Площадка в мм в своей системе координат: вывод 1 — слева в ближнем ряду (+z к себе). */
+interface PadMm {
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+}
+
+/** Двухвыводные чипы: расстояние от центра до центра площадки и размер площадки, мм. */
+const CHIP_PADS: Record<string, { c: number; w: number; d: number; body: [number, number, number] }> = {
+  "1206": { c: 1.45, w: 1.15, d: 1.8, body: [3.2, 1.6, 0.55] },
+  "0805": { c: 0.95, w: 1.0, d: 1.45, body: [2.0, 1.25, 0.5] },
+  "0603": { c: 0.8, w: 0.9, d: 0.95, body: [1.6, 0.8, 0.45] },
+  "0402": { c: 0.5, w: 0.55, d: 0.6, body: [1.0, 0.5, 0.35] },
+};
+
+/** SOT-23: шаг 0,95 мм, ряды площадок в ±1,1 мм от центра; SOIC: шаг 1,27 мм, ряды в ±2,7 мм. */
+const SOT = { pitch: 0.95, row: 1.1, w: 0.6, d: 1.0 };
+const SO = { pitch: 1.27, row: 2.7, w: 0.6, d: 1.55 };
+
+/** Площадки корпуса по порядку выводов (1…n), мм. */
+export function footprintPads(fp: Footprint): PadMm[] {
+  const chip = CHIP_PADS[fp];
+  if (chip) return [{ x: -chip.c, z: 0, w: chip.w, d: chip.d }, { x: chip.c, z: 0, w: chip.w, d: chip.d }];
+  const at = (g: typeof SOT, x: number, near: boolean): PadMm => ({ x: x * g.pitch, z: near ? g.row : -g.row, w: g.w, d: g.d });
+  // SOT-23: 1 и 2 — ближний ряд, 3 — дальний посередине
+  if (fp === "SOT-23") return [at(SOT, -1, true), at(SOT, 1, true), at(SOT, 0, false)];
+  if (fp === "SOT-23-5") return [at(SOT, -1, true), at(SOT, 0, true), at(SOT, 1, true), at(SOT, 1, false), at(SOT, -1, false)];
+  if (fp === "SOT-23-6") return [at(SOT, -1, true), at(SOT, 0, true), at(SOT, 1, true), at(SOT, 1, false), at(SOT, 0, false), at(SOT, -1, false)];
+  const n = Number(fp.slice(3));
+  const k = n / 2;
+  return Array.from({ length: n }, (_, i) => (i < k ? at(SO, i - (k - 1) / 2, true) : at(SO, n - 1 - i - (k - 1) / 2, false)));
+}
+
+/** Корпус детали: длина вдоль ряда выводов, ширина, высота, мм. */
+export function footprintBody(fp: Footprint): [number, number, number] {
+  const chip = CHIP_PADS[fp];
+  if (chip) return chip.body;
+  if (fp === "SOT-23") return [2.9, 1.3, 1.0];
+  if (fp === "SOT-23-5" || fp === "SOT-23-6") return [2.9, 1.6, 1.1];
+  const n = Number(fp.slice(3));
+  return [(n / 2) * 1.27 - 0.2, 3.9, 1.5];
+}
+
+/** Поворот на rot четвертей оборота (как rotation.y в сцене). */
+function turnXZ(x: number, z: number, rot: number): [number, number] {
+  const r = ((rot % 4) + 4) % 4;
+  return r === 0 ? [x, z] : r === 1 ? [z, -x] : r === 2 ? [-x, -z] : [-z, x];
+}
+
+/** Можно ли на плате ставить SMD-детали (плата под SMD или корпус с полем под SMD). */
+export function isSmdBoard(b: Pick<BoardSpec, "kind" | "smd"> | undefined): boolean {
+  return !!b && (b.kind === "smd" || (b.kind === "chip" && !!b.smd));
+}
+
+/** Площадки посадочного места на плате b: мировые координаты и размеры в шагах. */
+export function seatPads(b: BoardSpec, seat: Pick<Seat, "fp" | "x" | "z" | "rot">): { x: number; z: number; w: number; d: number }[] {
+  return footprintPads(seat.fp).map((p) => {
+    const [dx, dz] = turnXZ(p.x / 2.54, p.z / 2.54, seat.rot);
+    const odd = seat.rot % 2 !== 0;
+    return { x: b.x + seat.x + dx, z: b.z + seat.z + dz, w: (odd ? p.d : p.w) / 2.54, d: (odd ? p.w : p.d) / 2.54 };
+  });
+}
+
+/** Занятый местом прямоугольник на плате (площадки и корпус с зазором 0,25 мм), мировые координаты. */
+export function seatRect(b: BoardSpec, seat: Pick<Seat, "fp" | "x" | "z" | "rot">): { x0: number; x1: number; z0: number; z1: number } {
+  const [bl, bw] = footprintBody(seat.fp);
+  const pads = footprintPads(seat.fp);
+  const gap = 0.25;
+  const hx = Math.max(bl / 2, ...pads.map((p) => Math.abs(p.x) + p.w / 2)) + gap;
+  const hz = Math.max(bw / 2, ...pads.map((p) => Math.abs(p.z) + p.d / 2)) + gap;
+  const [ax, az] = seat.rot % 2 !== 0 ? [hz, hx] : [hx, hz];
+  const cx = b.x + seat.x, cz = b.z + seat.z;
+  return { x0: cx - ax / 2.54, x1: cx + ax / 2.54, z0: cz - az / 2.54, z1: cz + az / 2.54 };
+}
+
+/** Поле, где можно ставить SMD-детали: у платы — без края с площадками для проводов, у корпуса — поле начинки. */
+export function seatField(b: BoardSpec): { x0: number; x1: number; z0: number; z1: number } {
+  const r = boardRect(b);
+  if (b.kind === "chip") {
+    const f = chipField(b);
+    return { x0: padX(b, 1) - 0.5, x1: padX(b, f.cols) + 0.5, z0: padZ(b, 0) - 0.5, z1: padZ(b, f.rows - 1) + 0.5 };
+  }
+  return { x0: r.x0 + 0.5, x1: r.x1 - 0.5, z0: r.z0 + 0.5, z1: r.z1 - 2 };
+}
+
+/** Шаг, по которому встают SMD-детали: четверть шага 2,54 мм (0,635 мм). */
+export const SEAT_SNAP = 0.25;
+
+/** Почему место не годится (вне поля, налезает на другое); undefined — годится. */
+export function seatProblem(b: BoardSpec, seat: Seat): string | undefined {
+  const r = seatRect(b, seat);
+  const f = seatField(b);
+  const eps = 1e-6;
+  if (r.x0 < f.x0 - eps || r.x1 > f.x1 + eps || r.z0 < f.z0 - eps || r.z1 > f.z1 + eps) {
+    return b.kind === "chip" ? "деталь вышла бы за поле корпуса" : "деталь вышла бы за край платы (у ближнего края — площадки для проводов)";
+  }
+  for (const o of b.seats ?? []) {
+    if (o.id === seat.id) continue;
+    const q = seatRect(b, o);
+    if (r.x0 < q.x1 - eps && q.x0 < r.x1 - eps && r.z0 < q.z1 - eps && q.z0 < r.z1 - eps) return `там уже стоит ${o.id}`;
+  }
+  return undefined;
+}
+
+/** Id площадки вывода pin (с 1) посадочного места seat на плате b: «s:U1.3», «k:VT1.2». */
+export function seatHole(b: BoardSpec, seat: string, pin: number): string {
+  return `${prefixes(b).id}${seat}.${pin}`;
+}
+
+/** Посадочное место, которому принадлежит площадка. */
+export function seatOf(holeId: string): { board: BoardSpec; seat: Seat } | undefined {
+  const h = HOLE_BY_ID.get(holeId);
+  if (!h?.seat) return undefined;
+  const board = boardById(h.boardId);
+  const seat = board?.seats?.find((s) => s.id === h.seat);
+  return board && seat ? { board, seat } : undefined;
 }
 
 /** Назначение вывода корпуса; nc — не подключён. */
@@ -127,6 +275,13 @@ export interface Layout {
   pcbRows: number;
 }
 
+/** Размеры платы под SMD, шагов (40 × 25, 60 × 38 и 80 × 50 мм). */
+export const SMD_BOARD_SIZES: readonly [number, number][] = [
+  [16, 10],
+  [24, 15],
+  [32, 20],
+];
+
 /** Варианты размеров печатной платы (столбцы × ряды). */
 export const PCB_SIZES: readonly [number, number][] = [
   [24, 14],
@@ -153,6 +308,7 @@ export function boardSize(b: BoardSpec): { width: number; depth: number; height:
     const f = chipField(b);
     return { width: f.cols + 3, depth: f.rows + 6, height: PCB_HEIGHT };
   }
+  if (b.kind === "smd") return { width: b.cols ?? 24, depth: b.rows ?? 15, height: PCB_HEIGHT };
   return b.kind === "breadboard"
     ? { ...BOARD }
     : { width: (b.cols ?? 24) + 3, depth: (b.rows ?? 14) + 3, height: PCB_HEIGHT };
@@ -174,7 +330,7 @@ export function boardsOverlap(a: BoardSpec, b: BoardSpec): boolean {
 
 /** Следующий свободный номер: «BB2», «PCB1»… */
 export function nextBoardId(kind: BoardSpec["kind"], boards: readonly BoardSpec[]): string {
-  const p = kind === "breadboard" ? "BB" : kind === "chip" ? "K" : "PCB";
+  const p = kind === "breadboard" ? "BB" : kind === "chip" ? "K" : kind === "smd" ? "S" : "PCB";
   for (let n = 1; ; n++) if (!boards.some((b) => b.id === `${p}${n}`)) return `${p}${n}`;
 }
 
@@ -186,6 +342,7 @@ function boardNumber(b: BoardSpec): number {
 /** Человекочитаемое имя: «макетка 2», «печатная плата 1». */
 export function boardName(b: BoardSpec): string {
   if (b.kind === "chip") return `корпус ${packageName(b.package, b.pins ?? 8)}`;
+  if (b.kind === "smd") return `плата под SMD ${boardNumber(b)}`;
   return `${b.kind === "breadboard" ? "макетка" : "печатная плата"} ${boardNumber(b)}`;
 }
 
@@ -197,6 +354,7 @@ function prefixes(b: BoardSpec): { id: string; node: string } {
   const n = boardNumber(b);
   if (b.kind === "breadboard") return n === 1 ? { id: "", node: "" } : { id: `${n}:`, node: `bb${n}:` };
   if (b.kind === "chip") return { id: n === 1 ? "k:" : `k${n}:`, node: "" };
+  if (b.kind === "smd") return { id: n === 1 ? "s:" : `s${n}:`, node: "" };
   return n === 1 ? { id: "p", node: "" } : { id: `p${n}:`, node: "" };
 }
 
@@ -275,9 +433,18 @@ export function boardHoles(b: BoardSpec): Hole[] {
     }
     return holes;
   }
+  if (b.kind === "smd") {
+    // Площадки для проводов вдоль ближнего края, J1…Jn
+    const r = boardRect(b);
+    for (let i = 1; i < (b.cols ?? 24); i++) {
+      const id = `${px.id}J${i}`;
+      holes.push({ id, x: r.x0 + i, y: PCB_HEIGHT, z: r.z1 - 1, node: `pad:${id}`, kind: "pad", board: "pcb", boardId: b.id });
+    }
+    return [...holes, ...seatHoles(b)];
+  }
   if (b.kind === "chip") {
     const f = chipField(b);
-    for (let r = 0; r < f.rows; r++) {
+    for (let r = 0; r < (b.smd ? 0 : f.rows); r++) {
       for (let c = 1; c <= f.cols; c++) {
         const id = `${px.id}${LETTERS[r]}${c}`;
         holes.push({ id, x: padX(b, c), y: PCB_HEIGHT, z: padZ(b, r), node: `pad:${id}`, kind: "pad", board: "pcb", boardId: b.id });
@@ -288,7 +455,7 @@ export function boardHoles(b: BoardSpec): Hole[] {
       const at = chipPinAt(b, i);
       holes.push({ id, x: at.x, y: PCB_HEIGHT, z: at.z, node: `pad:${id}`, kind: "pad", board: "pcb", boardId: b.id, pin: i + 1 });
     }
-    return holes;
+    return b.smd ? [...holes, ...seatHoles(b)] : holes;
   }
   // Площадки печатной платы: у каждой свой узел
   const rows = LETTERS.slice(0, b.rows ?? 14);
@@ -299,6 +466,16 @@ export function boardHoles(b: BoardSpec): Hole[] {
     }
   });
   return holes;
+}
+
+/** Площадки посадочных мест платы. */
+function seatHoles(b: BoardSpec): Hole[] {
+  return (b.seats ?? []).flatMap((seat) =>
+    seatPads(b, seat).map((p, i): Hole => {
+      const id = seatHole(b, seat.id, i + 1);
+      return { id, x: p.x, y: PCB_HEIGHT, z: p.z, node: `pad:${id}`, kind: "pad", board: "pcb", boardId: b.id, seat: seat.id, seatPin: i + 1, w: p.w, d: p.d };
+    }),
+  );
 }
 
 export const HOLES: Hole[] = [];
@@ -379,6 +556,11 @@ export function holeLabel(id: string): string {
   const h = HOLE_BY_ID.get(id);
   if (!h) return id;
   if (h.pin) return `вывод ${h.pin} ${chipPinName(boardById(h.boardId), h.pin - 1)}`;
+  if (h.seat) return `площадка ${h.seatPin} под ${h.seat}`;
+  if (h.kind === "pad" && /^s\d*:/.test(id)) {
+    const m = id.match(/^s(\d*):(.*)$/)!;
+    return `${m[1] ? `плата под SMD ${m[1]}, ` : ""}площадка ${m[2]}`;
+  }
   if (h.kind === "pad" && id.startsWith("k")) return `корпус, площадка ${id.slice(id.indexOf(":") + 1)}`;
   if (h.kind === "pad") {
     const m = id.match(/^p(?:(\d+):)?(.*)$/)!;
@@ -415,9 +597,36 @@ export function padsAlong(aId: string, bId: string): string[] {
     if (h.boardId !== a.boardId) return false;
     const u = t(h);
     if (u < -1e-9 || u > 1 + 1e-9) return false;
-    // Расстояние от центра площадки до линии дорожки меньше радиуса площадки (0,36 шага)
+    // Расстояние от центра площадки до линии дорожки меньше радиуса площадки (0,36 шага);
+    // прямоугольная SMD-площадка — если линия проходит через её прямоугольник
+    if (h.w !== undefined && h.d !== undefined) return segmentHitsRect(a, b, h);
     const cross = Math.abs((h.x - a.x) * dz - (h.z - a.z) * dx) / Math.sqrt(len2);
     return cross < 0.36;
   });
   return on.sort((p, q) => t(p) - t(q)).map((h) => h.id);
+}
+
+
+/** Проходит ли отрезок a–b через прямоугольную площадку r (x, z — центр; w, d — размер). */
+function segmentHitsRect(a: Hole, b: Hole, r: Hole): boolean {
+  const hw = r.w! / 2, hd = r.d! / 2;
+  // Отсечение отрезка прямоугольником (Лианг — Барски)
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dz = b.z - a.z;
+  for (const [p, q] of [[-dx, a.x - (r.x - hw)], [dx, r.x + hw - a.x], [-dz, a.z - (r.z - hd)], [dz, r.z + hd - a.z]]) {
+    if (Math.abs(p) < 1e-12) {
+      if (q < 0) return false;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) t0 = Math.max(t0, t);
+    else t1 = Math.min(t1, t);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+/** Дорожка на плате под SMD (или на поле корпуса под SMD) — тонкая, 0,3 мм. */
+export function fineTrace(aId: string): boolean {
+  return isSmdBoard(boardById(HOLE_BY_ID.get(aId)?.boardId ?? ""));
 }

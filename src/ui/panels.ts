@@ -3,7 +3,7 @@
  * Только строки HTML по текущему состоянию; события навешивает app.ts.
  */
 
-import { BOARDS, PACKAGES, HOLE_BY_ID, chipPinName, packageName, parsePackage, pinLayoutText, PCB_SIZES, boardById, boardName, boardSize, describeNode, holeLabel, type BoardSpec, type ChipPinRole, type Hole } from "../model/breadboard";
+import { BOARDS, PACKAGES, HOLE_BY_ID, chipPinName, packageName, parsePackage, pinLayoutText, PCB_SIZES, SMD_BOARD_SIZES, boardById, boardName, boardSize, describeNode, holeLabel, type BoardSpec, type ChipPinRole, type Hole } from "../model/breadboard";
 import { isFlatWire, type Component, type Endpoint, type Scene, type WireShape } from "../model/types";
 import { part, pinLabelOf } from "../parts";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
@@ -17,7 +17,7 @@ export interface PanelHost {
   readonly sim: Simulation;
   /** Выбранная (Shift+щелчком) деталь, провод или дорожка. */
   readonly selected?: string;
-  readonly defaults: { wireColor: string; wireShape: WireShape; pcbSize: string };
+  readonly defaults: { wireColor: string; wireShape: WireShape; pcbSize: string; smdSize: string };
   /** Занятые отверстия: id отверстия → обозначение детали. */
   occupied(): Map<string, string>;
 }
@@ -181,7 +181,12 @@ export function boardToolPanel(h: PanelHost, kind: BoardSpec["kind"]): [string, 
       ? `<div class="eyebrow">новая плата</div><h2>Макетка</h2>
     <p>400 точек: 30 столбцов по 5 соединённых отверстий и по две шины питания сверху и снизу.</p>
     <p class="sub">Нажмите на свободное место на столе. Макетки между собой не соединены — как настоящие: соединяйте проводом.</p>`
-      : `<div class="eyebrow">новая плата</div><h2>Печатная плата</h2>
+      : kind === "smd"
+        ? `<div class="eyebrow">новая плата</div><h2>Плата под SMD</h2>
+    ${selectField("smdSize", "Размер", SMD_BOARD_SIZES.map(([c, r]) => [`${c}x${r}`, `${Math.round(c * 2.54)} × ${Math.round(r * 2.54)} мм`]), h.defaults.smdSize)}
+    <p>Сетки нет: SMD-деталь ставится куда угодно, под ней появляются площадки её корпуса — SOT-23 (шаг 0,95 мм), SOIC (1,27 мм), чип 0805. Соединяйте их тонкими дорожками (T), 0,3 мм.</p>
+    <p class="sub">Вдоль ближнего края — площадки J для проводов: питание, приборы, другие платы. Микросхема в DIP здесь встаёт в корпусе SOIC (SO-n) — выводы у них нумеруются одинаково; транзисторы — SMD-пары: BC847, 2N7002, BSS84.</p>`
+        : `<div class="eyebrow">новая плата</div><h2>Печатная плата</h2>
     ${selectField("pcbSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), h.defaults.pcbSize)}
     <p class="sub">Нажмите на свободное место на столе. Площадки ни с чем не соединены — соединяйте медными дорожками (T).</p>`;
   return [`bt:${kind}`, html];
@@ -237,7 +242,9 @@ export function boardSection(b: BoardSpec): string {
   const size = boardSize(b);
   const mmSize = `${Math.round(size.width * 2.54)} × ${Math.round(size.depth * 2.54)} мм`;
   const sizeRow =
-    b.kind === "pcb"
+    b.kind === "smd"
+      ? `<div class="kv"><span>Размер</span><span>${mmSize}, посадочных мест ${b.seats?.length ?? 0}</span></div><p class="sub">Детали ставьте куда угодно в пунктирной рамке — под ними появятся площадки корпуса. Соединяйте тонкими дорожками (T); провода — к площадкам J у края. Деталь тащится вместе со своими площадками и дорожками, R — повернуть.</p>`
+      : b.kind === "pcb"
       ? selectField("boardSize", "Размер", PCB_SIZES.map(([c, r]) => [`${c}x${r}`, `${c} × ${r} площадок (${Math.round((c + 3) * 2.54)} × ${Math.round((r + 3) * 2.54)} мм)`]), `${b.cols}x${b.rows}`)
       : `<div class="kv"><span>Размер</span><span>400 точек, ${mmSize}</span></div>`;
   return `<div class="board-section">
@@ -269,6 +276,8 @@ function chipSection(b: BoardSpec): string {
     <div class="eyebrow">корпус микросхемы</div>
     <h3>${b.label ? esc(b.label) : "Своя микросхема"}, ${packageName(b.package, n)}</h3>
     ${b.fixed ? "" : selectField("chipPkg", "Корпус", PACKAGES.map((k): [string, string] => [k, `${k} — ${2 * parsePackage(k).pins} клеток места`]), packageName(b.package, n))}
+    ${selectField("chipSmd", "Поле", [["grid", "сетка площадок 2,54 мм — выводные детали"], ["smd", "под SMD — SOT-23, SOIC, 0805"]], b.smd ? "smd" : "grid")}
+    ${b.smd ? `<p class="sub">Поле под SMD: деталь ставится куда угодно, под ней появляются площадки её корпуса; соединяйте тонкими дорожками (T). Транзисторы — SMD-пары (BC847, 2N7002, BSS84), микросхемы — в SOIC или SOT-23, резисторы — 0805. Поле меняется, пока на нём пусто.</p>` : ""}
     ${b.fixed ? "" : `<div class="field"><label for="f-chipLabel">Название</label><input id="f-chipLabel" class="btn" type="text" maxlength="24" data-field="chipLabel" placeholder="Например, мой NAND" value="${esc(b.label ?? "")}" /></div>`}
     <p class="sub">Детали ставьте на площадки корпуса и соединяйте дорожками (T) или проводами. ${pinLayoutText(b.package, n)[0].toUpperCase()}${pinLayoutText(b.package, n).slice(1)}; место выводов не меняется${b.fixed ? ", назначение задано заданием" : ", только для чего они"}. Питание и приборы — на столе, подключайте их к выводам.</p>
     <div class="eyebrow">выводы: назначение и имя</div><div class="pinrows">${rows}</div>

@@ -11,7 +11,14 @@ import {
   holeAt,
   holeLabel,
   holesOnNode,
+  isSmdBoard,
   newChipBoard,
+  PCB_HEIGHT,
+  SEAT_SNAP,
+  footprintPads,
+  seatHole,
+  seatOf,
+  seatProblem,
   nextBoardId,
   packageName,
   parsePackage,
@@ -21,10 +28,14 @@ import {
   type ChipPackage,
   type ChipPinRole,
   type Hole,
+  type Seat,
 } from "./model/breadboard";
 import {
   isFlatWire,
   boardConflicts,
+  footprintOf,
+  padNumbers,
+  smdOnly,
   sameEndpoint,
   sceneBoards,
   type Component,
@@ -38,6 +49,7 @@ import {
 import { formatSI } from "./sim/resistorCodes";
 import { Simulation, heatThreshold, pinNode } from "./sim/simulation";
 import { NO_TOLERANCE, type Tolerance } from "./sim/tolerance";
+import { isSeated, smdView } from "./view/smd";
 import { MAX_WIRE_LAYERS, buildComponentView, buildTraceView, buildWireView, wireLifts, type ComponentView, type WireView } from "./view/builders";
 import { PARTS, dropUnknownParts, part, pinLabelOf, pinsOf } from "./parts";
 import type { World } from "./view/world";
@@ -88,6 +100,8 @@ interface Hover {
   traceId?: string;
   /** Плата под курсором (если под ним нет детали, провода или дорожки). */
   boardId?: string;
+  /** При установке детали: плата под курсором и точка на ней (для посадочных мест SMD). */
+  onBoard?: { boardId: string; point: THREE.Vector3 };
   table?: THREE.Vector3;
   overBoard: boolean;
 }
@@ -122,6 +136,8 @@ export class App {
   private drag?: { id: string; offset: THREE.Vector3 };
   /** Перенос детали по плате: за какое отверстие взяли и где выводы были в начале. */
   private partDrag?: { id: string; grab: Hole; from: string[]; moved: boolean };
+  /** Перенос SMD-детали по её плате: посадочное место едет вместе с ней. */
+  private seatDrag?: { id: string; boardId: string; offset: THREE.Vector3; moved: boolean };
   /** Перенос платы: смещение от курсора до центра платы. */
   private boardDrag?: { id: string; offset: THREE.Vector3; moved: boolean };
   private boardFrame = 0;
@@ -147,6 +163,7 @@ export class App {
   defaults = {
     /** Размер новой печатной платы: столбцы × ряды. */
     pcbSize: "24x14",
+    smdSize: "24x15",
     /** "auto" — красный к плюсу, чёрный к минусу, остальные по кругу; иначе цвет из палитры. */
     wireColor: "auto",
     /** Какой провод брать: прямую перемычку (если оба конца на одной плате) или гибкий дугой. */
@@ -375,6 +392,7 @@ export class App {
   private newBoard(kind: BoardSpec["kind"], at: THREE.Vector3): BoardSpec {
     const b: BoardSpec = { id: nextBoardId(kind, this.scene.boards ?? []), kind, x: Math.round(at.x), z: Math.round(at.z) };
     if (kind === "pcb") [b.cols, b.rows] = this.defaults.pcbSize.split("x").map(Number);
+    if (kind === "smd") [b.cols, b.rows] = this.defaults.smdSize.split("x").map(Number);
     return b;
   }
 
@@ -841,10 +859,31 @@ export class App {
   }
 
   /** Сменить корпус («DIP-14», «SOT-23-5»): выводы сохраняют номера (и провода на них), поле растёт вправо. */
+  /** Поле корпуса: сетка площадок или под SMD. Менять можно, пока на поле ничего нет. */
+  setCaseSmd(id: string, smd: boolean): boolean {
+    const b = boardById(id);
+    if (!b || b.kind !== "chip" || !!b.smd === smd) return false;
+    const next: BoardSpec = { ...b, smd, seats: smd ? [] : undefined };
+    const boards = (this.scene.boards ?? []).map((x) => (x.id === id ? next : x));
+    const conflicts = boardConflicts(this.scene, boards);
+    if (conflicts.length || b.seats?.length) {
+      this.refuse("Поле не пустое", conflicts.length ? conflicts : (b.seats ?? []).map((s) => s.id), "Уберите их с поля корпуса — потом меняйте поле.");
+      return false;
+    }
+    this.scene.boards = boards;
+    this.boardsChanged();
+    this.refreshKit();
+    return true;
+  }
+
   resizeChip(id: string, pkg: string): boolean {
     const b = boardById(id);
     const { package: kind, pins } = parsePackage(pkg);
     if (!b || b.kind !== "chip" || b.fixed || (b.pins === pins && (b.package ?? "DIP") === kind)) return false;
+    if (b.seats?.length) {
+      this.refuse("Не поменять корпус", b.seats.map((s) => s.id), "На поле стоят SMD-детали — уберите их, потом меняйте корпус.");
+      return false;
+    }
     const r = boardRect(b);
     const grown: BoardSpec = {
       ...b,
@@ -1184,8 +1223,12 @@ export class App {
   clearTable(): void {
     const level = this.careerLevel();
     const lesson = this.careerLesson();
-    if (level) this.replaceScene(levelScene(level));
-    else if (lesson) this.replaceScene(lesson.start());
+    if (level) {
+      // Поле корпуса (сетка или под SMD) остаётся, каким его выбрали
+      const fresh = levelScene(level);
+      if (caseOf(this.scene)?.smd) fresh.boards = fresh.boards!.map((b) => (b.kind === "chip" ? { ...b, smd: true, seats: [] } : b));
+      this.replaceScene(fresh);
+    } else if (lesson) this.replaceScene(lesson.start());
     else if (this.scene.career?.workshop) this.replaceScene(workshopScene());
     else this.replaceScene({ components: [], wires: [], boards: [] });
   }
@@ -1419,6 +1462,7 @@ export class App {
    */
   private rotateOnBoard(c: Component): void {
     if (c.placement.mode !== "board") return;
+    if (isSeated(c)) return this.rotateSeat(c);
     const holes = c.placement.holes.map((id) => HOLE_BY_ID.get(id)!);
     const [h0] = holes;
     const next = holes.map((h) => {
@@ -1434,6 +1478,40 @@ export class App {
     this.changed();
   }
 
+  /** Повернуть SMD-деталь на четверть оборота вокруг центра её посадочного места. */
+  private rotateSeat(c: Component): void {
+    const s = seatOf((c.placement as { holes: string[] }).holes[0]);
+    const seat = s && (this.scene.boards ?? []).find((b) => b.id === s.board.id)?.seats?.find((x) => x.id === c.id);
+    if (!s || !seat) return;
+    const next = { ...seat, rot: (seat.rot + 1) % 4 };
+    const problem = seatProblem(s.board, next);
+    if (problem) return this.setHint(`Не повернуть: ${problem}.`);
+    seat.rot = next.rot;
+    this.boardsChanged();
+  }
+
+  /**
+   * Поставить SMD-деталь инструмента tool на плату под SMD: под ней появляется посадочное место
+   * её корпуса (центр — в точке point, по сетке 0,635 мм; поворот — R).
+   */
+  private placeSeated(tool: PlaceTool, board: BoardSpec, point: THREE.Vector3): void {
+    const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
+    const fp = footprintOf(sample);
+    if (!fp) return this.setHint(noSmdHint(sample));
+    const seat: Seat = { id: "?", fp, x: snapSeat(point.x - board.x), z: snapSeat(point.z - board.z), rot: this.quarterTurns() };
+    const problem = seatProblem(board, seat);
+    if (problem) return this.setHint(`Здесь не встанет: ${problem}. R — повернуть.`);
+    const c = this.newComponent(tool, { mode: "board", holes: [] });
+    placeTools().get(tool)?.def.adjust?.(c, this.scene);
+    seat.id = c.id;
+    const b = (this.scene.boards ?? []).find((x) => x.id === board.id)!;
+    b.seats = [...(b.seats ?? []), seat];
+    c.placement = { mode: "board", holes: padNumbers(c, footprintPads(fp).length).map((n) => seatHole(b, c.id, n)) };
+    this.scene.components.push(c);
+    this.clearGhost();
+    this.boardsChanged();
+  }
+
   /**
    * Перевернуть полярную деталь: на плате выводы меняются отверстиями,
    * на столе провода перецепляются на другой вывод.
@@ -1441,6 +1519,7 @@ export class App {
   flip(id?: string): void {
     const c = id ? this.component(id) : undefined;
     if (!c || part(c).noFlip) return;
+    if (isSeated(c)) return this.setHint("SMD-деталь не перевернуть: выводы корпуса на своих местах. Повернуть — R.");
     if (c.placement.mode === "board") {
       // Для транзистора: К-Б-Э → Э-Б-К
       c.placement.holes = [...c.placement.holes].reverse();
@@ -1597,6 +1676,7 @@ export class App {
       h.hole = this.world.pickHole(ndc);
       if (!h.overBoard) h.table = this.world.pickTable(ndc);
     }
+    if (this.isPlaceTool(this.tool) && h.overBoard) h.onBoard = this.world.pickBoard(ndc);
     return h;
   }
 
@@ -1628,6 +1708,24 @@ export class App {
   }
 
   private onMove(e: PointerEvent): void {
+    if (this.seatDrag) {
+      const d = this.seatDrag;
+      const hit = this.world.pickBoard(this.world.ndcFromEvent(e));
+      const b = (this.scene.boards ?? []).find((x) => x.id === d.boardId);
+      const seat = b?.seats?.find((x) => x.id === d.id);
+      if (!hit || !b || !seat || hit.boardId !== b.id) return;
+      const x = snapSeat(hit.point.x + d.offset.x - b.x);
+      const z = snapSeat(hit.point.z + d.offset.z - b.z);
+      if (x === seat.x && z === seat.z) return;
+      // На занятое место деталь не едет: остаётся на последнем свободном
+      if (seatProblem(b, { ...seat, x, z })) return;
+      seat.x = x;
+      seat.z = z;
+      d.moved = true;
+      applyBoards(this.scene.boards ?? []);
+      this.scheduleRebuild(true);
+      return;
+    }
     if (this.partDrag) {
       const d = this.partDrag;
       const target = this.world.pickHole(this.world.ndcFromEvent(e));
@@ -1676,7 +1774,7 @@ export class App {
       (this.tool === "trace" && this.hover.hole?.board === "pcb") ||
       (this.tool === "wire" && (this.hover.hole || this.hover.pin)) ||
       (this.isPlaceTool(this.tool) && (this.hover.hole || this.hover.table)) ||
-      ((this.tool === "bb" || this.tool === "pcb") && this.hover.table) ||
+      (BOARD_TOOLS[this.tool] && this.hover.table) ||
       (this.tool === "delete" && this.hover.boardId);
     // Выбранную плату можно тащить
     const grab = this.tool === "select" && !interactive && this.hover.boardId !== undefined && this.hover.boardId === this.selectedBoard;
@@ -1701,6 +1799,16 @@ export class App {
       const p = this.world.pickTable(this.world.ndcFromEvent(e));
       if (p) {
         this.drag = { id: c.id, offset: new THREE.Vector3(c.placement.x - p.x, 0, c.placement.z - p.z) };
+        this.world.controls.enabled = false;
+      }
+      return;
+    }
+    // SMD-деталь тащим по плате вместе с её посадочным местом
+    if (c && isSeated(c)) {
+      const s = seatOf((c.placement as { holes: string[] }).holes[0])!;
+      const hit = this.world.pickBoard(this.world.ndcFromEvent(e));
+      if (hit) {
+        this.seatDrag = { id: c.id, boardId: s.board.id, offset: new THREE.Vector3(s.board.x + s.seat.x - hit.point.x, 0, s.board.z + s.seat.z - hit.point.z), moved: false };
         this.world.controls.enabled = false;
       }
       return;
@@ -1754,6 +1862,21 @@ export class App {
     }
     const moved = this.down ? Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) : 99;
     const wasDrag = this.drag;
+    if (this.seatDrag) {
+      const d = this.seatDrag;
+      this.seatDrag = undefined;
+      this.world.controls.enabled = true;
+      if (d.moved) {
+        cancelAnimationFrame(this.boardFrame);
+        this.boardFrame = 0;
+        if (this.selected !== d.id) this.picked = d.id;
+        this.boardsChanged();
+        return;
+      }
+      if (moved > 5 || e.button !== 0) return;
+      this.hover = this.computeHover(e);
+      return this.click(d.id);
+    }
     if (this.partDrag) {
       const d = this.partDrag;
       this.partDrag = undefined;
@@ -1838,7 +1961,8 @@ export class App {
         return this.clickTrace();
       case "bb":
       case "pcb":
-        return this.clickBoard(this.tool === "bb" ? "breadboard" : "pcb");
+      case "smdb":
+        return this.clickBoard(BOARD_TOOLS[this.tool]!);
       default:
         return this.clickPlace(this.tool);
     }
@@ -2000,6 +2124,10 @@ export class App {
     const kit = tool.startsWith("kit:") ? kitTools(this.scene).find((k) => k.id === tool) : undefined;
     if (kit && kit.left <= 0) return this.setHint("Эти детали из набора уже все стоят. Уберите одну, чтобы поставить в другое место, или перетащите.");
     const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
+    // Плата под SMD: деталь встаёт куда угодно, площадки её корпуса появляются под ней
+    const smdBoard = h.onBoard ? boardById(h.onBoard.boardId) : undefined;
+    if (smdBoard && isSmdBoard(smdBoard) && !this.pendingHole) return this.placeSeated(tool, smdBoard, h.onBoard!.point);
+    if (smdOnly(sample) && (h.hole || h.overBoard)) return this.setHint(smdOnlyHint(sample));
     const boardOk = part(sample).onBoard(sample);
     if (!boardOk && (h.hole || h.overBoard)) return this.setHint(placeTools().get(tool)!.def.boardRefusal ?? "");
 
@@ -2059,6 +2187,18 @@ export class App {
 
   remove(id: string): void {
     const c = this.component(id);
+    if (c && isSeated(c)) {
+      // Площадки уходят вместе с деталью — и дорожки с проводами, которые к ним шли
+      const pads = new Set((c.placement as { holes: string[] }).holes);
+      const s = seatOf([...pads][0])!;
+      for (const h of HOLES_OF_SEAT(s.board, id)) pads.add(h);
+      this.scene.traces = (this.scene.traces ?? []).filter((t) => !pads.has(t.a) && !pads.has(t.b));
+      this.scene.wires = this.scene.wires.filter((w) => ![w.a, w.b].some((e) => "hole" in e && pads.has(e.hole)));
+      const b = (this.scene.boards ?? []).find((x) => x.id === s.board.id)!;
+      b.seats = (b.seats ?? []).filter((x) => x.id !== id);
+      applyBoards(this.scene.boards ?? []);
+      this.world.rebuildBoards();
+    }
     if (c) {
       this.scene.components = this.scene.components.filter((x) => x.id !== id);
       this.scene.wires = this.scene.wires.filter((w) => !["a", "b"].some((k) => {
@@ -2134,8 +2274,8 @@ export class App {
     if (this.tool === "trace" && this.pendingPad && h.hole?.boardId === this.pendingPad.boardId && h.hole.id !== this.pendingPad.id) {
       return this.showGhost(buildTraceView("ghost", this.pendingPad, h.hole).mesh);
     }
-    if ((this.tool === "bb" || this.tool === "pcb") && h.table) {
-      const b = this.newBoard(this.tool === "bb" ? "breadboard" : "pcb", h.table);
+    if (BOARD_TOOLS[this.tool] && h.table) {
+      const b = this.newBoard(BOARD_TOOLS[this.tool]!, h.table);
       if (this.boardProblem(b)) return this.clearGhost();
       const size = boardSize(b);
       const box = new THREE.Mesh(new THREE.BoxGeometry(size.width, size.height, size.depth));
@@ -2146,6 +2286,15 @@ export class App {
     const tool = this.tool;
     const sample = this.newComponent(tool, { mode: "free", x: 0, z: 0, rot: 0 });
     const n = pinsOf(sample);
+    const smdBoard = h.onBoard ? boardById(h.onBoard.boardId) : undefined;
+    if (smdBoard && isSmdBoard(smdBoard) && !this.pendingHole) {
+      const fp = footprintOf(sample);
+      if (!fp) return this.clearGhost();
+      const seat: Seat = { id: "?", fp, x: snapSeat(h.onBoard!.point.x - smdBoard.x), z: snapSeat(h.onBoard!.point.z - smdBoard.z), rot: this.quarterTurns() };
+      if (seatProblem(smdBoard, seat)) return this.clearGhost();
+      return this.showGhost(smdView(sample, { x: smdBoard.x + seat.x, z: smdBoard.z + seat.z, y: PCB_HEIGHT, angle: (seat.rot * Math.PI) / 2 }).group);
+    }
+    if (smdOnly(sample) && (h.hole || h.overBoard)) return this.clearGhost();
     if (!part(sample).onBoard(sample) && (h.hole || h.overBoard)) return this.clearGhost();
     if (n === 1 && h.hole) return this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes: [h.hole.id] })).group);
     if (n >= 4 && h.hole) {
@@ -2196,10 +2345,19 @@ export class App {
     if (t === "wire") s = this.pendingEnd ? `Второй конец: <b>отверстие</b> или <b>вывод</b> детали. Перемычка не по прямой — ${BEND_NAMES[this.wireBend]}, R — другая форма. Esc — отмена.` : "Первый конец провода: <b>отверстие</b> или <b>вывод</b> детали на столе.";
     else if (t === "bb") s = "Нажмите на свободное место на столе — туда ляжет макетка на 400 точек.";
     else if (t === "pcb") s = "Нажмите на свободное место на столе — туда ляжет печатная плата. Размер — в панели справа.";
+    else if (t === "smdb") s = "Нажмите на свободное место на столе — туда ляжет плата под SMD. Размер — в панели справа.";
     else if (t === "trace") s = this.pendingPad
       ? `Дорожка от <b>${holeLabel(this.pendingPad.id)}</b>: следующая площадка. Щелчок по той же или Esc — закончить.`
       : "Нажмите на <b>площадку</b> печатной платы, затем на следующую — между ними ляжет медная дорожка.";
-    else if (this.isPlaceTool(t)) s = placeTools().get(t)!.def.hint(this.settingsOf(t), this.pendingHole ? holeLabel(this.pendingHole.id) : undefined);
+    else if (this.isPlaceTool(t)) {
+      s = placeTools().get(t)!.def.hint(this.settingsOf(t), this.pendingHole ? holeLabel(this.pendingHole.id) : undefined);
+      // SMD-деталь — на плату под SMD: там площадки появляются под ней, где её ни поставь
+      const sample = this.newComponent(t, { mode: "free", x: 0, z: 0, rot: 0 });
+      const fp = footprintOf(sample);
+      const smdText = `На плате под SMD — куда угодно: под деталью появятся площадки корпуса ${fp}. R — повернуть.`;
+      if (fp && smdOnly(sample)) s = `${smdText} Можно и на стол — провода паяются к выводам.`;
+      else if (fp && (this.scene.boards ?? []).some(isSmdBoard)) s += ` ${smdText}`;
+    }
     this.showHint(s);
   }
 
@@ -2223,8 +2381,8 @@ export class App {
       [key, html] = holePanel(this, this.selectedHole);
     } else if (this.selectedBoard && boardById(this.selectedBoard) && this.tool === "select") {
       [key, html] = boardPanel(boardById(this.selectedBoard)!);
-    } else if (this.tool === "bb" || this.tool === "pcb") {
-      [key, html] = boardToolPanel(this, this.tool === "bb" ? "breadboard" : "pcb");
+    } else if (BOARD_TOOLS[this.tool]) {
+      [key, html] = boardToolPanel(this, BOARD_TOOLS[this.tool]!);
     } else if (this.isPlaceTool(this.tool)) {
       [key, html] = this.newPartPanel(this.tool);
     } else if (this.tool === "wire") {
@@ -2392,10 +2550,22 @@ export class App {
   }
 
   private applyField(field: string, value: string): void {
+    if (field === "smdSize") {
+      this.defaults.smdSize = value;
+      this.inspectorHtml = "";
+      return;
+    }
     if (field === "pcbSize") {
       this.defaults.pcbSize = value;
       this.inspectorHtml = "";
       this.updateGhost();
+      return;
+    }
+    if (field === "chipSmd") {
+      const id = this.selectedHole?.boardId ?? this.selectedBoard;
+      if (id) this.setCaseSmd(id, value === "smd");
+      this.inspectorHtml = "";
+      this.renderInspector();
       return;
     }
     if (field === "chipPkg" || field.startsWith("chipRole:") || field.startsWith("chipName:") || field === "chipLabel") {
@@ -2449,3 +2619,33 @@ function turn(dx: number, dz: number, turns: number): [number, number] {
 /** Формы перемычки по кругу (R) и их названия для подсказки. */
 const NEXT_BEND: Record<WireBend, WireBend> = { x: "z", z: "none", none: "x" };
 const BEND_NAMES: Record<WireBend, string> = { x: "буквой Г, сначала вдоль ряда", z: "буквой Г, сначала вдоль столбца", none: "прямо наискосок" };
+
+/** Инструменты плат: какую плату кладут. */
+const BOARD_TOOLS: Partial<Record<string, BoardSpec["kind"]>> = { bb: "breadboard", pcb: "pcb", smdb: "smd" };
+
+/** Положение посадочного места — по сетке 0,635 мм. */
+function snapSeat(v: number): number {
+  return Math.round(v / SEAT_SNAP) * SEAT_SNAP;
+}
+
+/** Id всех площадок посадочного места (и тех, к которым деталь не подключена). */
+function HOLES_OF_SEAT(b: BoardSpec, seat: string): string[] {
+  const s = b.seats?.find((x) => x.id === seat);
+  return s ? footprintPads(s.fp).map((_, i) => seatHole(b, seat, i + 1)) : [];
+}
+
+/** Почему деталь с ножками не встаёт на плату под SMD. */
+function noSmdHint(c: Component): string {
+  const kind = c.type === "mosfet" || c.type === "transistor" ? c.kind : "";
+  const twin = ({ "2N7000": "2N7002", BS250: "BSS84", BC547: "BC847" } as Record<string, string>)[kind];
+  if (twin) return `${kind} — в корпусе с ножками (TO-92), на плату под SMD не встаёт. Его SMD-пара в корпусе SOT-23 — <b>${twin}</b>: выберите её в панели детали.`;
+  if (c.type === "resistor") return "Выводной резистор на плату под SMD не встаёт. Возьмите SMD-резистор (Пассивные → SMD).";
+  if (c.type === "capacitor") return c.variant === "ceramic" ? "Выводной конденсатор на плату под SMD не встаёт. Выберите в панели корпус «SMD 0805»." : "Электролит с ножками на плату под SMD не встаёт: ставьте его на макетку или печатную плату и подключайте проводом.";
+  return "У этой детали ножки — на плату под SMD она не встаёт. Ставьте её на макетку или печатную плату, а к плате под SMD подключайте проводом (площадки J вдоль края).";
+}
+
+/** Почему SMD-деталь не встаёт в макетку и на площадки с отверстиями. */
+function smdOnlyHint(c: Component): string {
+  const name = c.type === "resistor" ? "SMD-резистора" : c.type === "capacitor" ? "SMD-конденсатора" : "корпуса SOT-23";
+  return `У ${name} нет ножек — в отверстия он не встаёт. Ставьте на плату под SMD (Платы → «Плата под SMD») или на стол.`;
+}

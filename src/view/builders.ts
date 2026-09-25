@@ -1,8 +1,9 @@
 import * as THREE from "three";
-import { HOLE_BY_ID, type Hole } from "../model/breadboard";
-import { TRACE_WIDTH_MM, jumperPoints, type Component, type WireBend } from "../model/types";
+import { HOLE_BY_ID, fineTrace, type Hole } from "../model/breadboard";
+import { FINE_TRACE_WIDTH_MM, TRACE_WIDTH_MM, footprintOf, smdOnly, jumperPoints, type Component, type WireBend } from "../model/types";
 import { part } from "../parts";
 import { Y, leadMaterial, mm, type ComponentView } from "./kit";
+import { isSeated, smdView } from "./smd";
 
 export { mm, type ComponentView, type Visual } from "./kit";
 
@@ -12,6 +13,8 @@ const solderMaterial = new THREE.MeshStandardMaterial({ color: 0xd4d6d8, metalne
 const solderGeometry = new THREE.ConeGeometry(mm(1.1), mm(1.2), 16);
 
 export function buildComponentView(c: Component): ComponentView {
+  // На посадочном месте платы под SMD — корпус SMD, припой на площадках не нужен
+  if (isSeated(c) || (c.placement.mode === "free" && smdOnly(c) && footprintOf(c) && !(c.type === "resistor"))) return smdView(c);
   const view = part(c).view(c);
   if (c.placement.mode === "board") {
     for (const id of c.placement.holes) {
@@ -245,7 +248,8 @@ export function buildTraceView(id: string, a: Hole, b: Hole) {
   const pa = new THREE.Vector3(a.x, y, a.z);
   const pb = new THREE.Vector3(b.x, y, b.z);
   const len = pa.distanceTo(pb);
-  const r = TRACE_WIDTH_MM / 2.54 / 2;
+  const fine = fineTrace(a.id);
+  const r = (fine ? FINE_TRACE_WIDTH_MM : TRACE_WIDTH_MM) / 2.54 / 2;
   // Контур «стадион» вдоль оси X от 0 до len, в плоскости XY
   const shape = new THREE.Shape();
   shape.moveTo(0, -r);
@@ -253,7 +257,7 @@ export function buildTraceView(id: string, a: Hole, b: Hole) {
   shape.absarc(len, 0, r, -Math.PI / 2, Math.PI / 2, false);
   shape.lineTo(0, r);
   shape.absarc(0, 0, r, Math.PI / 2, (Math.PI * 3) / 2, false);
-  for (const x of [0, len]) {
+  for (const x of fine ? [] : [0, len]) {
     const hole = new THREE.Path();
     hole.absarc(x, 0, PAD_HOLE_R, 0, Math.PI * 2, true);
     shape.holes.push(hole);

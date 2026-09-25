@@ -3,8 +3,8 @@
  * решает методом узловых потенциалов с итерациями Ньютона, ведёт время, заряд и нагрев.
  */
 
-import { HOLE_BY_ID } from "../model/breadboard";
-import { FLAT_WIRE_EXTRA, TRACE_OHM_PER_MM, WIRE_OHM_PER_MM, isFlatWire, jumperPoints, type Component, type ComponentState, type Endpoint, type Mosfet, type Scene, type Transistor, type WireBend, type WireShape } from "../model/types";
+import { HOLE_BY_ID, fineTrace } from "../model/breadboard";
+import { FINE_TRACE_OHM_PER_MM, FLAT_WIRE_EXTRA, TRACE_OHM_PER_MM, WIRE_OHM_PER_MM, isFlatWire, jumperPoints, type Component, type ComponentState, type Endpoint, type Mosfet, type Scene, type Transistor, type WireBend, type WireShape } from "../model/types";
 import { resolveChip } from "../chips/registry";
 import { PARTS, part } from "../parts";
 import { mosfetState, type MosfetState } from "../parts/mosfet";
@@ -58,7 +58,7 @@ export function traceResistance(aId: string, bId: string): number {
   const a = HOLE_BY_ID.get(aId)!;
   const b = HOLE_BY_ID.get(bId)!;
   const mmLen = Math.hypot(a.x - b.x, a.z - b.z) * 2.54;
-  return Math.max(1e-4, mmLen * TRACE_OHM_PER_MM);
+  return Math.max(1e-4, mmLen * (fineTrace(aId) ? FINE_TRACE_OHM_PER_MM : TRACE_OHM_PER_MM));
 }
 
 export function lampResistance(c: Extract<Component, { type: "lamp" }>, tol: Tolerance = NO_TOLERANCE): number {

@@ -4,13 +4,13 @@
  */
 
 import { BOARDS, applyBoards, newChipBoard, type BoardSpec } from "../model/breadboard";
-import { mosfetPin, type Chip, type ChipDef, type Component, type Endpoint, type MosfetRole, type Scene } from "../model/types";
+import { TRANSISTORS, mosfetPin, type Chip, type ChipDef, type Component, type Endpoint, type MosfetRole, type Scene, type TransistorKind } from "../model/types";
 import { packageChip, packageProblems, chipInner } from "../chips/package";
 import { chipsUsed } from "../chips/registry";
 import { countChip, plural } from "../chips/count";
 import { Simulation, heatThreshold, pinNode } from "../sim/simulation";
 import { formatSI } from "../sim/resistorCodes";
-import { FUNC_NAMES, LEVELS, SEQUENTIAL, gateIo, kitLabel, seqNext, seqOuts, seqState, sequenceExpected, truth, type KitItem, type Level, type LogicFunc } from "./levels";
+import { FUNC_NAMES, LEVELS, SEQUENTIAL, SMD_TWIN, gateIo, kitLabel, seqNext, seqOuts, seqState, sequenceExpected, truth, type KitItem, type Level, type LogicFunc } from "./levels";
 import { PIN_ROLES } from "../chips/roles";
 import { MODEL_OFF, REF_ABS_MAX, chipModel, setModelSource, type ChipModel, type ModelPoint } from "../chips/model";
 
@@ -57,7 +57,7 @@ export function recipeScene(level: Level, chipFor: (func: LogicFunc) => ChipDef)
       c = { id: p.id, type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement };
     } else if (p.ohms) c = { id: p.id, type: "resistor", variant: "tht", ohms: p.ohms, smdSize: "0805", placement };
     else if (p.uF) c = { id: p.id, type: "capacitor", variant: "ceramic", uF: p.uF, volts: 50, placement };
-    else if (p.kind === "BC547" || p.kind === "BC557") c = { id: p.id, type: "transistor", kind: p.kind, placement };
+    else if (p.kind && p.kind in TRANSISTORS) c = { id: p.id, type: "transistor", kind: p.kind as TransistorKind, placement };
     else c = { id: p.id, type: "mosfet", kind: p.kind as "2N7000", placement };
     scene.components.push(c);
   }
@@ -113,8 +113,9 @@ export function chipFunc(defId: string): LogicFunc | undefined {
 export function kitIndex(kit: KitItem[], c: Component): number {
   if (c.stock) return -1;
   return kit.findIndex((k) => {
-    if (k.part === "mosfet") return c.type === "mosfet" && c.kind === k.kind;
-    if (k.part === "bjt") return c.type === "transistor" && c.kind === k.kind;
+    // SMD-пара (2N7002 вместо 2N7000…) — та же строка набора: на корпусе под SMD выдаётся она
+    if (k.part === "mosfet") return c.type === "mosfet" && (c.kind === k.kind || c.kind === SMD_TWIN[k.kind]);
+    if (k.part === "bjt") return c.type === "transistor" && (c.kind === k.kind || c.kind === SMD_TWIN[k.kind]);
     if (k.part === "resistor") return c.type === "resistor" && c.ohms === k.ohms;
     if (k.part === "other") return c.type === k.type && Object.entries(k.match ?? k.preset).every(([key, v]) => (c as unknown as Record<string, unknown>)[key] === v || (key === "size" && v === "5mm" && !(c as { size?: string }).size));
     return c.type === "chip" && chipFunc(c.def) === k.func;

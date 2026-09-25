@@ -2,7 +2,8 @@
 
 import { CHECK_VOLTS, kitUsed, rowText, type CheckResult, type Metrics } from "../career/build";
 import { formatOhms, formatSI } from "../sim/resistorCodes";
-import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level } from "../career/levels";
+import { FUNC_NAMES, LEVELS, gateIo, kitLabel, smdKitLabel, type Level } from "../career/levels";
+import { caseOf } from "../chips/package";
 import { HINT_AFTER, bestOf, failsOf, hintsOf, isDone } from "../career/session";
 import type { Lesson } from "../career/lessons";
 import { PIN_ROLES } from "../chips/roles";
@@ -103,7 +104,8 @@ export class CareerPanel {
 
   private levelHtml(level: Level): string {
     const used = kitUsed(level.kit, this.host.scene);
-    const kit = level.kit.map((k, i) => `<li>${esc(kitLabel(k))}: поставлено ${used[i]} из ${k.count}</li>`).join("");
+    const smd = !!caseOf(this.host.scene)?.smd;
+    const kit = level.kit.map((k, i) => `<li>${esc((smd ? smdKitLabel : kitLabel)(k))}: поставлено ${used[i]} из ${k.count}</li>`).join("");
     const pins = level.roles
       .map((r, i) => `<li><span><b>${i + 1}</b> ${esc(level.names[i] || PIN_ROLES[r].name)}</span><span>${PIN_ROLES[r].label}</span></li>`)
       .join("");
@@ -142,6 +144,7 @@ export class CareerPanel {
       <div class="eyebrow">набор</div><ul class="kitlist">${kit}</ul>
       <div class="eyebrow">выводы корпуса</div><ul class="list">${pins}</ul>
       <p class="sub">Детали — из группы «Набор» слева, ставьте их на площадки корпуса и соединяйте дорожками (T) или проводами. Для своей проверки можно взять питание и приборы — в микросхему они не входят.</p>
+      <p class="sub">${smd ? "Поле корпуса — <b>под SMD</b>: набор выдаёт SMD-пары (2N7002, BSS84, BC847, резисторы 0805), площадки появляются под деталями. Вернуть сетку — нажмите на корпус, «Поле»." : "Можно собрать и на SMD: нажмите на корпус и выберите «Поле: под SMD» — набор выдаст те же детали в SMD-корпусах."}</p>
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
       <button class="btn inline" data-career-act="leave">К карте</button></div>
       ${table}${steps}${verdict}${hints}${!check && bestOf(level.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(level.id))}` : ""}`;

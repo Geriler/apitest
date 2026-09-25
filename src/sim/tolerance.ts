@@ -55,7 +55,7 @@ export const TOLERANCES = {
   mosfetK: 0.2,
   /** Диапазоны по даташитам (группа B у BC547/BC557; порог MOSFET по модулю). */
   beta: [200, 450] as const,
-  vth: { "2N7000": [0.8, 3], BS250: [1, 3.5], IRLZ44N: [1, 2], IRF9540N: [2, 4] } as const,
+  vth: { "2N7000": [0.8, 3], BS250: [1, 3.5], "2N7002": [1, 2.5], BSS84: [0.8, 2], IRLZ44N: [1, 2], IRF9540N: [2, 4] } as const,
 };
 
 export function resistance(c: Extract<Component, { type: "resistor" }>, tol: Tolerance): number {

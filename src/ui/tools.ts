@@ -4,7 +4,7 @@ import type { Component } from "../model/types";
 import { PARTS, type ToolDef } from "../parts";
 
 /** Инструмент: встроенный (выбор, провод, дорожка, платы, удаление) или установка детали (id из PartDef.tools). */
-export type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "delete" | PlaceTool;
+export type Tool = "select" | "wire" | "trace" | "bb" | "pcb" | "smdb" | "delete" | PlaceTool;
 export type PlaceTool = string;
 
 /** Инструменты установки деталей из реестра: id → тип детали и описание инструмента. Список меняется (микросхемы библиотеки). */

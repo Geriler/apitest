@@ -25,33 +25,36 @@ export const capacitor: PartDef<Capacitor> = {
       icon: `<path d="M1 9h11M18 9h11M12 3v12M18 3v12" />`,
       label: "Конденсатор",
       title: "Конденсатор: электролитический или керамический",
-      settings: { variant: "electrolytic" as Capacitor["variant"], electrolyticUF: 1000, ceramicUF: 0.1, electrolyticV: 16, ceramicV: 50 },
+      settings: { variant: "electrolytic" as Capacitor["variant"], smd: false, electrolyticUF: 1000, ceramicUF: 0.1, electrolyticV: 16, ceramicV: 50 },
       name: () => "Конденсатор",
       note: (s) =>
         `<p class="sub">Копит заряд: заряжается через резистор, потом отдаёт энергию. Чем больше ёмкость и сопротивление, тем медленнее (τ = R·C).</p>${s.variant === "electrolytic" ? polarNote("plus") : ""}`,
       editor(s) {
         const el = s.variant === "electrolytic";
         return (
-          selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"]], s.variant) +
+          selectField("capVariant", "Тип", [["electrolytic", "электролитический (полярный)"], ["ceramic", "керамический"], ["smd", "керамический SMD 0805 (на плату под SMD)"]], s.smd && s.variant === "ceramic" ? "smd" : s.variant) +
           capacitanceSelect(s.variant, el ? s.electrolyticUF : s.ceramicUF) +
           voltsSelect(s.variant, el ? s.electrolyticV : s.ceramicV)
         );
       },
       set(s, field, value) {
         const el = s.variant === "electrolytic";
-        if (field === "capVariant") s.variant = value as Capacitor["variant"];
+        if (field === "capVariant") {
+          s.smd = value === "smd";
+          s.variant = value === "smd" ? "ceramic" : (value as Capacitor["variant"]);
+        }
         if (field === "uF") el ? (s.electrolyticUF = Number(value)) : (s.ceramicUF = Number(value));
         if (field === "capV") el ? (s.electrolyticV = Number(value)) : (s.ceramicV = Number(value));
       },
       create(s) {
         const el = s.variant === "electrolytic";
-        return { type: "capacitor", variant: s.variant, uF: el ? s.electrolyticUF : s.ceramicUF, volts: el ? s.electrolyticV : s.ceramicV };
+        return { type: "capacitor", variant: s.variant, uF: el ? s.electrolyticUF : s.ceramicUF, volts: el ? s.electrolyticV : s.ceramicV, ...(!el && s.smd ? { smd: true } : {}) };
       },
       hint: (s, pending) => twoPinHint(pending, s.variant === "electrolytic" ? "plus" : undefined),
     }),
   ],
   polar: (c) => c.variant === "electrolytic",
-  label: (c) => `${formatFarads(c.uF)} ${formatV(capacitorVolts(c))}${c.variant === "electrolytic" ? "" : " керамический"}`,
+  label: (c) => `${formatFarads(c.uF)} ${formatV(capacitorVolts(c))}${c.variant === "electrolytic" ? "" : c.smd ? " керамический 0805" : " керамический"}`,
   value: (c) => `${formatFarads(c.uF)}, ${formatV(capacitorVolts(c))}`,
   symbol: (c) => `<path d="M0 -20V-4M0 4V20M-12 -4H12M-12 4H12"/>${c.variant === "electrolytic" ? `<path d="M9 -13H15M12 -16V-10" class="thin"/>` : ""}`,
   burn: (c) =>
@@ -88,7 +91,9 @@ export const capacitor: PartDef<Capacitor> = {
     } else {
       const code = CERAMICS.find((x) => x.uF === c.uF)?.code ?? "";
       title = `Конденсатор ${formatFarads(c.uF)}`;
-      body = `<p class="sub">Керамический, неполярный, до ${formatV(capacitorVolts(c))}. Код <b>${code}</b>: ${code.slice(0, 2)} × 10${superscript(Number(code[2]))} пФ.</p>`;
+      body = c.smd
+        ? `<p class="sub">Керамический многослойный в корпусе 0805 (2 × 1,25 мм), неполярный, до ${formatV(capacitorVolts(c))}. Маркировки на таких нет — номинал знают по катушке.</p>`
+        : `<p class="sub">Керамический, неполярный, до ${formatV(capacitorVolts(c))}. Код <b>${code}</b>: ${code.slice(0, 2)} × 10${superscript(Number(code[2]))} пФ.</p>`;
     }
     let editor = capacitanceSelect(c.variant, c.uF) + voltsSelect(c.variant, capacitorVolts(c));
     if (Math.abs(sim.voltage(c)) > 0.05) {

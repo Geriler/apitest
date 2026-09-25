@@ -7,7 +7,8 @@ import type { ChipDef, Scene } from "../model/types";
 import { PARTS, type ToolDef } from "../parts";
 import { chipTool } from "../parts/chip";
 import { chipFunc, chipLevel, kitUsed, type Metrics } from "./build";
-import { FUNC_NAMES, LEVELS, kitLabel, levelById, type KitItem, type Level } from "./levels";
+import { FUNC_NAMES, LEVELS, SMD_TWIN, kitLabel, levelById, smdKitLabel, type KitItem, type Level } from "./levels";
+import { caseOf } from "../chips/package";
 import type { Lesson } from "./lessons";
 import { stageById } from "./repairs";
 
@@ -141,7 +142,7 @@ const activeKit = (scene: Scene): KitItem[] | undefined => activeLevel(scene)?.k
 
 /** Приборы и питание — для проверки на столе; в микросхему они не входят. */
 const TEST_TOOLS = new Set(["psu", "battery", "meter", "scope", "switch", "button"]);
-const BUILTIN = new Set(["select", "wire", "trace", "delete", "bb", "pcb"]);
+const BUILTIN = new Set(["select", "wire", "trace", "delete", "bb", "pcb", "smdb"]);
 
 /** Можно ли пользоваться инструментом в этой сцене. */
 export function toolAllowed(scene: Scene, tool: string): boolean {
@@ -166,8 +167,12 @@ export function workshopScene(): Scene {
 }
 
 /** Базовый инструмент детали набора и её фиксированные настройки. */
-function baseTool(k: KitItem): { tool: ToolDef; preset: Record<string, unknown> }[] {
+function baseTool(k: KitItem, smd = false): { tool: ToolDef; preset: Record<string, unknown> }[] {
   const find = (id: string) => Object.values(PARTS).flatMap((p) => p.tools as ToolDef[]).find((t) => t.id === id)!;
+  // Корпус с полем под SMD: те же детали в SMD-корпусах
+  if (smd && (k.part === "mosfet" || k.part === "bjt")) return [{ tool: find(k.part === "mosfet" ? "fet" : "bjt"), preset: { kind: SMD_TWIN[k.kind] ?? k.kind } }];
+  if (smd && k.part === "resistor") return [{ tool: find("smd"), preset: { ohms: k.ohms, smdSize: "0805" } }];
+  if (smd && k.part === "other" && k.type === "capacitor") return [{ tool: find(k.tool), preset: { ...k.preset, smd: true } }];
   if (k.part === "mosfet") return [{ tool: find("fet"), preset: { kind: k.kind } }];
   if (k.part === "bjt") return [{ tool: find("bjt"), preset: { kind: k.kind } }];
   if (k.part === "resistor") return [{ tool: find("tht"), preset: { ohms: k.ohms, watts: 0.25 } }];
@@ -185,23 +190,25 @@ export function kitTools(scene: Scene): { id: string; type: string; def: ToolDef
   const kit = activeKit(scene);
   if (!kit) return [];
   const used = kitUsed(kit, scene);
+  const smd = !!caseOf(scene)?.smd;
+  const name = smd ? smdKitLabel : kitLabel;
   return kit.flatMap((k, row) =>
-    baseTool(k).map(({ tool, preset }, j) => {
+    baseTool(k, smd).map(({ tool, preset }, j) => {
       const left = k.count - used[row];
       const settings = { ...structuredClone(tool.settings ?? {}), ...preset };
       const variant = k.part === "chip" ? chipLevel(tool.id.replace(/^chip:/, ""))?.variant : undefined;
-      const label = k.part === "chip" ? `${tool.label}${variant ? ` (${variant})` : ""}` : kitLabel(k);
+      const label = k.part === "chip" ? `${tool.label}${variant ? ` (${variant})` : ""}` : name(k);
       const def: ToolDef = {
         ...tool,
         id: `kit:${row}:${j}`,
         group: "kit",
         label: `${label} · ${left > 0 ? `осталось ${left}` : "всё поставлено"}`,
-        title: `Из набора: ${kitLabel(k)}, ${k.count} шт.`,
+        title: `Из набора: ${name(k)}, ${k.count} шт.`,
         settings,
         editor: () => "",
         set() {},
         create: () => tool.create(settings),
-        note: (s) => `${tool.note(s)}<p class="sub">Из набора уровня: ${kitLabel(k)} — ${k.count} шт., осталось ${left}. Номинал задан набором.</p>`,
+        note: (s) => `${tool.note(s)}<p class="sub">Из набора уровня: ${name(k)} — ${k.count} шт., осталось ${left}. Номинал задан набором.</p>`,
       };
       const type = k.part === "mosfet" ? "mosfet" : k.part === "bjt" ? "transistor" : k.part === "resistor" ? "resistor" : k.part === "other" ? k.type : "chip";
       return { id: def.id, type, def, row, left };

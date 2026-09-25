@@ -191,6 +191,60 @@ export function pcbTexture(cols: number, rows: number): THREE.CanvasTexture {
 }
 
 /**
+ * Плата под SMD: зелёная маска без сетки (площадки появляются под деталями), вдоль ближнего
+ * края — площадки для проводов J1…Jn с подписями.
+ */
+export function smdBoardTexture(cols: number, rows: number): THREE.CanvasTexture {
+  const spec: BoardSpec = { id: "S1", kind: "smd", x: 0, z: 0, cols, rows };
+  const size = boardSize(spec);
+  const w = size.width * PX;
+  const h = size.depth * PX;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const g = canvas.getContext("2d")!;
+  const X = (x: number) => (x + size.width / 2) * PX;
+  const Z = (z: number) => (z + size.depth / 2) * PX;
+  g.fillStyle = "#1f5c3a";
+  g.fillRect(0, 0, w, h);
+  g.strokeStyle = "#e8ecdf";
+  g.lineWidth = 3;
+  g.strokeRect(6, 6, w - 12, h - 12);
+  // Граница поля деталей
+  g.setLineDash([10, 8]);
+  g.lineWidth = 2;
+  g.strokeRect(PX * 0.5, PX * 0.5, w - PX, h - PX * 2.5);
+  g.setLineDash([]);
+  g.fillStyle = "#e8ecdf";
+  g.textAlign = "right";
+  g.textBaseline = "middle";
+  g.font = `500 ${PX * 0.34}px "IBM Plex Mono", ui-monospace, monospace`;
+  g.fillText("ПЛАТА ПОД SMD · PCB 1,6 мм", w - PX * 0.7, PX * 0.95);
+  g.textAlign = "center";
+  for (const hole of boardHoles(spec)) {
+    const cx = X(hole.x);
+    const cz = Z(hole.z);
+    g.fillStyle = "#c9ccc4";
+    g.beginPath();
+    g.arc(cx, cz, PX * 0.34, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#15191a";
+    g.beginPath();
+    g.arc(cx, cz, PX * 0.14, 0, Math.PI * 2);
+    g.fill();
+    const n = Number(hole.id.replace(/^.*J/, ""));
+    if (n === 1 || n % 5 === 0) {
+      g.fillStyle = "#e8ecdf";
+      g.fillText(`J${n}`, cx, cz - PX * 0.62);
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+/**
  * Корпус своей микросхемы: чёрный пластик, посередине — поле площадок (как кристалл),
  * по краям — площадки выводов с номерами и назначением, ключ у вывода 1, название.
  */
@@ -220,6 +274,8 @@ export function chipTexture(b: BoardSpec): THREE.CanvasTexture {
   g.textBaseline = "middle";
   const n = spec.pins ?? 8;
   for (const hole of boardHoles(spec)) {
+    // Площадки SMD-деталей рисуются медью поверх (они двигаются вместе с деталями)
+    if (hole.seat) continue;
     const cx = X(hole.x);
     const cz = Z(hole.z);
     if (hole.pin) {
@@ -259,7 +315,7 @@ export function chipTexture(b: BoardSpec): THREE.CanvasTexture {
   g.fillStyle = "#c9ccd1";
   g.font = `600 ${PX * 0.42}px "IBM Plex Mono", ui-monospace, monospace`;
   g.textAlign = "left";
-  g.fillText(`${spec.label || "СВОЯ МИКРОСХЕМА"} · ${packageName(spec.package, n)}`, PX * 0.6, PX * 0.55);
+  g.fillText(`${spec.label || "СВОЯ МИКРОСХЕМА"} · ${packageName(spec.package, n)}${spec.smd ? " · ПОЛЕ ПОД SMD" : ""}`, PX * 0.6, PX * 0.55);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;

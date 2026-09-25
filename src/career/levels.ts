@@ -1331,6 +1331,17 @@ export const LEVELS: Level[] = [
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
 
 /** Название детали набора: «BS250», «резистор 10 кОм», «И-НЕ (своя)». */
+/** SMD-пары выводных транзисторов набора: тот же кристалл или близкий по паспорту, в SOT-23. */
+export const SMD_TWIN: Record<string, string> = { "2N7000": "2N7002", BS250: "BSS84", BC547: "BC847" };
+
+/** Строка набора, как она выглядит на корпусе с полем под SMD. */
+export function smdKitLabel(k: KitItem): string {
+  if (k.part === "mosfet" || k.part === "bjt") return SMD_TWIN[k.kind] ?? k.kind;
+  if (k.part === "resistor") return `${kitLabel(k)}, 0805`;
+  if (k.part === "other" && k.type === "capacitor") return `${k.label.replace(/\)$/, "")}, 0805)`;
+  return kitLabel(k);
+}
+
 export function kitLabel(k: KitItem): string {
   if (k.part === "mosfet" || k.part === "bjt") return k.kind;
   if (k.part === "resistor") return `резистор ${k.ohms >= 1000 ? `${String(k.ohms / 1000).replace(".", ",")} кОм` : `${k.ohms} Ом`}`;

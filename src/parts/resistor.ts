@@ -42,12 +42,12 @@ export const resistor: PartDef<Resistor> = {
       create: (s) => ({ type: "resistor", variant: "tht", ohms: s.ohms, smdSize: s.smdSize, watts: s.watts }),
       hint: (_s, pending) => twoPinHint(pending),
     }),
-    // SMD пока скрыт из интерфейса (нет кнопки), но сохранённые схемы с ним открываются
     toolFor<Resistor>()({
       id: "smd",
-      icon: "",
+      group: "passive",
+      icon: `<path d="M1 9h8M21 9h8" /><rect x="9" y="6" width="12" height="6" /><path d="M9 6v6M21 6v6" stroke-width="2.4" />`,
       label: "SMD-резистор",
-      title: "",
+      title: "Резистор без ножек (1206…0402): на плату под SMD или на стол",
       settings: { ohms: 220, smdSize: "0805" as SmdSize },
       name: () => "SMD-резистор",
       note: () =>
@@ -58,8 +58,8 @@ export const resistor: PartDef<Resistor> = {
         if (field === "smd") s.smdSize = value as SmdSize;
       },
       create: (s) => ({ type: "resistor", variant: "smd", ohms: s.ohms, smdSize: s.smdSize }),
-      hint: () => "SMD кладётся <b>на стол</b>, провода паяются к торцам. R — повернуть.",
-      boardRefusal: "У SMD-резистора нет ножек — в макетку он не вставляется. Положите его на стол рядом и припаяйте провода к торцам.",
+      hint: () => "SMD-резистор ставится <b>на плату под SMD</b> (под ним появятся площадки) или кладётся на стол — тогда провода паяются к торцам. R — повернуть.",
+      boardRefusal: "У SMD-резистора нет ножек — в отверстия он не вставляется. Ставьте его на плату под SMD или на стол рядом и припаяйте провода к торцам.",
     }),
   ],
   polar: () => false,
