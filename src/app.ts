@@ -1084,8 +1084,9 @@ export class App {
     } catch {
       /* в следующий раз снова спросим */
     }
+    // В карьеру — всегда через карту, даже если она уже выбрана: стол уровня остаётся за картой
     if (mode === this.mode) {
-      if (mode === "career" && !this.scene.career) this.openMap();
+      if (mode === "career") this.openMap();
       return;
     }
     this.save();

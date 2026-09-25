@@ -21,9 +21,9 @@ async function start(): Promise<void> {
   const mode = App.loadMode();
   const saved = mode === "career" ? App.loadCareer() : App.load();
   const app = new App(world, { inspector: $("inspector"), hint: $("hint"), toasts: $("toasts"), tools: $("tools"), schematic: $("schematic") }, saved ?? (mode === "career" ? workshopScene() : demoScene()));
-  // Первый раз — выбор режима; в карьере без начатого стола — карта
+  // Первый раз — выбор режима; карьера всегда начинается с карты (начатый стол ждёт за ней: «К столу»)
   if (!mode) app.openMenu();
-  else if (mode === "career" && !saved) app.openMap();
+  else if (mode === "career") app.openMap();
   if (!saved && mode !== "career") {
     app.toast("Это пример", "Замкните тумблер SA2 (нажмите на него): резистор R2 22 Ом не выдержит мощности и сгорит. Потом выберите R2 и поставьте номинал побольше.");
   }
