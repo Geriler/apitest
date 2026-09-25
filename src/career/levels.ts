@@ -11,7 +11,7 @@ import type { ChipPackage, ChipPinRole } from "../model/breadboard";
 import type { MosfetKind, TransistorKind } from "../model/types";
 
 /** Логическая функция компонента. */
-export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc" | "div2" | "cnt4" | "sreg4";
+export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc" | "div2" | "cnt4" | "sreg4" | "dlatchr" | "dffr" | "tffr" | "sreg8" | "cnt393";
 
 /** Деталь набора: сколько штук и что именно (тип и номинал). */
 export type KitItem =
@@ -103,10 +103,15 @@ export function gateIo(level: Level): { inputs: number[]; outputs: number[]; vcc
 }
 
 /** Схемы с памятью: выход зависит не только от входов, но и от того, что было раньше. */
-export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff", "div2", "cnt4", "sreg4"];
+export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff", "div2", "cnt4", "sreg4", "dlatchr", "dffr", "tffr", "sreg8", "cnt393"];
 
 /** Был ли фронт (переход из нуля в единицу) на входе k между прошлым шагом и этим. */
 const rising = (prev: boolean[] | undefined, bits: boolean[], k: number) => !!prev && !prev[k] && bits[k];
+/** Был ли спад (из единицы в ноль). */
+const falling = (prev: boolean[] | undefined, bits: boolean[], k: number) => !!prev && prev[k] && !bits[k];
+/** Четырёхразрядный счётчик 74HC393: сброс единицей на CLR (сразу), иначе +1 по спаду CLK. */
+const count393 = (q: number, prev: boolean[] | undefined, bits: boolean[], clk: number, clr: number) =>
+  bits[clr] ? 0 : falling(prev, bits, clk) ? (q + 1) & 15 : q;
 
 /**
  * Следующее состояние схемы с памятью — число (у однобитных 0 или 1, у счётчика и регистра — их
@@ -127,6 +132,15 @@ export function seqNext(func: LogicFunc, q: number, prev: boolean[] | undefined,
   if (func === "div2") return rising(prev, bits, 0) ? q ^ 1 : q;
   if (func === "cnt4") return rising(prev, bits, 0) ? (q + 1) & 15 : q;
   if (func === "sreg4") return rising(prev, bits, 1) ? ((q << 1) | +prev![0]) & 15 : q;
+  // Со сбросом: CLR = 0 (у 74LVC1G175, 74HC164 — активный ноль) обнуляет сразу, не дожидаясь CLK
+  if (func === "dlatchr") return !bits[2] ? 0 : b ? +a : q;
+  if (func === "dffr") return !bits[2] ? 0 : rising(prev, bits, 1) ? +prev![0] : q;
+  // Счётный разряд 74HC393: сброс единицей, переключение по спаду
+  if (func === "tffr") return bits[1] ? 0 : falling(prev, bits, 0) ? q ^ 1 : q;
+  // 74HC164 (A, B, CLK, CLR): по фронту сдвиг, в QA — A·B
+  if (func === "sreg8") return !bits[3] ? 0 : rising(prev, bits, 2) ? ((q << 1) | +(prev![0] && prev![1])) & 255 : q;
+  // 74HC393 (1CLK, 1CLR, 2CLK, 2CLR): два независимых счётчика, второй — в старших четырёх разрядах
+  if (func === "cnt393") return count393(q & 15, prev, bits, 0, 1) | (count393(q >> 4, prev, bits, 2, 3) << 4);
   return q;
 }
 
@@ -135,12 +149,13 @@ export function seqOuts(func: LogicFunc, q: number, bits: boolean[]): boolean[] 
   if (func === "sr") return bits[0] && bits[1] ? [false, false] : [!!q, !q];
   if (func === "dlatch") return [!!q, !q];
   if (func === "cnt4" || func === "sreg4") return [0, 1, 2, 3].map((k) => !!(q & (1 << k)));
+  if (func === "sreg8" || func === "cnt393") return [0, 1, 2, 3, 4, 5, 6, 7].map((k) => !!(q & (1 << k)));
   return [!!(q & 1)];
 }
 
 /** Состояние по выходам: у защёлок — Q, у счётчика и регистра — Q0…Q3 числом. */
 export function seqState(func: LogicFunc, outs: boolean[]): number {
-  return func === "cnt4" || func === "sreg4" ? outs.reduce((m, b, k) => m | (b ? 1 << k : 0), 0) : +!!outs[0];
+  return ["cnt4", "sreg4", "sreg8", "cnt393"].includes(func) ? outs.reduce((m, b, k) => m | (b ? 1 << k : 0), 0) : +!!outs[0];
 }
 
 /**
@@ -181,6 +196,11 @@ export function truth(func: LogicFunc, bits: boolean[]): boolean[] {
     case "div2":
     case "cnt4":
     case "sreg4":
+    case "dlatchr":
+    case "dffr":
+    case "tffr":
+    case "sreg8":
+    case "cnt393":
       return seqOuts(func, seqNext(func, 0, undefined, bits), bits);
     // Четыре независимых XNOR: входы парами (1A, 1B, 2A, 2B…), выходы 1Y…4Y
     case "xnor4":
@@ -1112,6 +1132,200 @@ export const LEVELS: Level[] = [
       ],
     },
   },
+  // ─── Сброс: D-защёлка со сбросом → 74LVC1G175 → 74HC164; счётный разряд → 74HC393 ─────────
+  {
+    id: "dlatchr",
+    func: "dlatchr",
+    part: "D-ЗАЩЁЛКА СО СБРОСОМ",
+    intermediate: true,
+    title: "D-защёлка со сбросом",
+    about: `Как D-защёлка (E = 1 — повторяет D, E = 0 — хранит), но с входом CLR: пока на нём ноль, выход — ноль сразу и что бы ни было на D и E. Такой вход — «активный ноль»: в даташитах над его именем черта. Нужен, чтобы после включения привести схему в известное состояние. ${STEP}`,
+    hints: [
+      "Сбросить защёлку — значит заставить её запомнить ноль. Что должно быть на её D и E, чтобы она запомнила ноль прямо сейчас?",
+      "D защёлки = D и CLR; E защёлки = E или «не CLR». Пока CLR = 1, всё как без сброса.",
+    ],
+    package: "SOT-23-6",
+    roles: ["in", "gnd", "in", "out", "vcc", "in"],
+    names: ["D", "", "E", "Q", "", "CLR"],
+    io: { inputs: [1, 3, 6], outputs: [4] },
+    room: 400,
+    sequence: seq("000", "001", "101", "111", "101", "100", "101", "111", "110", "111"),
+    kit: [
+      { part: "chip", func: "dlatch", count: 1 },
+      { part: "chip", func: "and", count: 1 },
+      { part: "chip", func: "or", count: 1 },
+      { part: "chip", func: "not", count: 1 },
+    ],
+    recipe: {
+      parts: [sot("A", "and", "D", 1), sot("O", "or", "D", 5), sot("N", "not", "D", 9), ic("L", "dlatch", 6, "H", 1)],
+      nets: [
+        ...power("P5", "P2", [...gates("A", "O", "N"), { id: "L", vcc: 6, gnd: 3 }]),
+        ["P1", "A.1"],
+        ["P6", "A.2", "N.2"],
+        ["A.4", "L.1"],
+        ["P3", "O.1"],
+        ["N.4", "O.2"],
+        ["O.4", "L.2"],
+        ["L.4", "P4"],
+      ],
+    },
+  },
+  {
+    id: "dffr",
+    func: "dffr",
+    part: "74LVC1G175",
+    title: "D-триггер со сбросом",
+    about:
+      "Настоящая микросхема: D-триггер по фронту CLK, как 74LVC1G79, и вход сброса CLR (активный ноль): при CLR = 0 выход сразу ноль, не дожидаясь CLK. Выводы — как у SN74LVC1G175 по даташиту TI (SOT-23-6): 1 CLK, 2 GND, 3 D, 4 Q, 5 VCC, 6 CLR. Из таких собирают регистры и счётчики, которые можно обнулить.",
+    hints: [
+      "D-триггер вы уже собирали из двух D-защёлок, открывающихся по очереди. Что изменится, если обе — со сбросом?",
+      "Первая открыта при CLK = 0, вторая — при CLK = 1; CLR — к обеим сразу.",
+    ],
+    package: "SOT-23-6",
+    roles: ["in", "gnd", "in", "out", "vcc", "in"],
+    names: ["CLK", "", "D", "Q", "", "CLR"],
+    io: { inputs: [3, 1, 6], outputs: [4] },
+    room: 1000,
+    sequence: seq("000", "001", "101", "111", "011", "010", "011", "001", "101", "111", "110", "111", "101", "111"),
+    kit: [
+      { part: "chip", func: "dlatchr", count: 2 },
+      { part: "chip", func: "not", count: 1 },
+    ],
+    recipe: {
+      parts: [ic("M", "dlatchr", 6, "D", 1), ic("S", "dlatchr", 6, "D", 5), sot("N", "not", "D", 9)],
+      nets: [
+        ...power("P5", "P2", [{ id: "M", vcc: 5, gnd: 2 }, { id: "S", vcc: 5, gnd: 2 }, ...gates("N")]),
+        ["P3", "M.1"],
+        ["P1", "N.2", "S.3"],
+        ["N.4", "M.3"],
+        ["M.4", "S.1"],
+        ["S.4", "P4"],
+        ["P6", "M.6", "S.6"],
+      ],
+    },
+  },
+  {
+    id: "sreg8",
+    func: "sreg8",
+    part: "74HC164",
+    title: "Восьмиразрядный регистр сдвига",
+    about:
+      "Настоящая микросхема: на каждый фронт CLK всё сдвигается QA → QB → … → QH, а в QA записывается A И B (если хоть один из них ноль — вдвигается ноль). CLR = 0 обнуляет все восемь выходов сразу. Выводы — как у SN74HC164 по даташиту TI (DIP-14): 1 A, 2 B, 3–6 QA–QD, 7 GND, 8 CLK, 9 CLR, 10–13 QE–QH, 14 VCC.",
+    hints: [
+      "Восемь D-триггеров цепочкой с общим CLK — как регистр на 4 бита, только длиннее. Сброс — у всех общий.",
+      "На D первого — не A и не B, а оба сразу через И. Выводы QA…QH разбросаны по корпусу: сверьте таблицу выводов.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "out", "out", "out", "out", "gnd", "in", "in", "out", "out", "out", "out", "vcc"],
+    names: ["A", "B", "QA", "QB", "QC", "QD", "", "CLK", "CLR", "QE", "QF", "QG", "QH", ""],
+    io: { inputs: [1, 2, 8, 9], outputs: [3, 4, 5, 6, 10, 11, 12, 13] },
+    absMax: 7,
+    room: 8000,
+    sequence: seq("1100", "1101", "1111", "1101", "0101", "0111", "0101", "1101", "1001", "1011", "1001", "1101", "1111", "1101", "1111", "1101", "1100", "1101", "1111"),
+    kit: [
+      { part: "chip", func: "dffr", count: 8 },
+      { part: "chip", func: "and", count: 1 },
+    ],
+    recipe: {
+      parts: [
+        ...[1, 5, 9, 13, 17, 21, 25].map((col, i) => ic(`F${i}`, "dffr", 6, "D", col)),
+        ic("F7", "dffr", 6, "H", 1),
+        sot("A", "and", "H", 5),
+      ],
+      nets: [
+        ...power("P14", "P7", [...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ id: `F${i}`, vcc: 5, gnd: 2 })), ...gates("A")]),
+        ["P1", "A.1"],
+        ["P2", "A.2"],
+        ["A.4", "F0.3"],
+        ["P8", ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => `F${i}.1`)],
+        ["P9", ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => `F${i}.6`)],
+        ...[3, 4, 5, 6, 10, 11, 12, 13].map((pin, i) => (i < 7 ? [`F${i}.4`, `P${pin}`, `F${i + 1}.3`] : [`F${i}.4`, `P${pin}`])),
+      ],
+    },
+  },
+  {
+    id: "tffr",
+    func: "tffr",
+    part: "СЧЁТНЫЙ РАЗРЯД",
+    intermediate: true,
+    title: "Счётный разряд со сбросом",
+    about: `Делитель на 2, как раньше, но переключается по спаду CLK (из единицы в ноль) и сбрасывается единицей на CLR — так устроен каждый разряд в 74HC393. Спад удобен: разряды можно соединять цепочкой без инверторов — следующий переключится, когда предыдущий уйдёт из 1 в 0. ${STEP}`,
+    hints: [
+      "Внутри — D-триггер со сбросом, у которого на D его же выход «наоборот». А что делать с тем, что он срабатывает по фронту, а нужно по спаду, и сбрасывается нулём, а нужно единицей?",
+      "Три инвертора: на D (из Q), на CLK и на CLR.",
+    ],
+    package: "SOT-23-6",
+    roles: ["in", "gnd", "nc", "out", "vcc", "in"],
+    names: ["CLK", "", "", "Q", "", "CLR"],
+    io: { inputs: [1, 6], outputs: [4] },
+    room: 2000,
+    sequence: seq("01", "00", "10", "00", "10", "00", "10", "00", "01", "00", "10", "00"),
+    kit: [
+      { part: "chip", func: "dffr", count: 1 },
+      { part: "chip", func: "not", count: 3 },
+    ],
+    recipe: {
+      parts: [ic("F", "dffr", 6, "D", 1), sot("N1", "not", "D", 5), sot("N2", "not", "D", 9), sot("N3", "not", "H", 1)],
+      nets: [
+        ...power("P5", "P2", [{ id: "F", vcc: 5, gnd: 2 }, ...gates("N1", "N2", "N3")]),
+        ["P1", "N2.2"],
+        ["N2.4", "F.1"],
+        ["F.4", "P4", "N1.2"],
+        ["N1.4", "F.3"],
+        ["P6", "N3.2"],
+        ["N3.4", "F.6"],
+      ],
+    },
+  },
+  {
+    id: "cnt393",
+    func: "cnt393",
+    part: "74HC393",
+    title: "Два четырёхразрядных счётчика",
+    about:
+      "Настоящая микросхема: два независимых двоичных счётчика по 4 бита. Каждый считает спады своего CLK (QD QC QB QA — число от 0 до 15) и сбрасывается единицей на своём CLR. Выводы — как у SN74HC393 по даташиту TI (DIP-14): 1 1CLK, 2 1CLR, 3–6 1QA–1QD, 7 GND, 8–11 2QD–2QA (обратным порядком), 12 2CLR, 13 2CLK, 14 VCC. Проверка: 17 импульсов на первый счётчик (с переходом через 15), три на второй и сброс одного, пока другой хранит.",
+    hints: [
+      "Разряды по спаду соединяются цепочкой прямо: выход одного — на CLK следующего. CLR у разрядов одного счётчика — общий.",
+      "Выводы второго счётчика идут в обратном порядке: 2QA — это 11, а 2QD — 8.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "out", "out", "out", "out", "gnd", "out", "out", "out", "out", "in", "in", "vcc"],
+    names: ["1CLK", "1CLR", "1QA", "1QB", "1QC", "1QD", "", "2QD", "2QC", "2QB", "2QA", "2CLR", "2CLK", ""],
+    io: { inputs: [1, 2, 13, 12], outputs: [3, 4, 5, 6, 11, 10, 9, 8] },
+    absMax: 7,
+    room: 20000,
+    sequence: seq(
+      "0101",
+      "0000",
+      ...Array.from({ length: 17 }, () => ["1000", "0000"]).flat(),
+      ...Array.from({ length: 3 }, () => ["0010", "0000"]).flat(),
+      "0100",
+      "0000",
+      "1000",
+      "0000",
+      "0010",
+      "0000",
+    ),
+    kit: [{ part: "chip", func: "tffr", count: 8 }],
+    recipe: {
+      parts: [...[1, 5, 9, 13, 17, 21, 25].map((col, i) => ic(`T${i}`, "tffr", 6, "D", col)), ic("T7", "tffr", 6, "H", 1)],
+      nets: [
+        ...power("P14", "P7", [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ id: `T${i}`, vcc: 5, gnd: 2 }))),
+        ["P1", "T0.1"],
+        ["T0.4", "P3", "T1.1"],
+        ["T1.4", "P4", "T2.1"],
+        ["T2.4", "P5", "T3.1"],
+        ["T3.4", "P6"],
+        ["P2", "T0.6", "T1.6", "T2.6", "T3.6"],
+        ["P13", "T4.1"],
+        ["T4.4", "P11", "T5.1"],
+        ["T5.4", "P10", "T6.1"],
+        ["T6.4", "P9", "T7.1"],
+        ["T7.4", "P8"],
+        ["P12", "T4.6", "T5.6", "T6.6", "T7.6"],
+      ],
+    },
+  },
 ];
 
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
@@ -1147,4 +1361,9 @@ export const FUNC_NAMES: Record<LogicFunc, string> = {
   div2: "Делитель на 2",
   cnt4: "Счётчик",
   sreg4: "Регистр сдвига",
+  dlatchr: "D-защёлка со сбросом",
+  dffr: "D-триггер со сбросом",
+  tffr: "Счётный разряд",
+  sreg8: "Регистр сдвига 8 бит",
+  cnt393: "Два счётчика 4 бит",
 };

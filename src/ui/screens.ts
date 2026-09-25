@@ -106,16 +106,21 @@ const PLACE: Record<string, [number, number]> = {
   full: [5, 3.5],
   eq2: [6, 1],
   hc283: [6, 3.5],
-  "fix-led-open": [0, 9],
-  "fix-led-dim": [1, 9],
-  "fix-divider": [2, 9],
-  "fix-switch-short": [3, 9],
-  "fix-switch-reversed": [4, 9],
-  "fix-pcb-crack": [5, 9],
-  "fix-adder": [6, 9],
-  "fix-blinker": [6, 10],
+  "fix-led-open": [0, 10.5],
+  "fix-led-dim": [1, 10.5],
+  "fix-divider": [2, 10.5],
+  "fix-switch-short": [3, 10.5],
+  "fix-switch-reversed": [4, 10.5],
+  "fix-pcb-crack": [5, 10.5],
+  "fix-adder": [6, 10.5],
+  "fix-blinker": [6, 11.5],
   schmitt: [5, 5.5],
   osc: [6, 5.5],
+  dlatchr: [6, 8.7],
+  dffr: [7, 9],
+  sreg8: [8, 8.4],
+  tffr: [8, 9.4],
+  cnt393: [9, 9.4],
   div2: [7, 7],
   cnt4: [8, 7],
   sreg4: [7, 8],
@@ -141,7 +146,7 @@ const needs = (l: Level): LogicFunc[] => l.kit.flatMap((k) => (k.part === "chip"
 const variant = (l: Level) => l.variant ?? (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
 
 /** Короткие названия функций для узлов карты. */
-const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг" };
+const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг", dlatchr: "память, сброс", dffr: "по фронту, сброс", sreg8: "сдвиг, 8 бит", tffr: "счёт по спаду", cnt393: "2 × счёт 4 бит" };
 /** Подпись узла: функция и вариант; не влезает — только вариант. */
 function nodeSub(l: Level): string {
   const full = `${FUNC_SHORT[l.func] ?? FUNC_NAMES[l.func]} · ${variant(l)}`;
