@@ -11,7 +11,7 @@ import type { ChipPackage, ChipPinRole } from "../model/breadboard";
 import type { MosfetKind, TransistorKind } from "../model/types";
 
 /** Логическая функция компонента. */
-export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc" | "div2" | "cnt4" | "sreg4" | "dlatchr" | "dffr" | "tffr" | "sreg8" | "cnt393" | "dec2" | "dec3" | "seg7" | "bcd7" | "rcdb" | "debounce";
+export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc" | "div2" | "cnt4" | "sreg4" | "dlatchr" | "dffr" | "tffr" | "sreg8" | "cnt393" | "dec2" | "dec3" | "seg7" | "bcd7" | "rcdb" | "debounce" | "cmp" | "cmp2" | "timer";
 
 /** Деталь набора: сколько штук и что именно (тип и номинал). */
 export type KitItem =
@@ -73,7 +73,11 @@ export interface Level {
    * Что проверять кроме таблицы: sweep — вход плавно растёт и падает, ищутся пороги и гистерезис
    * (триггер Шмитта); osc — таблицы нет, выход должен генерировать с нужным периодом (генератор).
    */
-  check?: "sweep" | "osc" | "bounce";
+  check?: "sweep" | "osc" | "bounce" | "compare" | "timer";
+  /** Выходы с открытым коллектором (стоком): на проверке их подтягивают к питанию резистором 10 кОм. */
+  openDrain?: number[];
+  /** Каналы компаратора (check: compare): выводы входов + и − и выхода. */
+  channels?: { plus: number; minus: number; out: number }[];
   /**
    * У подавителей дребезга (check: bounce): за сколько миллисекунд после нажатия или отпускания
    * выход должен переключиться — от и до.
@@ -108,7 +112,7 @@ export function gateIo(level: Level): { inputs: number[]; outputs: number[]; vcc
 }
 
 /** Схемы с памятью: выход зависит не только от входов, но и от того, что было раньше. */
-export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff", "div2", "cnt4", "sreg4", "dlatchr", "dffr", "tffr", "sreg8", "cnt393", "bcd7"];
+export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff", "div2", "cnt4", "sreg4", "dlatchr", "dffr", "tffr", "sreg8", "cnt393", "bcd7", "timer"];
 
 /**
  * Сегменты a…g цифр 0…9 — как у 74HC4511 по таблице TI (SCHS279E): шестёрка без верхней черты,
@@ -156,6 +160,9 @@ export function seqNext(func: LogicFunc, q: number, prev: boolean[] | undefined,
   // Со сбросом: CLR = 0 (у 74LVC1G175, 74HC164 — активный ноль) обнуляет сразу, не дожидаясь CLK
   if (func === "dlatchr") return !bits[2] ? 0 : b ? +a : q;
   if (func === "dffr") return !bits[2] ? 0 : rising(prev, bits, 1) ? +prev![0] : q;
+  // 555 (TRIG, THRES, RESET — единица: выше порога): RESET̅ = 0 — сброс; TRIG ниже 1/3 питания —
+  // выход в единицу (главнее THRES); THRES выше 2/3 — в ноль; иначе как было (таблица TI SLFS022)
+  if (func === "timer") return !bits[2] ? 0 : !bits[0] ? 1 : bits[1] ? 0 : q;
   // 74HC4511 (D0…D3, LT̅, BL̅, LE̅): при LE̅ = 0 защёлка пропускает код, при LE̅ = 1 хранит
   if (func === "bcd7") return bits[6] ? q : num(bits.slice(0, 4));
   // Счётный разряд 74HC393: сброс единицей, переключение по спаду
@@ -169,6 +176,8 @@ export function seqNext(func: LogicFunc, q: number, prev: boolean[] | undefined,
 
 /** Выходы схемы с памятью при состоянии q: Q (у защёлок ещё Q̅; у счётчика и регистра — Q0…Q3). */
 export function seqOuts(func: LogicFunc, q: number, bits: boolean[]): boolean[] {
+  // 555: OUT и DISCH (открытый коллектор: закрыт — подтянут к единице — когда OUT в единице)
+  if (func === "timer") return [!!q, !!q];
   if (func === "bcd7") return segments(q, bits[4], bits[5]);
   if (func === "sr") return bits[0] && bits[1] ? [false, false] : [!!q, !q];
   if (func === "dlatch") return [!!q, !q];
@@ -232,7 +241,13 @@ export function truth(func: LogicFunc, bits: boolean[]): boolean[] {
     case "sreg8":
     case "cnt393":
     case "bcd7":
+    case "timer":
       return seqOuts(func, seqNext(func, 0, undefined, bits), bits);
+    // Компаратор: единица, если на + больше, чем на − (таблицей не проверяется — см. check: compare)
+    case "cmp":
+      return [a && !b];
+    case "cmp2":
+      return [a && !b, c && !bits[3]];
     // Дешифратор 2 → 4 (A, B): выход с номером кода — ноль, остальные — единица
     case "dec2":
       return [0, 1, 2, 3].map((i) => i !== num(bits.slice(0, 2)));
@@ -321,6 +336,9 @@ const s143 = (id: string, func: LogicFunc, row: string, col: number) => {
   const up = "ABCDEFGH"["ABCDEFGH".indexOf(row) - 3];
   return { id, func, holes: [`k:${row}${col}`, `k:${row}${col + 2}`, `k:${up}${col + 2}`, `k:${up}${col}`] };
 };
+
+/** Биполярный p-n-p BC557 в трёх соседних отверстиях ряда (К, Б, Э). */
+const pnp = (id: string, row: string, col: number) => ({ id, kind: "BC557", holes: [0, 1, 2].map((d) => `k:${row}${col + d}`) });
 
 /** Строчка «учебный компонент» для описаний промежуточных уровней. */
 const STEP = "Такой микросхемы не выпускают — это учебная ступенька: открытый, он попадёт только в набор следующего уровня.";
@@ -1717,6 +1735,161 @@ export const LEVELS: Level[] = [
     },
   },
 
+  // ─── Компараторы и таймер: LMV331 → LM393 → NE555 ─────────────────────────────────────────
+  {
+    id: "lmv331",
+    func: "cmp",
+    part: "LMV331",
+    title: "Компаратор",
+    about:
+      "Сравнивает два напряжения: если на IN+ больше, чем на IN−, выход отпущен (открытый коллектор — единицу даёт внешний резистор к питанию), если меньше — выход прижат к общему. Входы — не логика: разница в десятки милливольт должна переключать выход при любом общем уровне от 0 до 3,3 В. Выводы — как у LMV331 (TI, SOT-23-5): 1 IN+, 2 GND, 3 IN−, 4 OUT, 5 VCC. Проверка подаёт на входы напряжения с разницей ±50 мВ и ±1 В.",
+    hints: [
+      "Два p-n-p транзистора с общими эмиттерами делят между собой ток одного резистора от питания: больше тока берёт тот, у которого база ниже. Токовое зеркало из двух n-p-n «сравнивает» их токи. У самого общего провода пара насыщается и берёт с входа большой ток — поэтому перед каждой базой ставят p-n-p повторитель: он поднимает уровень на 0,6 В и почти не берёт тока.",
+      "Где зеркало и второй транзистор пары встречаются, напряжение резко уходит вверх или вниз — это и есть результат. Им управляйте выходным n-p-n: коллектор — на OUT, эмиттер — на общий.",
+    ],
+    absMax: 5.5,
+    roles: ["in", "gnd", "in", "out", "vcc"],
+    names: ["IN+", "", "IN−", "OUT", ""],
+    io: { inputs: [1, 3], outputs: [4] },
+    check: "compare",
+    openDrain: [4],
+    channels: [{ plus: 1, minus: 3, out: 4 }],
+    room: 20,
+    kit: [
+      { part: "bjt", kind: "BC557", count: 4 },
+      { part: "bjt", kind: "BC547", count: 3 },
+      { part: "resistor", ohms: 47000, count: 1 },
+      { part: "resistor", ohms: 100000, count: 2 },
+    ],
+    recipe: {
+      parts: [
+        pnp("VT1", "B", 2), pnp("VT2", "B", 6), bjt("VT3", "F", 2), bjt("VT4", "F", 6), bjt("VT5", "F", 10), res("R1", 47000, "A5", "A9"),
+        // Входные повторители: база пары на 0,6 В выше входа — входы работают от самого нуля
+        pnp("VT6", "D", 2), pnp("VT7", "D", 6), res("R2", 100000, "C2", "C4"), res("R3", 100000, "C6", "C8"),
+      ],
+      nets: [
+        ["P5", "R1.1", "R2.1", "R3.1"],
+        ["R1.2", "VT1.E", "VT2.E"],
+        ["P3", "VT6.B"],
+        ["VT6.E", "R2.2", "VT1.B"],
+        ["P1", "VT7.B"],
+        ["VT7.E", "R3.2", "VT2.B"],
+        ["VT6.C", "VT7.C", "P2"],
+        ["VT1.C", "VT3.C", "VT3.B", "VT4.B"],
+        ["VT2.C", "VT4.C", "VT5.B"],
+        ["VT3.E", "VT4.E", "VT5.E", "P2"],
+        ["VT5.C", "P4"],
+      ],
+    },
+  },
+  {
+    id: "lm393",
+    func: "cmp2",
+    part: "LM393",
+    title: "Два компаратора",
+    about:
+      "Настоящая микросхема: два независимых компаратора с открытым коллектором в одном корпусе, общее питание. Входы работают от 0 до питания минус 1,5 В. Выводы — как у LM393 (TI, SLCS005): 1 1OUT, 2 1IN−, 3 1IN+, 4 GND, 5 2IN+, 6 2IN−, 7 2OUT, 8 VCC. Проверяются оба канала, как у LMV331.",
+    hints: [
+      "Внутри — просто два одиночных компаратора: питание и общий у них общие, остальное — у каждого своё.",
+      "Сверьте выводы по таблице: у первого канала IN− — вывод 2, а IN+ — 3; у второго наоборот — IN+ 5, IN− 6.",
+    ],
+    absMax: 36,
+    package: "DIP",
+    roles: ["out", "in", "in", "gnd", "in", "in", "out", "vcc"],
+    names: ["1OUT", "1IN−", "1IN+", "", "2IN+", "2IN−", "2OUT", ""],
+    io: { inputs: [3, 2, 5, 6], outputs: [1, 7] },
+    check: "compare",
+    openDrain: [1, 7],
+    channels: [{ plus: 3, minus: 2, out: 1 }, { plus: 5, minus: 6, out: 7 }],
+    room: 40,
+    kit: [{ part: "chip", func: "cmp", count: 2 }],
+    recipe: {
+      parts: [sot("D1", "cmp", "D", 2), sot("D2", "cmp", "D", 8)],
+      nets: [
+        ...power("P8", "P4", [{ id: "D1", vcc: 5, gnd: 2 }, { id: "D2", vcc: 5, gnd: 2 }]),
+        ["P3", "D1.1"],
+        ["P2", "D1.3"],
+        ["D1.4", "P1"],
+        ["P5", "D2.1"],
+        ["P6", "D2.3"],
+        ["D2.4", "P7"],
+      ],
+    },
+  },
+  {
+    id: "ne555",
+    func: "timer",
+    part: "NE555",
+    title: "Таймер 555",
+    about:
+      "Настоящая микросхема (TI, SLFS022): делитель из трёх одинаковых резисторов даёт пороги 1/3 и 2/3 питания (верхний выведен на CONT), два компаратора сравнивают с ними TRIG и THRES, RS-защёлка помнит, что было. TRIG ниже 1/3 — OUT в единицу, разряд закрыт (главнее THRES); THRES выше 2/3 — OUT в ноль, разряд открыт; между — как было; RESET̅ = 0 — всё в ноль. Выводы: 1 GND, 2 TRIG, 3 OUT, 4 RESET̅, 5 CONT, 6 THRES, 7 DISCH (открытый коллектор), 8 VCC. Проверка: таблица по шагам и работа генератором — RA = 10 кОм, RB = 47 кОм, C = 1 мкФ: период должен быть по формуле из даташита, 0,693·(RA + 2RB)·C ≈ 72 мс.",
+    hints: [
+      "Компаратор с открытым коллектором даёт единицу только через резистор к питанию. Первому — TRIG против нижнего порога (TRIG ниже — единица «установить»), второму — THRES против верхнего (выше — «сбросить»).",
+      "Защёлку соберите из двух ИЛИ-НЕ; чтобы «установить» было главнее «сбросить», выход таймера берите через инвертор с той половины защёлки, куда приходит «установить». RESET̅ должен и сбрасывать, и запрещать установку.",
+    ],
+    absMax: 18,
+    package: "DIP",
+    roles: ["gnd", "in", "out", "in", "out", "in", "out", "vcc"],
+    names: ["", "TRIG", "OUT", "RESET̅", "CONT", "THRES", "DISCH", ""],
+    io: { inputs: [2, 6, 4], outputs: [3, 7] },
+    check: "timer",
+    openDrain: [7],
+    room: 200,
+    // TRIG THRES RESET̅ — единица: выше порога
+    sequence: seq("*101", "001", "101", "111", "101", "011", "101", "100", "000", "001", "101", "111", "101"),
+    kit: [
+      { part: "chip", func: "cmp2", count: 1 },
+      { part: "chip", func: "and", count: 1 },
+      { part: "chip", func: "or", count: 1 },
+      { part: "chip", func: "nor", count: 2 },
+      { part: "chip", func: "not", count: 2 },
+      { part: "mosfet", kind: "2N7000", count: 1 },
+      { part: "resistor", ohms: 4700, count: 3 },
+      { part: "resistor", ohms: 10000, count: 2 },
+    ],
+    recipe: {
+      parts: [
+        ic("D1", "cmp2", 8, "D", 2),
+        sot("D2", "and", "D", 7),
+        sot("D3", "or", "D", 11),
+        sot("D4", "nor", "D", 15),
+        sot("D5", "not", "H", 1),
+        sot("D6", "nor", "H", 5),
+        sot("D7", "not", "H", 9),
+        mos("VT1", "2N7000", "G", 13),
+        res("R1", 4700, "B2", "B4"),
+        res("R2", 4700, "B6", "B8"),
+        res("R3", 4700, "B10", "B12"),
+        res("R4", 10000, "C2", "C4"),
+        res("R5", 10000, "C6", "C8"),
+      ],
+      nets: [
+        ...power("P8", "P1", [{ id: "D1", vcc: 8, gnd: 4 }, ...gates("D2", "D3", "D4", "D5", "D6", "D7")]),
+        // Делитель: 2/3 — CONT, 1/3 — нижний порог
+        ["P8", "R1.1", "R4.1", "R5.1"],
+        ["R1.2", "R2.1", "P5", "D1.6"],
+        ["R2.2", "R3.1", "D1.3"],
+        ["R3.2", "P1"],
+        // Компараторы: 1 — TRIG ниже 1/3 → S; 2 — THRES выше 2/3 → R
+        ["P2", "D1.2"],
+        ["P6", "D1.5"],
+        ["D1.1", "R4.2", "D2.1"],
+        ["D1.7", "R5.2", "D3.1"],
+        // RESET̅: запрещает S и добавляет R
+        ["P4", "D2.2", "D5.2"],
+        ["D5.4", "D3.2"],
+        // Защёлка: Q = ИЛИ-НЕ(R', Q̅), Q̅ = ИЛИ-НЕ(S', Q); выход — НЕ(Q̅), разряд — ключ от Q̅
+        ["D3.4", "D4.1"],
+        ["D2.4", "D6.1"],
+        ["D4.4", "D6.2"],
+        ["D6.4", "D4.2", "D7.2", "VT1.G"],
+        ["D7.4", "P3"],
+        ["VT1.D", "P7"],
+        ["VT1.S", "P1"],
+      ],
+    },
+  },
+
 ];
 
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
@@ -1773,5 +1946,8 @@ export const FUNC_NAMES: Record<LogicFunc, string> = {
   seg7: "Дешифратор 7 сегментов",
   bcd7: "Дешифратор 7 сегментов с защёлкой",
   rcdb: "Антидребезг RC",
+  cmp: "Компаратор",
+  cmp2: "Два компаратора",
+  timer: "Таймер 555",
   debounce: "Подавитель дребезга",
 };

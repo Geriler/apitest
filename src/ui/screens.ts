@@ -133,6 +133,9 @@ const PLACE: Record<string, [number, number]> = {
   hc4511: [5, 9],
   rcdb: [7, 5.5],
   max6816: [8, 5.5],
+  lmv331: [7, 1],
+  lm393: [8, 1],
+  ne555: [9, 1],
 };
 /** Короткие подписи уроков на карте. */
 const SHORT: Record<string, string> = {
@@ -152,7 +155,7 @@ const needs = (l: Level): LogicFunc[] => l.kit.flatMap((k) => (k.part === "chip"
 const variant = (l: Level) => l.variant ?? (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
 
 /** Короткие названия функций для узлов карты. */
-const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг", dlatchr: "память, сброс", dffr: "по фронту, сброс", sreg8: "сдвиг, 8 бит", tffr: "счёт по спаду", cnt393: "2 × счёт 4 бит", dec2: "выбор 1 из 4", dec3: "выбор 1 из 8", seg7: "цифра на индикатор", bcd7: "цифра, защёлка", rcdb: "без дребезга", debounce: "без дребезга, 50 мс" };
+const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг", dlatchr: "память, сброс", dffr: "по фронту, сброс", sreg8: "сдвиг, 8 бит", tffr: "счёт по спаду", cnt393: "2 × счёт 4 бит", dec2: "выбор 1 из 4", dec3: "выбор 1 из 8", seg7: "цифра на индикатор", bcd7: "цифра, защёлка", rcdb: "без дребезга", debounce: "без дребезга, 50 мс", cmp: "сравнение напряжений", cmp2: "2 × сравнение", timer: "таймер, генератор" };
 /** Подпись узла: функция и вариант; не влезает — только вариант. */
 function nodeSub(l: Level): string {
   const full = `${FUNC_SHORT[l.func] ?? FUNC_NAMES[l.func]} · ${variant(l)}`;
@@ -301,7 +304,7 @@ export class CareerMap {
       <div class="eyebrow">набор</div>
       <ul class="kitlist">${l.kit.map((k) => `<li>${esc(kitLabel(k))} × ${k.count}</li>`).join("")}</ul>
       ${bestOf(l.id) ? `<div class="eyebrow">лучшие цифры</div>${metricsHtml(undefined, bestOf(l.id))}` : ""}
-      <div class="eyebrow">корпус ${packageName(l.package ?? "SOT-23-5", l.roles.length)}</div><p class="sub">${esc(pins)}; ${plural(io.inputs.length, "вход", "входа", "входов")}${io.outputs.length > 1 ? `, ${plural(io.outputs.length, "выход", "выхода", "выходов")}` : ""}.${l.sequence ? " С памятью: проверяется последовательностью шагов." : ""}${l.check === "sweep" ? " Проверяются ещё пороги: вход плавно растёт и падает." : l.check === "osc" ? " Проверка записывает выход 6 секунд, как осциллограф." : l.check === "bounce" ? " Проверка нажимает кнопку с дребезгом и следит, сколько раз переключится выход." : ""}</p>
+      <div class="eyebrow">корпус ${packageName(l.package ?? "SOT-23-5", l.roles.length)}</div><p class="sub">${esc(pins)}; ${plural(io.inputs.length, "вход", "входа", "входов")}${io.outputs.length > 1 ? `, ${plural(io.outputs.length, "выход", "выхода", "выходов")}` : ""}.${l.sequence ? " С памятью: проверяется последовательностью шагов." : ""}${l.check === "sweep" ? " Проверяются ещё пороги: вход плавно растёт и падает." : l.check === "osc" ? " Проверка записывает выход 6 секунд, как осциллограф." : l.check === "bounce" ? " Проверка нажимает кнопку с дребезгом и следит, сколько раз переключится выход." : l.check === "compare" ? " Проверка подаёт на входы напряжения с разницей 50 мВ и 1 В." : l.check === "timer" ? " Проверка: таблица по шагам и работа генератором." : ""}</p>
       ${buttons}`;
   }
 }

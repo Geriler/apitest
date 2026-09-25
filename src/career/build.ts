@@ -244,6 +244,9 @@ export function measure(scene: Scene, rows: CheckRow[], def: ChipDef, chips: Rec
  */
 export const loadOhms = (level: Level) => (level.drive ? (0.7 * CHECK_VOLTS) / level.drive : 100_000);
 
+/** Подтяжка выходов с открытым коллектором на проверке, Ом. */
+export const PULL_UP = 10_000;
+
 /** Уровни логики при питании vcc: единица — не ниже 70 %, ноль — не выше 30 %. */
 const isHigh = (v: number, vcc: number) => v >= 0.7 * vcc;
 const isLow = (v: number, vcc: number) => v <= 0.3 * vcc;
@@ -293,12 +296,15 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
   const plus: Endpoint = { comp: "G1", pin: 1 };
   const minus: Endpoint = { comp: "G1", pin: 0 };
   const loads = io.outputs.map((_, k) => `RL${k + 1}`);
+  // Открытый коллектор: единицу даёт резистор 10 кОм к питанию, как на плате
+  const pulls = (level.openDrain ?? []).map((p, k) => ({ p, id: `RP${k + 1}` }));
   /** Провода стенда: входы inputs; нагрузка выхода k — к питанию, если up[k], иначе к общему. */
   const wiring = (inputs: boolean[], up: boolean[]) =>
     (
       [
         [plus, pin(io.vcc)],
         [minus, pin(io.gnd)],
+        ...pulls.flatMap(({ p, id }): [Endpoint, Endpoint][] => [[pin(p), { comp: id, pin: 0 }], [{ comp: id, pin: 1 }, plus]]),
         ...io.inputs.map((p, i): [Endpoint, Endpoint] => [pin(p), inputs[i] ? plus : minus]),
         ...io.outputs.flatMap((p, k): [Endpoint, Endpoint][] => [
           [pin(p), { comp: loads[k], pin: 0 }],
@@ -311,6 +317,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
       { id: "G1", type: "psu", volts, amps: 1, on: true, placement: { mode: "free", x: 0, z: 0, rot: 0 } },
       u,
       ...loads.map((id): Component => ({ id, type: "resistor", variant: "tht", ohms: load, smdSize: "0805", placement: { mode: "free", x: 0, z: 0, rot: 0 } })),
+      ...pulls.map(({ id }): Component => ({ id, type: "resistor", variant: "tht", ohms: PULL_UP, smdSize: "0805", placement: { mode: "free", x: 0, z: 0, rot: 0 } })),
     ],
     wires: wiring(Array(n).fill(false), io.outputs.map(() => false)),
     boards: [],
@@ -339,7 +346,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
     const loadAmps = loads.reduce((sum, _, k) => sum + Math.abs(sim.current(scene.components[2 + k])), 0);
     const amps = Math.max(0, Math.abs(sim.current(scene.components[0])) - loadAmps);
     // Провода входов идут от вывода к источнику: ток в вывод — с обратным знаком
-    const inAmps = io.inputs.map((_, i) => -(sim.solution.branches.get(`W${2 + i}`)?.current ?? 0));
+    const inAmps = io.inputs.map((_, i) => -(sim.solution.branches.get(`W${2 + 2 * pulls.length + i}`)?.current ?? 0));
     return { volts: outV, amps, burnt, inAmps };
   };
   // Схема с памятью — шаги по порядку (подготовительные не проверяются); остальные — таблица
@@ -565,6 +572,137 @@ function bounceSteps(def: ChipDef, level: Level, chips: Record<string, ChipDef>)
   ];
 }
 
+/**
+ * Точки проверки компаратора: общий уровень входов, В, и разница «+ минус −», В. Разница 50 мВ —
+ * компаратор должен её различать при любом общем уровне в своём диапазоне (у LM393 — до питания − 1,5 В).
+ */
+export const COMPARE_POINTS: [number, number][] = [0.3, 1.0, 2.0, 3.3].flatMap((cm): [number, number][] => [[cm, 0.05], [cm, -0.05], [cm, 1], [cm, -1]]);
+
+/** Прогнать компаратор по точкам: у каждого канала — выход при V+ и V−. */
+export function compareRun(def: ChipDef, level: Level, chips: Record<string, ChipDef>) {
+  const io = gateIo(level);
+  const free = { mode: "free" as const, x: 0, z: 0, rot: 0 };
+  const u: Chip = { id: "U1", type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement: free };
+  const pin = (p: number): Endpoint => ({ comp: "U1", pin: p - 1 });
+  const plus: Endpoint = { comp: "G1", pin: 1 };
+  const minus: Endpoint = { comp: "G1", pin: 0 };
+  const ch = level.channels ?? [];
+  const components: Component[] = [{ id: "G1", type: "psu", volts: CHECK_VOLTS, amps: 1, on: true, placement: free }, u];
+  const links: [Endpoint, Endpoint][] = [[plus, pin(io.vcc)], [minus, pin(io.gnd)]];
+  ch.forEach((c, k) => {
+    for (const [id, p] of [[`GP${k}`, c.plus], [`GM${k}`, c.minus]] as const) {
+      components.push({ id, type: "psu", volts: 0, amps: 1, on: true, placement: free });
+      links.push([{ comp: id, pin: 1 }, pin(p)], [{ comp: id, pin: 0 }, minus]);
+    }
+    components.push({ id: `RP${k}`, type: "resistor", variant: "tht", ohms: PULL_UP, smdSize: "0805", placement: free });
+    components.push({ id: `RL${k}`, type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: free });
+    links.push([pin(c.out), { comp: `RP${k}`, pin: 0 }], [{ comp: `RP${k}`, pin: 1 }, plus], [pin(c.out), { comp: `RL${k}`, pin: 0 }], [{ comp: `RL${k}`, pin: 1 }, minus]);
+  });
+  const scene: Scene = { components, wires: links.map(([a, b], i) => ({ id: `W${i}`, a, b, color: "" })), boards: [], chips: { ...chips, [def.id]: def } };
+  const sim = new Simulation(scene, undefined, { expand: ["U1"], strictModels: true });
+  const burnt = new Set<string>();
+  const src = (id: string) => scene.components.find((c) => c.id === id) as Extract<Component, { type: "psu" }>;
+  const rows: { ch: number; cm: number; diff: number; v: number; ok: boolean; inAmps: number }[] = [];
+  ch.forEach((c, k) => {
+    for (const [cm, diff] of COMPARE_POINTS) {
+      src(`GP${k}`).volts = Math.max(0, cm + diff / 2);
+      src(`GM${k}`).volts = Math.max(0, cm - diff / 2);
+      sim.solve();
+      for (const b of sim.step(0.01)) if (b.id.startsWith("U1/")) burnt.add(b.id.slice(3));
+      for (const p of sim.parts) {
+        const limit = heatThreshold(p);
+        if (p.id.startsWith("U1/") && limit && sim.overload(p) > limit) burnt.add(p.id.slice(3));
+      }
+      const gnd = sim.solution.voltage.get(pinNode(u, io.gnd - 1)) ?? 0;
+      const v = (sim.solution.voltage.get(pinNode(u, c.out - 1)) ?? 0) - gnd;
+      const inAmps = Math.max(...[`GP${k}`, `GM${k}`].map((id) => Math.abs(sim.current(src(id)))));
+      rows.push({ ch: k, cm, diff, v, ok: diff > 0 ? v >= 3.5 : v <= 0.4, inAmps });
+    }
+  });
+  return { rows, burnt: [...burnt] };
+}
+
+/** Проверка компаратора: по каналам — различает ли 50 мВ и 1 В, выход «ноль» не выше 0,4 В (как у LM393 по даташиту). */
+function compareSteps(def: ChipDef, level: Level, chips: Record<string, ChipDef>): { text: string; ok: boolean }[] {
+  const { rows, burnt } = compareRun(def, level, chips);
+  const n = level.channels?.length ?? 1;
+  const mv = (x: number) => `${Math.round(x * 1000)} мВ`;
+  const out: { text: string; ok: boolean }[] = [];
+  for (let k = 0; k < n; k++) {
+    const mine = rows.filter((r) => r.ch === k);
+    const name = n > 1 ? `Канал ${k + 1}: ` : "";
+    const bad = mine.filter((r) => !r.ok);
+    const worst = bad[0];
+    out.push({
+      text: `${name}IN+ выше IN− хотя бы на 50 мВ — выход отпущен (с резистором 10 кОм к питанию не ниже 3,5 В); ниже — прижат (не выше 0,4 В), при общем уровне 0,3–3,3 В${worst ? ` — неверно при ${String(worst.cm).replace(".", ",")} В и разнице ${worst.diff > 0 ? "+" : "−"}${mv(Math.abs(worst.diff))}: выход ${formatSI(worst.v, "В")}${bad.length > 1 ? ` (и ещё ${bad.length - 1})` : ""}` : ""}`,
+      ok: !bad.length,
+    });
+    const ia = Math.max(...mine.map((r) => r.inAmps));
+    out.push({ text: `${name}Вход почти не берёт тока — меньше 1 мкА: сейчас ${formatSI(ia, "А")}`, ok: ia < 1e-6 });
+  }
+  out.push({ text: burnt.length ? `Ничего не сгорело — а сейчас: ${burnt.join(", ")}` : "Ничего не сгорело", ok: !burnt.length });
+  return out;
+}
+
+/** Генератор на 555 по даташиту: RA, RB, C и ожидаемые период и доля единицы. */
+export const ASTABLE = { ra: 10_000, rb: 47_000, uF: 1, period: 0.693 * (10_000 + 2 * 47_000) * 1e-6, duty: (10_000 + 47_000) / (10_000 + 2 * 47_000) };
+
+/** 555 генератором: RA от питания к DISCH, RB от DISCH к THRES и TRIG, C от них к общему; RESET̅ — к питанию. */
+export function astableRun(def: ChipDef, chips: Record<string, ChipDef>, seconds = 0.6) {
+  const free = { mode: "free" as const, x: 0, z: 0, rot: 0 };
+  const u: Chip = { id: "U1", type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement: free };
+  const pin = (p: number): Endpoint => ({ comp: "U1", pin: p - 1 });
+  const plus: Endpoint = { comp: "G1", pin: 1 };
+  const minus: Endpoint = { comp: "G1", pin: 0 };
+  const components: Component[] = [
+    { id: "G1", type: "psu", volts: CHECK_VOLTS, amps: 1, on: true, placement: free },
+    u,
+    { id: "RA", type: "resistor", variant: "tht", ohms: ASTABLE.ra, smdSize: "0805", placement: free },
+    { id: "RB", type: "resistor", variant: "tht", ohms: ASTABLE.rb, smdSize: "0805", placement: free },
+    { id: "C1", type: "capacitor", variant: "ceramic", uF: ASTABLE.uF, volts: 50, placement: free },
+    { id: "RL", type: "resistor", variant: "tht", ohms: 10_000, smdSize: "0805", placement: free },
+  ];
+  const links: [Endpoint, Endpoint][] = [
+    [plus, pin(8)], [minus, pin(1)], [plus, pin(4)],
+    [plus, { comp: "RA", pin: 0 }], [{ comp: "RA", pin: 1 }, pin(7)],
+    [pin(7), { comp: "RB", pin: 0 }], [{ comp: "RB", pin: 1 }, pin(6)], [pin(6), pin(2)],
+    [pin(6), { comp: "C1", pin: 0 }], [{ comp: "C1", pin: 1 }, minus],
+    [pin(3), { comp: "RL", pin: 0 }], [{ comp: "RL", pin: 1 }, minus],
+  ];
+  const scene: Scene = { components, wires: links.map(([a, b], i) => ({ id: `W${i}`, a, b, color: "" })), boards: [], chips: { ...chips, [def.id]: def } };
+  const sim = new Simulation(scene, undefined, { expand: ["U1"], strictModels: true });
+  const burnt = new Set<string>();
+  const dt = 0.0005;
+  const vs: number[] = [];
+  sim.solve();
+  for (let t = 0; t < seconds; t += dt) {
+    for (const b of sim.step(dt)) if (b.id.startsWith("U1/")) burnt.add(b.id.slice(3));
+    vs.push((sim.solution.voltage.get(pinNode(u, 2)) ?? 0) - (sim.solution.voltage.get(pinNode(u, 0)) ?? 0));
+  }
+  // Первый период — заряд конденсатора с нуля до 2/3 — длиннее: пропускаем
+  const tail = vs.slice(Math.round(0.15 / dt));
+  const mid = CHECK_VOLTS / 2;
+  const rises: number[] = [];
+  for (let i = 1; i < tail.length; i++) if (tail[i - 1] < mid && tail[i] >= mid) rises.push(i * dt);
+  const period = rises.length >= 2 ? (rises.at(-1)! - rises[0]) / (rises.length - 1) : 0;
+  const span = rises.length >= 2 ? tail.slice(Math.round(rises[0] / dt), Math.round(rises.at(-1)! / dt)) : tail;
+  const duty = span.length ? span.filter((v) => v >= mid).length / span.length : 0;
+  return { period, duty, lo: Math.min(...tail), hi: Math.max(...tail), burnt: [...burnt] };
+}
+
+/** Проверка 555 генератором: период и доля единицы — по формуле даташита, ±15 %. */
+function astableSteps(def: ChipDef, chips: Record<string, ChipDef>): { text: string; ok: boolean }[] {
+  const a = astableRun(def, chips);
+  const ms = (x: number) => `${String(Math.round(x * 10000) / 10).replace(".", ",")} мс`;
+  const pct = (x: number) => `${Math.round(x * 100)} %`;
+  return [
+    { text: `Генератор (RA 10 кОм, RB 47 кОм, C 1 мкФ): период ${ms(ASTABLE.period)} ± 15 % — сейчас ${a.period ? ms(a.period) : "не генерирует"}`, ok: Math.abs(a.period - ASTABLE.period) <= 0.15 * ASTABLE.period },
+    { text: `В единице ${pct(ASTABLE.duty)} ± 5 % времени — сейчас ${a.period ? pct(a.duty) : "—"}`, ok: !!a.period && Math.abs(a.duty - ASTABLE.duty) <= 0.05 },
+    { text: `Размах выхода: ноль не выше 1,5 В, единица не ниже 3,5 В — сейчас ${formatSI(a.lo, "В")} … ${formatSI(a.hi, "В")}`, ok: a.lo <= 1.5 && a.hi >= 3.5 },
+    { text: a.burnt.length ? `Ничего не сгорело — а сейчас: ${a.burnt.join(", ")}` : "Ничего не сгорело", ok: !a.burnt.length },
+  ];
+}
+
 /** Проверка генератора: период, скважность, размах. */
 function oscSteps(def: ChipDef, level: Level, chips: Record<string, ChipDef>): { text: string; ok: boolean }[] {
   const o = oscillation(def, level, chips);
@@ -583,20 +721,26 @@ export function checkLevel(level: Level, scene: Scene, chips: Record<string, Chi
   if (problems.length) return { ok: false, problems, rows: [] };
   const def = packageChip(scene, level.part, id);
   def.scene.chips = { ...chipsUsed(scene), ...(scene.chips ?? {}) };
-  if (level.check === "osc" || level.check === "bounce") {
+  if (level.check === "osc" || level.check === "bounce" || level.check === "compare") {
     const all = { ...chips, ...def.scene.chips };
-    const steps = level.check === "osc" ? oscSteps(def, level, all) : bounceSteps(def, level, all);
+    const steps = level.check === "osc" ? oscSteps(def, level, all) : level.check === "bounce" ? bounceSteps(def, level, all) : compareSteps(def, level, all);
     const ok = steps.every((x) => x.ok);
     return ok
       ? { ok, problems: [], rows: [], steps, def, metrics: measure(scene, [], def, all) }
       : { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите шаги с ✗.`], rows: [], steps };
   }
   const rows = truthTable(def, level, { ...chips, ...def.scene.chips });
-  const steps = level.check === "sweep" && rows.every((r) => r.ok) ? sweepSteps(def, level, { ...chips, ...def.scene.chips }) : undefined;
+  const steps = !rows.every((r) => r.ok)
+    ? undefined
+    : level.check === "sweep"
+      ? sweepSteps(def, level, { ...chips, ...def.scene.chips })
+      : level.check === "timer"
+        ? astableSteps(def, { ...chips, ...def.scene.chips })
+        : undefined;
   const ok = rows.every((r) => r.ok) && (steps ?? []).every((x) => x.ok);
   if (!ok)
     return rows.every((r) => r.ok)
-      ? { ok, problems: [`${FUNC_NAMES[level.func]}: таблица сходится, а пороги — нет: смотрите шаги с ✗.`], rows, steps }
+      ? { ok, problems: [`${FUNC_NAMES[level.func]}: таблица сходится, а ${level.check === "timer" ? "генератор" : "пороги"} — нет: смотрите шаги с ✗.`], rows, steps }
       : { ok, problems: [`${FUNC_NAMES[level.func]} работает не так: смотрите строки с ✗.`], rows, diagnosis: diagnose(level, def, rows) };
   const all = { ...chips, ...def.scene.chips };
   const sweep = supplySweep(def, level, all, rows);
@@ -727,7 +871,8 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
   const level = chipLevel(def.id);
   // Генератор моделью не описать: у него нет таблицы — считается целиком
   // Генератор и подавитель дребезга живут временем (RC) — модель без времени их не заменит
-  if (!level || def.pins !== level.roles.length || level.check === "osc" || level.check === "bounce") return undefined;
+  // Компараторы и таймер сравнивают напряжения, а не логические уровни: только по транзисторам
+  if (!level || def.pins !== level.roles.length || level.check === "osc" || level.check === "bounce" || level.check === "compare" || level.check === "timer") return undefined;
   const key = `${def.id}@${def.updatedAt}`;
   const known = models.get(key);
   if (known !== undefined) return known ?? undefined;
