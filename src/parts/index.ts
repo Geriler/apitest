@@ -9,6 +9,7 @@ import { button } from "./button";
 import { capacitor } from "./capacitor";
 import { chip } from "./chip";
 import { diode } from "./diode";
+import { display } from "./display";
 import { lamp } from "./lamp";
 import { led } from "./led";
 import { mosfet } from "./mosfet";
@@ -41,6 +42,7 @@ export const PARTS: { [K in Component["type"]]: PartDef<ComponentOf<K>> } = {
   pot,
   relay,
   chip,
+  display,
 };
 
 /** Название вывода: «база», «2 MID», «COM»… (по умолчанию «вывод N»). */

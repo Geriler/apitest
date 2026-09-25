@@ -99,10 +99,10 @@ export interface Seat {
  * дорожки: точка излома или развилки, без детали.
  */
 export type SmdFootprint = "SOT-23" | "SOT-23-5" | "SOT-23-6" | "SO-4" | "SO-6" | "SO-8" | "SO-14" | "SO-16" | "1206" | "0805" | "0603" | "0402";
-export type Footprint = SmdFootprint | `DIP-${number}` | "TH3" | `TH2-${number}` | "NODE";
+export type Footprint = SmdFootprint | `DIP-${number}` | "TH3" | `TH2-${number}` | "DISP-10" | "NODE";
 
 /** Выводное посадочное место (отверстия), а не SMD. */
-export const isThtFootprint = (fp: Footprint): boolean => fp.startsWith("DIP-") || fp.startsWith("TH");
+export const isThtFootprint = (fp: Footprint): boolean => fp.startsWith("DIP-") || fp.startsWith("TH") || fp === "DISP-10";
 
 /** Площадка в мм в своей системе координат: вывод 1 — слева в ближнем ряду (+z к себе). */
 interface PadMm {
@@ -135,6 +135,8 @@ export function footprintPads(fp: Footprint): PadMm[] {
   if (fp === "NODE") return [{ x: 0, z: 0, w: NODE_PAD, d: NODE_PAD, round: true }];
   const th = (x: number, z: number): PadMm => ({ x: x * 2.54, z: z * 2.54, w: TH_PAD, d: TH_PAD, round: true });
   if (fp === "TH3") return [th(-1, 0), th(0, 0), th(1, 0)];
+  // Индикатор: выводы 1–5 ближним рядом, 6–10 обратно дальним, ряды через 15,24 мм
+  if (fp === "DISP-10") return DISPLAY_OFFSETS.map(([along, across]) => th(along - 2, across === 0 ? 3 : -3));
   if (fp.startsWith("TH2-")) {
     const k = Number(fp.slice(4));
     return [th(-k / 2, 0), th(k / 2, 0)];
@@ -280,6 +282,9 @@ export function pinOffsets(pkg: ChipPackage | undefined, pins: number): [number,
   const k = pins / 2;
   return Array.from({ length: pins }, (_, i): [number, number] => (i < k ? [i, 0] : [pins - 1 - i, 3]));
 }
+
+/** Выводы семисегментного индикатора относительно вывода 1: как DIP-10, но ряды через 6 шагов. */
+export const DISPLAY_OFFSETS: [number, number][] = Array.from({ length: 10 }, (_, i): [number, number] => (i < 5 ? [i, 0] : [9 - i, 6]));
 
 /** Словами, где какие выводы: для подсказок и панелей. */
 export function pinLayoutText(pkg: ChipPackage | undefined, pins: number): string {

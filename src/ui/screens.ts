@@ -127,6 +127,10 @@ const PLACE: Record<string, [number, number]> = {
   sr: [4, 7.5],
   dlatch: [5, 7.5],
   dff: [6, 7.5],
+  dec2: [2, 9],
+  hc138: [3, 9],
+  seg7: [4, 9],
+  hc4511: [5, 9],
 };
 /** Короткие подписи уроков на карте. */
 const SHORT: Record<string, string> = {
@@ -146,7 +150,7 @@ const needs = (l: Level): LogicFunc[] => l.kit.flatMap((k) => (k.part === "chip"
 const variant = (l: Level) => l.variant ?? (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
 
 /** Короткие названия функций для узлов карты. */
-const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг", dlatchr: "память, сброс", dffr: "по фронту, сброс", sreg8: "сдвиг, 8 бит", tffr: "счёт по спаду", cnt393: "2 × счёт 4 бит" };
+const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг", dlatchr: "память, сброс", dffr: "по фронту, сброс", sreg8: "сдвиг, 8 бит", tffr: "счёт по спаду", cnt393: "2 × счёт 4 бит", dec2: "выбор 1 из 4", dec3: "выбор 1 из 8", seg7: "цифра на индикатор", bcd7: "цифра, защёлка" };
 /** Подпись узла: функция и вариант; не влезает — только вариант. */
 function nodeSub(l: Level): string {
   const full = `${FUNC_SHORT[l.func] ?? FUNC_NAMES[l.func]} · ${variant(l)}`;

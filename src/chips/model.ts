@@ -16,6 +16,8 @@ import type { ChipDef, Scene } from "../model/types";
 export interface ModelState {
   inputs: boolean[];
   outputs: boolean[];
+  /** Что хранит внутри, если по выходам этого не узнать (защёлка 74HC4511 при гашении). */
+  state?: number;
 }
 
 export interface ChipModel {
@@ -29,6 +31,8 @@ export interface ChipModel {
    * и выходы): по нему триггеры помнят, что хранят, и узнают фронт. У вентилей не нужен.
    */
   logic(bits: boolean[], prev?: ModelState): boolean[];
+  /** Новое внутреннее состояние после установившегося расчёта (у схем с памятью; см. ModelState.state). */
+  state?(bits: boolean[], prev?: ModelState): number;
   /** Параметры, снятые при разных напряжениях питания, — по возрастанию напряжения. */
   points: ModelPoint[];
   /**

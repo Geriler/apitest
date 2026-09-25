@@ -12,7 +12,7 @@ import { Simulation, heatThreshold, pinNode } from "../sim/simulation";
 import { formatSI } from "../sim/resistorCodes";
 import { FUNC_NAMES, LEVELS, SEQUENTIAL, SMD_TWIN, gateIo, kitLabel, seqNext, seqOuts, seqState, sequenceExpected, truth, type KitItem, type Level, type LogicFunc } from "./levels";
 import { PIN_ROLES } from "../chips/roles";
-import { MODEL_OFF, REF_ABS_MAX, chipModel, setModelSource, type ChipModel, type ModelPoint } from "../chips/model";
+import { MODEL_OFF, REF_ABS_MAX, chipModel, setModelSource, type ChipModel, type ModelPoint, type ModelState } from "../chips/model";
 
 /** Напряжение питания при проверке, В. */
 export const CHECK_VOLTS = 5;
@@ -62,6 +62,7 @@ export function recipeScene(level: Level, chipFor: (func: LogicFunc) => ChipDef)
       c = { id: p.id, type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement };
     } else if (p.ohms) c = { id: p.id, type: "resistor", variant: "tht", ohms: p.ohms, smdSize: "0805", placement };
     else if (p.uF) c = { id: p.id, type: "capacitor", variant: "ceramic", uF: p.uF, volts: 50, placement };
+    else if (p.diode) c = { id: p.id, type: "diode", kind: p.diode, placement };
     else if (p.kind && p.kind in TRANSISTORS) c = { id: p.id, type: "transistor", kind: p.kind as TransistorKind, placement };
     else c = { id: p.id, type: "mosfet", kind: p.kind as "2N7000", placement };
     scene.components.push(c);
@@ -661,9 +662,13 @@ export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined 
         outputs: io.outputs,
         vcc: io.vcc,
         gnd: io.gnd,
+        // Схема с памятью: что хранит — из прошлого состояния (или по выходам), дальше — по seqNext
         logic: SEQUENTIAL.includes(level.func)
-          ? (bits, prev) => seqOuts(level.func, seqNext(level.func, prev ? seqState(level.func, prev.outputs) : 0, prev?.inputs, bits), bits)
+          ? (bits, prev) => seqOuts(level.func, seqNext(level.func, prev ? (prev.state ?? seqState(level.func, prev.outputs)) : 0, prev?.inputs, bits), bits)
           : (bits) => truth(level.func, bits),
+        ...(SEQUENTIAL.includes(level.func)
+          ? { state: (bits: boolean[], prev?: ModelState) => seqNext(level.func, prev ? (prev.state ?? seqState(level.func, prev.outputs)) : 0, prev?.inputs, bits) }
+          : {}),
         points,
         vmin: points[0].volts,
         vmax: 1.1 * CHECK_VOLTS,

@@ -168,7 +168,9 @@ export const chip: PartDef<Chip> = {
     const q = sim.junction.get(`${c.id}:q`);
     if (!model || q === undefined || q < 0) return;
     const prev = sim.memory.get(`${c.id}:seq`) as ModelState | undefined;
-    sim.memory.set(`${c.id}:seq`, { inputs: inputLevels(c, model, sim, prev).map((l) => !!l), outputs: model.outputs.map((_, k) => !!(q & (1 << k))) } satisfies ModelState);
+    const inputs = inputLevels(c, model, sim, prev).map((l) => !!l);
+    const state = model.state?.(inputs, prev);
+    sim.memory.set(`${c.id}:seq`, { inputs, outputs: model.outputs.map((_, k) => !!(q & (1 << k))), ...(state !== undefined ? { state } : {}) } satisfies ModelState);
   },
   // Перегрузка: самый нагруженный выход модели (предел как у логики 74-й серии) и питание сверх предельного
   load(c, sim) {

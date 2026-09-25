@@ -11,7 +11,7 @@ import type { ChipPackage, ChipPinRole } from "../model/breadboard";
 import type { MosfetKind, TransistorKind } from "../model/types";
 
 /** Логическая функция компонента. */
-export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc" | "div2" | "cnt4" | "sreg4" | "dlatchr" | "dffr" | "tffr" | "sreg8" | "cnt393";
+export type LogicFunc = "not" | "nand" | "nor" | "and" | "or" | "xor" | "buf" | "xnor" | "xnor4" | "eq2" | "mux" | "half" | "full" | "add4" | "sr" | "dlatch" | "dff" | "schmitt" | "osc" | "div2" | "cnt4" | "sreg4" | "dlatchr" | "dffr" | "tffr" | "sreg8" | "cnt393" | "dec2" | "dec3" | "seg7" | "bcd7";
 
 /** Деталь набора: сколько штук и что именно (тип и номинал). */
 export type KitItem =
@@ -34,7 +34,7 @@ export type KitItem =
  */
 export interface Recipe {
   /** uF — керамический конденсатор такой ёмкости, мкФ. */
-  parts: { id: string; holes: string[]; kind?: string; ohms?: number; uF?: number; func?: LogicFunc }[];
+  parts: { id: string; holes: string[]; kind?: string; ohms?: number; uF?: number; diode?: "1N4148"; func?: LogicFunc }[];
   nets: string[][];
 }
 
@@ -103,7 +103,23 @@ export function gateIo(level: Level): { inputs: number[]; outputs: number[]; vcc
 }
 
 /** Схемы с памятью: выход зависит не только от входов, но и от того, что было раньше. */
-export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff", "div2", "cnt4", "sreg4", "dlatchr", "dffr", "tffr", "sreg8", "cnt393"];
+export const SEQUENTIAL: LogicFunc[] = ["sr", "dlatch", "dff", "div2", "cnt4", "sreg4", "dlatchr", "dffr", "tffr", "sreg8", "cnt393", "bcd7"];
+
+/**
+ * Сегменты a…g цифр 0…9 — как у 74HC4511 по таблице TI (SCHS279E): шестёрка без верхней черты,
+ * девятка без нижней.
+ */
+export const SEGMENTS: readonly string[] = ["1111110", "0110000", "1101101", "1111001", "0110011", "1011011", "0011111", "1110000", "1111111", "1110011"];
+
+/**
+ * Дешифратор 7 сегментов (D0…D3, LT̅, BL̅ — младший первый): LT̅ = 0 — все сегменты горят (проверка
+ * индикатора), иначе BL̅ = 0 — все гаснут, иначе цифра; коды больше 9 — гаснут.
+ */
+function segments(v: number, lt: boolean, bl: boolean): boolean[] {
+  if (!lt) return Array(7).fill(true);
+  if (!bl || v > 9) return Array(7).fill(false);
+  return [...SEGMENTS[v]].map((c) => c === "1");
+}
 
 /** Был ли фронт (переход из нуля в единицу) на входе k между прошлым шагом и этим. */
 const rising = (prev: boolean[] | undefined, bits: boolean[], k: number) => !!prev && !prev[k] && bits[k];
@@ -135,6 +151,8 @@ export function seqNext(func: LogicFunc, q: number, prev: boolean[] | undefined,
   // Со сбросом: CLR = 0 (у 74LVC1G175, 74HC164 — активный ноль) обнуляет сразу, не дожидаясь CLK
   if (func === "dlatchr") return !bits[2] ? 0 : b ? +a : q;
   if (func === "dffr") return !bits[2] ? 0 : rising(prev, bits, 1) ? +prev![0] : q;
+  // 74HC4511 (D0…D3, LT̅, BL̅, LE̅): при LE̅ = 0 защёлка пропускает код, при LE̅ = 1 хранит
+  if (func === "bcd7") return bits[6] ? q : num(bits.slice(0, 4));
   // Счётный разряд 74HC393: сброс единицей, переключение по спаду
   if (func === "tffr") return bits[1] ? 0 : falling(prev, bits, 0) ? q ^ 1 : q;
   // 74HC164 (A, B, CLK, CLR): по фронту сдвиг, в QA — A·B
@@ -146,6 +164,7 @@ export function seqNext(func: LogicFunc, q: number, prev: boolean[] | undefined,
 
 /** Выходы схемы с памятью при состоянии q: Q (у защёлок ещё Q̅; у счётчика и регистра — Q0…Q3). */
 export function seqOuts(func: LogicFunc, q: number, bits: boolean[]): boolean[] {
+  if (func === "bcd7") return segments(q, bits[4], bits[5]);
   if (func === "sr") return bits[0] && bits[1] ? [false, false] : [!!q, !q];
   if (func === "dlatch") return [!!q, !q];
   if (func === "cnt4" || func === "sreg4") return [0, 1, 2, 3].map((k) => !!(q & (1 << k)));
@@ -155,6 +174,8 @@ export function seqOuts(func: LogicFunc, q: number, bits: boolean[]): boolean[] 
 
 /** Состояние по выходам: у защёлок — Q, у счётчика и регистра — Q0…Q3 числом. */
 export function seqState(func: LogicFunc, outs: boolean[]): number {
+  // По сегментам — какая цифра горит (погашенный или «8» от LT̅ — как получится: это только начало)
+  if (func === "bcd7") return Math.max(0, SEGMENTS.indexOf(outs.map((b) => (b ? "1" : "0")).join("")));
   return ["cnt4", "sreg4", "sreg8", "cnt393"].includes(func) ? outs.reduce((m, b, k) => m | (b ? 1 << k : 0), 0) : +!!outs[0];
 }
 
@@ -174,7 +195,7 @@ export function sequenceExpected(level: Level, q0 = 0, from = 0): boolean[][] {
 }
 
 /** Число из битов, младший — первый. */
-const num = (bits: boolean[]) => bits.reduce((sum, b, i) => sum + (b ? 1 << i : 0), 0);
+export const num = (bits: boolean[]) => bits.reduce((sum, b, i) => sum + (b ? 1 << i : 0), 0);
 
 /**
  * Что должен выдать элемент на входах bits (входы — по номерам выводов), по каждому выходу
@@ -201,7 +222,19 @@ export function truth(func: LogicFunc, bits: boolean[]): boolean[] {
     case "tffr":
     case "sreg8":
     case "cnt393":
+    case "bcd7":
       return seqOuts(func, seqNext(func, 0, undefined, bits), bits);
+    // Дешифратор 2 → 4 (A, B): выход с номером кода — ноль, остальные — единица
+    case "dec2":
+      return [0, 1, 2, 3].map((i) => i !== num(bits.slice(0, 2)));
+    // 74HC138 (A, B, C, G2A̅, G2B̅, G1): при G1 = 1 и G2A̅ = G2B̅ = 0 — ноль на выходе с номером кода
+    case "dec3": {
+      const on = bits[5] && !bits[3] && !bits[4];
+      return [0, 1, 2, 3, 4, 5, 6, 7].map((i) => !(on && i === num(bits.slice(0, 3))));
+    }
+    // Дешифратор 7 сегментов без защёлки (D0…D3, LT̅, BL̅)
+    case "seg7":
+      return segments(num(bits.slice(0, 4)), bits[4], bits[5]);
     // Четыре независимых XNOR: входы парами (1A, 1B, 2A, 2B…), выходы 1Y…4Y
     case "xnor4":
       return [0, 1, 2, 3].map((k) => bits[2 * k] === bits[2 * k + 1]);
@@ -271,8 +304,70 @@ const gates = (...ids: string[]) => ids.map((id) => ({ id, vcc: 5, gnd: 3 }));
 /** Последовательность шагов: «10» — входы по порядку, «*00» — подготовительный шаг. */
 const seq = (...steps: string[]) => steps.map((st) => ({ in: [...st.replace("*", "")].map((c) => c === "1"), ...(st.startsWith("*") ? { prep: true as const } : {}) }));
 
+/** Диод 1N4148 стоя в два отверстия: анод — row1, катод — row2 (столбец col). */
+const vd = (id: string, row1: string, row2: string, col: number) => ({ id, diode: "1N4148" as const, holes: [`k:${row1}${col}`, `k:${row2}${col}`] });
+
 /** Строчка «учебный компонент» для описаний промежуточных уровней. */
 const STEP = "Такой микросхемы не выпускают — это учебная ступенька: открытый, он попадёт только в набор следующего уровня.";
+
+/**
+ * Эталон дешифратора 7 сегментов — диодное ПЗУ: два 74HC138 (цифры 0…7 и 8…9), общая точка S
+ * (единица — сегменты могут гореть), резисторы 10 кОм от S к сегментам и диоды от сегмента к
+ * выходу дешифратора той цифры, где сегмент не горит.
+ */
+const SEG7_RECIPE: Recipe = (() => {
+  // Выводы корпуса: сегменты a…g и где на дешифраторах выход цифры 0…9
+  const segPin = [13, 12, 11, 10, 9, 15, 14];
+  const digit = ["D1.15", "D1.14", "D1.13", "D1.12", "D1.11", "D1.10", "D1.9", "D1.7", "D2.15", "D2.14"];
+  // Свободные места под детали: столбцы 21…33, пары рядов (A, C), (B, D), (E, G), (F, H)
+  const slots: [string, string, number][] = [];
+  for (let col = 21; col <= 33; col++) for (const [r1, r2] of [["A", "C"], ["B", "D"], ["E", "G"], ["F", "H"]] as const) slots.push([r1, r2, col]);
+  const parts: Recipe["parts"] = [
+    ic("D1", "dec3", 16, "D", 2),
+    ic("D2", "dec3", 16, "D", 12),
+    sot("D3", "not", "H", 2),
+    sot("D4", "or", "H", 6),
+    sot("D5", "nand", "H", 10),
+    sot("D6", "and", "H", 14),
+    sot("D7", "or", "H", 18),
+  ];
+  const nets: string[][] = [
+    ...power("P16", "P8", [{ id: "D1", vcc: 16, gnd: 8 }, { id: "D2", vcc: 16, gnd: 8 }, ...gates("D3", "D4", "D5", "D6", "D7")]),
+    // Коды: оба дешифратора видят D0, D1, D2
+    ["P7", "D1.1", "D2.1"],
+    ["P1", "D1.2", "D2.2", "D4.2"],
+    ["P2", "D1.3", "D2.3", "D4.1"],
+    // Цифры 0…7: разрешён при LT̅ = 1 и D3 = 0; 8 и 9: при D3 = 1 и LT̅ = 1
+    ["P3", "D1.6", "D3.2"],
+    ["P6", "D1.4", "D2.6", "D5.1"],
+    ["D3.4", "D2.4", "D7.1"],
+    ["P8", "D1.5", "D2.5"],
+    // S = LT ИЛИ (BL̅ И «код не больше 9»)
+    ["D4.4", "D5.2"],
+    ["D5.4", "D6.2"],
+    ["P4", "D6.1"],
+    ["D6.4", "D7.2"],
+  ];
+  let n = 0;
+  const S: string[] = ["D7.4"];
+  segPin.forEach((pin, k) => {
+    const [r1, r2, col] = slots[n++];
+    parts.push({ id: `R${k + 1}`, ohms: 10000, holes: [`k:${r1}${col}`, `k:${r2}${col}`] });
+    S.push(`R${k + 1}.1`);
+    const net = [`P${pin}`, `R${k + 1}.2`];
+    SEGMENTS.forEach((pattern, d) => {
+      if (pattern[k] === "1") return;
+      const [a, c, col2] = slots[n++];
+      const id = `VD${n}`;
+      parts.push(vd(id, a, c, col2));
+      net.push(`${id}.1`);
+      nets.push([`${id}.2`, digit[d]]);
+    });
+    nets.push(net);
+  });
+  nets.push(S);
+  return { parts, nets };
+})();
 
 export const LEVELS: Level[] = [
   {
@@ -1326,6 +1421,188 @@ export const LEVELS: Level[] = [
       ],
     },
   },
+  // ─── Индикация: дешифратор 2 → 4 → 74HC138; дешифратор 7 сегментов → 74HC4511 ────────────
+  {
+    id: "dec2",
+    func: "dec2",
+    part: "ДШ 2→4",
+    intermediate: true,
+    title: "Дешифратор 2 → 4",
+    about: `Двухразрядный код на входах B A (0…3) выбирает один из четырёх выходов: на выбранном — ноль, на остальных — единица (активный ноль, как у 74HC138). Так адрес выбирает одну микросхему памяти из нескольких или одну цифру индикатора. ${STEP}`,
+    hints: [
+      "Каждому выходу — свой набор входов: Y̅0 — при A = 0 и B = 0, Y̅3 — при A = 1 и B = 1. Ноль на выходе, когда совпали оба условия, — это И-НЕ.",
+      "Для каждого выхода нужны прямые или инвертированные A и B. Инвертированных — две штуки на все четыре выхода.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "out", "gnd", "out", "out", "out", "vcc"],
+    names: ["A", "B", "Y̅0", "", "Y̅3", "Y̅2", "Y̅1", ""],
+    io: { inputs: [1, 2], outputs: [3, 7, 6, 5] },
+    room: 40,
+    kit: [
+      { part: "chip", func: "not", count: 2 },
+      { part: "chip", func: "nand", count: 4 },
+    ],
+    recipe: {
+      parts: [sot("D1", "not", "D", 2), sot("D2", "not", "D", 6), sot("D3", "nand", "D", 10), sot("D4", "nand", "H", 2), sot("D5", "nand", "H", 6), sot("D6", "nand", "H", 10)],
+      nets: [
+        ...power("P8", "P4", gates("D1", "D2", "D3", "D4", "D5", "D6")),
+        ["P1", "D1.2", "D4.1", "D6.1"],
+        ["P2", "D2.2", "D5.2", "D6.2"],
+        ["D1.4", "D3.1", "D5.1"],
+        ["D2.4", "D3.2", "D4.2"],
+        ["D3.4", "P3"],
+        ["D4.4", "P7"],
+        ["D5.4", "P6"],
+        ["D6.4", "P5"],
+      ],
+    },
+  },
+  {
+    id: "hc138",
+    func: "dec3",
+    part: "74HC138",
+    title: "Дешифратор 3 → 8",
+    about:
+      "Настоящая микросхема: код C B A (0…7) выбирает один из восьми выходов Y̅0…Y̅7 — на нём ноль, на остальных единица. Работает, только когда разрешён: G1 = 1 и G̅2A = G̅2B = 0; иначе все выходы — единицы. Три входа разрешения позволяют собрать из двух 138-х дешифратор 4 → 16 без лишних деталей. Выводы — как у 74HC138 (TI, SCLS107).",
+    hints: [
+      "Младшие разряды B A выбирают одну из четырёх — это уже умеет дешифратор 2 → 4. Остаётся решить, в какой из двух четвёрок выход: C = 0 — Y̅0…Y̅3, C = 1 — Y̅4…Y̅7, и разрешена ли микросхема вообще.",
+      "Второй дешифратор 2 → 4 может выбрать четвёрку: на его входы — C и «запрещено». Выход Y̅ — ноль, только если ноль и у «своей четвёрки», и у «своего номера в ней»: это ИЛИ.",
+    ],
+    absMax: 7,
+    package: "DIP",
+    roles: ["in", "in", "in", "in", "in", "in", "out", "gnd", "out", "out", "out", "out", "out", "out", "out", "vcc"],
+    names: ["A", "B", "C", "G̅2A", "G̅2B", "G1", "Y̅7", "", "Y̅6", "Y̅5", "Y̅4", "Y̅3", "Y̅2", "Y̅1", "Y̅0", ""],
+    io: { inputs: [1, 2, 3, 4, 5, 6], outputs: [15, 14, 13, 12, 11, 10, 9, 7] },
+    room: 200,
+    kit: [
+      { part: "chip", func: "dec2", count: 2 },
+      { part: "chip", func: "or", count: 8 },
+      { part: "chip", func: "nor", count: 1 },
+      { part: "chip", func: "nand", count: 1 },
+    ],
+    recipe: {
+      parts: [
+        ic("D1", "dec2", 8, "D", 2),
+        ic("D2", "dec2", 8, "D", 7),
+        sot("D3", "nor", "D", 12),
+        sot("D4", "nand", "D", 16),
+        // Восемь ИЛИ: три в верхнем ряду, пять в нижнем
+        ...[0, 1, 2].map((i) => sot(`D${5 + i}`, "or", "D", 20 + 4 * i)),
+        ...[0, 1, 2, 3, 4].map((i) => sot(`D${8 + i}`, "or", "H", 2 + 4 * i)),
+      ],
+      nets: [
+        ...power("P16", "P8", [{ id: "D1", vcc: 8, gnd: 4 }, { id: "D2", vcc: 8, gnd: 4 }, ...gates("D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12")]),
+        ["P1", "D1.1"],
+        ["P2", "D1.2"],
+        ["P3", "D2.1"],
+        ["P4", "D3.1"],
+        ["P5", "D3.2"],
+        ["D3.4", "D4.2"],
+        ["P6", "D4.1"],
+        ["D4.4", "D2.2"],
+        ["D2.3", "D5.1", "D6.1", "D7.1", "D8.1"],
+        ["D2.7", "D9.1", "D10.1", "D11.1", "D12.1"],
+        ["D1.3", "D5.2", "D9.2"],
+        ["D1.7", "D6.2", "D10.2"],
+        ["D1.6", "D7.2", "D11.2"],
+        ["D1.5", "D8.2", "D12.2"],
+        ["D5.4", "P15"],
+        ["D6.4", "P14"],
+        ["D7.4", "P13"],
+        ["D8.4", "P12"],
+        ["D9.4", "P11"],
+        ["D10.4", "P10"],
+        ["D11.4", "P9"],
+        ["D12.4", "P7"],
+      ],
+    },
+  },
+  {
+    id: "seg7",
+    func: "seg7",
+    part: "ДШ 7СЕГМ",
+    intermediate: true,
+    title: "Дешифратор 7 сегментов",
+    about: `Код цифры D3 D2 D1 D0 (0…9) — какие из семи сегментов индикатора a…g зажечь, как у 74HC4511: шестёрка без верхней черты, девятка без нижней. Коды больше 9 гасят индикатор. LT̅ = 0 — зажечь все сегменты (проверить индикатор), BL̅ = 0 — погасить все; LT̅ главнее. Выводы — как у 74HC4511, только вместо LE̅ пусто. Этот собирается как диодное ПЗУ: сегмент подтянут резистором к единице, а диоды на выходы дешифраторов гасят его у тех цифр, где он не горит. ${STEP}`,
+    hints: [
+      "Один 74HC138 выбирает цифру 0…7 (разрешён, пока D3 = 0), второй — 8 и 9. Выход дешифратора цифры — ноль; если от сегмента к нему стоит диод (катодом к дешифратору), сегмент гаснет.",
+      "Резисторы сегментов тянут не прямо к питанию, а к одной общей точке: единица на ней — сегменты могут гореть, ноль — все гаснут (BL̅ или код больше 9). При LT̅ = 0 на ней единица, а оба дешифратора выключены.",
+    ],
+    package: "DIP",
+    roles: ["in", "in", "in", "in", "nc", "in", "in", "gnd", "out", "out", "out", "out", "out", "out", "out", "vcc"],
+    names: ["D1", "D2", "LT̅", "BL̅", "", "D3", "D0", "", "e", "d", "c", "b", "a", "g", "f", ""],
+    io: { inputs: [7, 1, 2, 6, 3, 4], outputs: [13, 12, 11, 10, 9, 15, 14] },
+    room: 500,
+    kit: [
+      { part: "chip", func: "dec3", count: 2 },
+      { part: "chip", func: "not", count: 1 },
+      { part: "chip", func: "or", count: 2 },
+      { part: "chip", func: "nand", count: 1 },
+      { part: "chip", func: "and", count: 1 },
+      { part: "other", type: "diode", tool: "diode", preset: { kind: "1N4148" }, label: "диод 1N4148", count: 23 },
+      { part: "resistor", ohms: 10000, count: 7 },
+    ],
+    recipe: SEG7_RECIPE,
+  },
+  {
+    id: "hc4511",
+    func: "bcd7",
+    part: "74HC4511",
+    title: "Дешифратор 7 сегментов с защёлкой",
+    about:
+      "Настоящая микросхема для индикатора с общим катодом: код цифры D3…D0 зажигает её сегменты a…g, выходы дают ток на светодиоды сегментов (через резисторы). При LE̅ = 0 код проходит сразу, при LE̅ = 1 защёлка хранит последний — счётчик может считать дальше, а индикатор показывает запомненное. LT̅ = 0 — все сегменты, BL̅ = 0 — погасить. Выводы — как у CD74HC4511 (TI, SCHS279). Проверяется последовательностью: цифры, запрещённые коды, защёлка, LT̅ и BL̅, — и выходы должны держать 4 мА, как по даташиту.",
+    hints: [
+      "Защёлку на бит можно собрать из мультиплексора 2 → 1: его выход — снова на один из его входов. Какой вход выбирать при LE̅ = 0, а какой — при LE̅ = 1?",
+      "Выходы дешифратора 7 сегментов тока не дают — они подтянуты резисторами. Между ним и выводами корпуса нужны буферы.",
+    ],
+    absMax: 7,
+    package: "DIP",
+    drive: 0.004,
+    roles: ["in", "in", "in", "in", "in", "in", "in", "gnd", "out", "out", "out", "out", "out", "out", "out", "vcc"],
+    names: ["D1", "D2", "LT̅", "BL̅", "LE̅", "D3", "D0", "", "e", "d", "c", "b", "a", "g", "f", ""],
+    io: { inputs: [7, 1, 2, 6, 3, 4, 5], outputs: [13, 12, 11, 10, 9, 15, 14] },
+    room: 1200,
+    // D0 D1 D2 D3 LT̅ BL̅ LE̅
+    sequence: seq(
+      "*0000110",
+      "1000110", "0100110", "1100110", "0010110", "1010110", "0110110", "1110110", "0001110", "1001110",
+      "0101110", "1111110",
+      "0000110", "1010110",
+      "1010111", "0110111", "0001111",
+      "0001011", "0001101", "0001001", "0001111",
+      "0001110",
+    ),
+    kit: [
+      { part: "chip", func: "seg7", count: 1 },
+      { part: "chip", func: "mux", count: 4 },
+      { part: "chip", func: "buf", count: 7 },
+    ],
+    recipe: {
+      parts: [
+        ic("D1", "seg7", 16, "D", 2),
+        ...[0, 1, 2, 3].map((i) => ic(`D${2 + i}`, "mux", 6, "D", 12 + 4 * i)),
+        ...[0, 1, 2, 3, 4, 5, 6].map((i) => sot(`D${6 + i}`, "buf", "H", 2 + 4 * i)),
+      ],
+      nets: [
+        ...power("P16", "P8", [{ id: "D1", vcc: 16, gnd: 8 }, ...["D2", "D3", "D4", "D5"].map((id) => ({ id, vcc: 5, gnd: 2 })), ...gates("D6", "D7", "D8", "D9", "D10", "D11", "D12")]),
+        // Защёлки: I0 — вход кода, I1 — свой же выход, S — LE̅
+        ["P5", "D2.6", "D3.6", "D4.6", "D5.6"],
+        ["P7", "D2.3"],
+        ["P1", "D3.3"],
+        ["P2", "D4.3"],
+        ["P6", "D5.3"],
+        ["D2.4", "D2.1", "D1.7"],
+        ["D3.4", "D3.1", "D1.1"],
+        ["D4.4", "D4.1", "D1.2"],
+        ["D5.4", "D5.1", "D1.6"],
+        ["P3", "D1.3"],
+        ["P4", "D1.4"],
+        // Буферы: сегменты a, b, c, d, e, f, g
+        ...[13, 12, 11, 10, 9, 15, 14].flatMap((pin, i) => [[`D1.${pin}`, `D${6 + i}.2`], [`D${6 + i}.4`, `P${pin}`]]),
+      ],
+    },
+  },
+
 ];
 
 export const levelById = (id: string) => LEVELS.find((l) => l.id === id);
@@ -1377,4 +1654,8 @@ export const FUNC_NAMES: Record<LogicFunc, string> = {
   tffr: "Счётный разряд",
   sreg8: "Регистр сдвига 8 бит",
   cnt393: "Два счётчика 4 бит",
+  dec2: "Дешифратор 2 → 4",
+  dec3: "Дешифратор 3 → 8",
+  seg7: "Дешифратор 7 сегментов",
+  bcd7: "Дешифратор 7 сегментов с защёлкой",
 };

@@ -346,6 +346,32 @@ export interface Relay extends Base {
   kind: RelayKind;
 }
 
+/**
+ * Семисегментный индикатор с общим катодом Kingbright SC56-11SRWA (0,56″, красный). Выводы (по
+ * даташиту): 1 e, 2 d, 3 общий катод, 4 c, 5 точка, 6 b, 7 a, 8 общий катод, 9 f, 10 g; ряды
+ * 1–5 и 6–10 через 15,24 мм.
+ */
+export interface Display extends Base {
+  type: "display";
+}
+
+/** Сегменты индикатора: имя и вывод (с 1). Выводы 3 и 8 — общий катод. */
+export const DISPLAY_SEGMENTS: readonly { name: string; pin: number }[] = [
+  { name: "a", pin: 7 },
+  { name: "b", pin: 6 },
+  { name: "c", pin: 4 },
+  { name: "d", pin: 2 },
+  { name: "e", pin: 1 },
+  { name: "f", pin: 9 },
+  { name: "g", pin: 10 },
+  { name: "dp", pin: 5 },
+];
+/**
+ * SC56-11SRWA по даташиту Kingbright (DSAP4629): Uпр 1,8 В типично (до 2,3) при 10 мА,
+ * постоянный ток сегмента до 30 мА, 75 мВт.
+ */
+export const DISPLAY_SPEC = { label: "SC56-11SRWA", vf: 1.8, atA: 0.01, maxA: 0.03, rs: 8, n: 2 };
+
 /** Микросхема, собранная из своей схемы. Что внутри — ChipDef по def. */
 export interface Chip extends Base {
   type: "chip";
@@ -406,7 +432,7 @@ export interface Oscilloscope extends Base {
   hold?: boolean;
 }
 
-export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay | Chip;
+export type Component = Resistor | Lamp | Battery | Switch | Capacitor | Diode | Led | Transistor | Mosfet | PowerSupply | Multimeter | Oscilloscope | PushButton | Potentiometer | Relay | Chip | Display;
 export type ComponentType = Component["type"];
 
 /** Конец провода: отверстие макетки или вывод свободно стоящей детали. */
@@ -596,6 +622,8 @@ export function footprintOf(c: Component): Footprint | undefined {
       return MOSFETS[c.kind].pkg === "SOT-23" ? "SOT-23" : "TH3";
     case "pot":
       return "TH3";
+    case "display":
+      return "DISP-10";
     case "chip":
       if (c.package === "SOT-23-5" || c.package === "SOT-23-6") return c.package;
       if (c.smd) return SO_PINS.includes(c.pins) ? (`SO-${c.pins}` as Footprint) : undefined;

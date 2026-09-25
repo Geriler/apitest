@@ -1473,9 +1473,9 @@ export class App {
    * Отверстия DIP-n: вывод 1 — в отверстие h, выводы 1…n/2 — вправо по его ряду, остальные — обратно
    * по ряду на три шага дальше (поперёк канавки макетки: из ряда f в ряд e). Не в шины.
    */
-  private dipHoles(h: Hole, n: number, turns = this.quarterTurns(), pkg: ChipPackage = "DIP"): string[] | undefined {
+  private dipHoles(h: Hole, n: number, turns = this.quarterTurns(), pkg: ChipPackage = "DIP", offsets = pinOffsets(pkg, n)): string[] | undefined {
     if (h.kind === "rail") return undefined;
-    const out = pinOffsets(pkg, n).map(([along, across]) => {
+    const out = offsets.map(([along, across]) => {
       const [dx, dz] = turn(along, -across, turns);
       return holeAt(h.boardId, h.x + dx, h.z + dz);
     });
@@ -2190,7 +2190,7 @@ export class App {
     }
     if (pinsOf(sample) >= 4 && h.hole) {
       const n = pinsOf(sample);
-      const holes = this.dipHoles(h.hole, n, this.quarterTurns(), sample.type === "chip" ? sample.package : undefined);
+      const holes = this.dipHoles(h.hole, n, this.quarterTurns(), sample.type === "chip" ? sample.package : undefined, part(sample).layout?.(sample));
       if (!holes) return this.setHint(`Здесь не встанет: вывод 1 — в отверстие под курсором, всем ${n} выводам нужно место (${n / 2} × 2, ряды через 3 шага), не в шинах. На макетке — поперёк канавки, от ряда f. R — повернуть.`);
       const occ = this.occupied();
       const busy = holes.find((id) => occ.has(id));
@@ -2368,7 +2368,7 @@ export class App {
     if (!part(sample).onBoard(sample) && (h.hole || h.overBoard)) return this.clearGhost();
     if (n === 1 && h.hole) return this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes: [h.hole.id] })).group);
     if (n >= 4 && h.hole) {
-      const holes = this.dipHoles(h.hole, n, this.quarterTurns(), sample.type === "chip" ? sample.package : undefined);
+      const holes = this.dipHoles(h.hole, n, this.quarterTurns(), sample.type === "chip" ? sample.package : undefined, part(sample).layout?.(sample));
       return holes ? this.showGhost(buildComponentView(this.newComponent(tool, { mode: "board", holes })).group) : this.clearGhost();
     }
     if (n === 3 && h.hole) {
