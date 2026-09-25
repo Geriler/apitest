@@ -372,8 +372,9 @@ function adapterTexture(name: string, n: number): THREE.CanvasTexture {
     g.lineTo(X(hx), Z(hz));
     g.stroke();
   });
-  // Штырьки: лужёные кольца (средний дальний — не подключён)
-  for (const [hx, hz] of n === 5 ? [...header, [0, -1.5] as [number, number]] : header) {
+  // Штырьки: лужёные кольца (средние без ножки корпуса — не подключены)
+  const idle: [number, number][] = n === 5 ? [[0, -1.5]] : n === 4 ? [[0, 1.5], [0, -1.5]] : [];
+  for (const [hx, hz] of [...header, ...idle]) {
     g.fillStyle = "#d4d6d8";
     g.beginPath();
     g.arc(X(hx), Z(hz), P * 0.3, 0, Math.PI * 2);
@@ -386,7 +387,7 @@ function adapterTexture(name: string, n: number): THREE.CanvasTexture {
   header.forEach(([hx, hz], i) => g.fillText(String(i + 1), X(hx) + P * 0.42, Z(hz) + (hz > 0 ? -P * 0.42 : P * 0.42)));
   g.font = `600 ${P * 0.24}px "IBM Plex Mono", ui-monospace, monospace`;
   g.fillText(name.slice(0, 14), canvas.width / 2, P * 0.95);
-  g.fillText(`SOT-23-${n}`, canvas.width / 2, canvas.height - P * 0.95);
+  g.fillText(n === 4 ? "SOT-143" : `SOT-23-${n}`, canvas.width / 2, canvas.height - P * 0.95);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
@@ -395,6 +396,7 @@ function adapterTexture(name: string, n: number): THREE.CanvasTexture {
 
 /** Выводы SOT-23 по порядку: [вдоль, поперёк] в долях — 1…3 снизу слева направо, дальше обратно сверху. */
 function sotPads(n: number): [number, number][] {
+  if (n === 4) return [[-1, 1], [1, 1], [1, -1], [-1, -1]];
   return n === 5
     ? [[-1, 1], [0, 1], [1, 1], [1, -1], [-1, -1]]
     : [[-1, 1], [0, 1], [1, 1], [1, -1], [0, -1], [-1, -1]];
@@ -406,7 +408,8 @@ function sotPads(n: number): [number, number][] {
  */
 function sotView(c: Chip, group: THREE.Group, base: THREE.Vector3[], pins: THREE.Vector3[]): ComponentView {
   const Hs = base[0].y;
-  const u = base[2].clone().sub(base[0]).setY(0).normalize(); // вдоль ближнего ряда: 1 → 3
+  // Вдоль ближнего ряда: 1 → 3 (у SOT-143 в ближнем ряду только 1 и 2)
+  const u = base[base.length === 4 ? 1 : 2].clone().sub(base[0]).setY(0).normalize();
   const v = base[0].clone().sub(base[base.length - 1]).setY(0).normalize(); // от дальнего ряда к ближнему
   const center = base[0].clone().addScaledVector(u, 1).addScaledVector(v, -1.5).setY(Hs);
   const spacer = mm(2.5), T = mm(1.6);

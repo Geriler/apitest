@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { SWITCH_RESISTANCE, type PushButton } from "../model/types";
 import { blackPlastic, boardFrame, type ComponentView, disposeGroup, freeTransform, lead, mm, tagPickable } from "../view/kit";
-import { pill, twoPinHint } from "../view/panel";
+import { pill, selectField, twoPinHint } from "../view/panel";
+import type { Simulation } from "../sim/simulation";
 import { twoPin } from "./common";
 import { toolFor, type PartDef } from "./types";
 
@@ -18,13 +19,15 @@ export const button: PartDef<PushButton> = {
       icon: `<path d="M1 12h8M21 12h8M9 12l12-4M15 9V3M11 3h8" />`,
       label: "Кнопка",
       title: "Кнопка без фиксации: замкнута, пока её держат",
-      settings: {},
+      settings: { bounce: true },
       name: () => "Кнопка",
       note: () =>
         `<p class="sub">Без фиксации: контакты замкнуты, только пока кнопку держат (зажмите на ней указатель). Отпустили — цепь разомкнута.</p>`,
-      editor: () => "",
-      set() {},
-      create: () => ({ type: "button" }),
+      editor: (s) => bounceSelect(s.bounce),
+      set(s, field, value) {
+        if (field === "bounce") s.bounce = value === "1";
+      },
+      create: (s) => ({ type: "button", ...(s.bounce ? { bounce: true } : {}) }),
       hint: (_s, pending) => twoPinHint(pending),
     }),
   ],
@@ -40,18 +43,42 @@ export const button: PartDef<PushButton> = {
 
   // Кнопка не горит
   stamp(c, sim, { out }) {
-    out.push(twoPin(c, sim.held.has(c.id) ? SWITCH_RESISTANCE : Infinity));
+    out.push(twoPin(c, contactClosed(c, sim) ? SWITCH_RESISTANCE : Infinity));
   },
+  // С дребезгом контакт меняется со временем — расчёт идёт шагами
+  isDynamic: (c) => !!c.bounce,
   momentary: true,
   visual: (c, sim) => ({ pressed: sim.held.has(c.id) }),
 
-  panel: () => ({
+  panel: (c) => ({
     title: "Кнопка",
-    body: `<p class="sub">Без фиксации: замкнута, пока её держат. Зажмите указатель на кнопке на макетке или на кнопке ниже.</p>`,
-    editor: `<div class="row"><button class="btn inline" data-hold id="btn-hold">Нажать и держать</button></div>`,
+    body: `<p class="sub">Без фиксации: замкнута, пока её держат. Зажмите указатель на кнопке на макетке или на кнопке ниже.</p>${c.bounce ? `<p class="sub">С дребезгом: при нажатии контакт замыкается, размыкается и снова замыкается — около 15 мс, при отпускании — около 10 мс. Счётчик на такой кнопке насчитает лишнее; подавляют дребезг RC-цепью с триггером Шмитта или микросхемой вроде MAX6816. (У настоящих кнопок дребезг — доли миллисекунды и миллисекунды; здесь он растянут, чтобы его было видно при шаге расчёта 5 мс.)</p>` : ""}`,
+    editor: `${bounceSelect(!!c.bounce)}<div class="row"><button class="btn inline" data-hold id="btn-hold">Нажать и держать</button></div>`,
   }),
+  edit(c, field, value) {
+    if (field === "bounce") c.bounce = value === "1" ? true : undefined;
+  },
   status: (c, sim) => (sim.held.has(c.id) ? pill("ok", "НАЖАТА — ЗАМКНУТА") : pill("warn", "ОТПУЩЕНА — РАЗОМКНУТА")),
 };
+
+/** Когда (мс от нажатия или отпускания) контакт с дребезгом меняет состояние; после последнего — как надо. */
+const BOUNCE_PRESS = [0, 4, 7, 11, 14];
+const BOUNCE_RELEASE = [0, 5, 9];
+
+/** Замкнут ли контакт: без дребезга — пока держат; с дребезгом — по времени от нажатия или отпускания. */
+export function contactClosed(c: PushButton, sim: Simulation): boolean {
+  const held = sim.held.has(c.id);
+  if (!c.bounce) return held;
+  const key = `${c.id}:since`;
+  let m = sim.memory.get(key) as { held: boolean; t: number } | undefined;
+  // Впервые — кнопка давно в этом положении, дребезг уже прошёл
+  if (!m || m.held !== held) sim.memory.set(key, (m = { held, t: m ? sim.time : -Infinity }));
+  const ms = (sim.time - m.t) * 1000;
+  const k = (held ? BOUNCE_PRESS : BOUNCE_RELEASE).filter((x) => ms >= x).length;
+  return (k % 2 === 1) === held;
+}
+
+const bounceSelect = (on: boolean) => selectField("bounce", "Контакты", [["1", "с дребезгом (как у настоящей)"], ["0", "идеальные"]], on ? "1" : "0");
 
 // ─── 3D: тактовая кнопка 6 × 6 мм ────────────────────────────────────────
 

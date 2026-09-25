@@ -326,6 +326,8 @@ export const PSU_LIMITS = { maxV: 30, maxA: 3 };
 /** Кнопка без фиксации: замкнута, пока её держат. Нажата ли — состояние расчёта (Simulation.held), не схемы. */
 export interface PushButton extends Base {
   type: "button";
+  /** Контакты дребезжат, как у настоящей кнопки: несколько раз замыкаются и размыкаются за ~15 мс. */
+  bounce?: boolean;
 }
 
 /** Потенциометр: вывод 0 и 2 — концы дорожки, 1 — движок. */
@@ -625,7 +627,7 @@ export function footprintOf(c: Component): Footprint | undefined {
     case "display":
       return "DISP-10";
     case "chip":
-      if (c.package === "SOT-23-5" || c.package === "SOT-23-6") return c.package;
+      if (c.package === "SOT-23-5" || c.package === "SOT-23-6" || c.package === "SOT-143") return c.package;
       if (c.smd) return SO_PINS.includes(c.pins) ? (`SO-${c.pins}` as Footprint) : undefined;
       return `DIP-${c.pins}`;
   }

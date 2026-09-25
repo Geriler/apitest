@@ -193,7 +193,7 @@ export class Simulation {
 
   /** Есть ли что-то, что зависит от времени: конденсаторы или транзисторы (у них ёмкости переходов). */
   private hasCapacitors(): boolean {
-    return this.flat.some((c) => part(c).dynamic && !this.out(c));
+    return this.flat.some((c) => (part(c).dynamic || part(c).isDynamic?.(c)) && !this.out(c));
   }
 
   /** Деталь выбыла из цепи: сгорела или у неё скрытый обрыв. */
@@ -353,7 +353,9 @@ export class Simulation {
         if (failed.length) this.solve();
       }
     }
-    if (transient) this.solveAt(SUBSTEP);
+    // Решение для показа — с тем же шагом, что и сам шаг: при мелком шаге (0,1 мс у проверки
+    // дребезга) пересчёт с 5 мс ослабил бы конденсаторы и сбил состояние моделей
+    if (transient) this.solveAt(Math.min(SUBSTEP, h));
     this.budget = Infinity;
     this.commit();
     return failed;

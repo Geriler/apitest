@@ -98,7 +98,7 @@ export interface Seat {
  * потенциометр), TH2-k (два вывода через k шагов: резистор, диод, светодиод…). NODE — узел
  * дорожки: точка излома или развилки, без детали.
  */
-export type SmdFootprint = "SOT-23" | "SOT-23-5" | "SOT-23-6" | "SO-4" | "SO-6" | "SO-8" | "SO-14" | "SO-16" | "1206" | "0805" | "0603" | "0402";
+export type SmdFootprint = "SOT-23" | "SOT-23-5" | "SOT-23-6" | "SOT-143" | "SO-4" | "SO-6" | "SO-8" | "SO-14" | "SO-16" | "1206" | "0805" | "0603" | "0402";
 export type Footprint = SmdFootprint | `DIP-${number}` | "TH3" | `TH2-${number}` | "DISP-10" | "NODE";
 
 /** Выводное посадочное место (отверстия), а не SMD. */
@@ -152,6 +152,8 @@ export function footprintPads(fp: Footprint): PadMm[] {
   // SOT-23: 1 и 2 — ближний ряд, 3 — дальний посередине
   if (fp === "SOT-23") return [at(SOT, -1, true), at(SOT, 1, true), at(SOT, 0, false)];
   if (fp === "SOT-23-5") return [at(SOT, -1, true), at(SOT, 0, true), at(SOT, 1, true), at(SOT, 1, false), at(SOT, -1, false)];
+  // SOT-143: 1 и 2 — ближний ряд через 1,92 мм, 3 — дальний справа, 4 — дальний слева
+  if (fp === "SOT-143") return [at(SOT, -1, true), at(SOT, 1, true), at(SOT, 1, false), at(SOT, -1, false)];
   if (fp === "SOT-23-6") return [at(SOT, -1, true), at(SOT, 0, true), at(SOT, 1, true), at(SOT, 1, false), at(SOT, 0, false), at(SOT, -1, false)];
   const n = Number(fp.slice(3));
   const k = n / 2;
@@ -164,7 +166,7 @@ export function footprintBody(fp: Footprint): [number, number, number] {
   if (fp === "NODE" || isThtFootprint(fp)) return [0, 0, 0];
   const chip = CHIP_PADS[fp];
   if (chip) return chip.body;
-  if (fp === "SOT-23") return [2.9, 1.3, 1.0];
+  if (fp === "SOT-23" || fp === "SOT-143") return [2.9, 1.3, 1.0];
   if (fp === "SOT-23-5" || fp === "SOT-23-6") return [2.9, 1.6, 1.1];
   const n = Number(fp.slice(3));
   return [(n / 2) * 1.27 - 0.2, 3.9, 1.5];
@@ -250,14 +252,14 @@ export function seatOf(holeId: string): { board: BoardSpec; seat: Seat } | undef
 /** Назначение вывода корпуса; nc — не подключён. */
 export type ChipPinRole = "nc" | "in" | "out" | "vcc" | "gnd";
 
-/** Вид корпуса: DIP (выводы в два ряда) или SOT-23-5/6 — крошечный, на переходнике с шагом 2,54 мм. */
-export type ChipPackage = "DIP" | "SOT-23-5" | "SOT-23-6";
+/** Вид корпуса: DIP (выводы в два ряда) или SOT-23-5/6, SOT-143 — крошечные, на переходнике с шагом 2,54 мм. */
+export type ChipPackage = "DIP" | "SOT-23-5" | "SOT-23-6" | "SOT-143";
 
 /** Крошечный корпус на переходнике. */
-export const isSot = (pkg: ChipPackage | undefined): pkg is "SOT-23-5" | "SOT-23-6" => pkg === "SOT-23-5" || pkg === "SOT-23-6";
+export const isSot = (pkg: ChipPackage | undefined): pkg is "SOT-23-5" | "SOT-23-6" | "SOT-143" => pkg === "SOT-23-5" || pkg === "SOT-23-6" || pkg === "SOT-143";
 
-/** Корпуса, которые можно выбрать: «DIP-4» … «DIP-16», «SOT-23-5», «SOT-23-6». */
-export const PACKAGES = ["DIP-4", "DIP-6", "DIP-8", "DIP-14", "DIP-16", "SOT-23-5", "SOT-23-6"];
+/** Корпуса, которые можно выбрать: «DIP-4» … «DIP-16», «SOT-23-5», «SOT-23-6», «SOT-143». */
+export const PACKAGES = ["DIP-4", "DIP-6", "DIP-8", "DIP-14", "DIP-16", "SOT-23-5", "SOT-23-6", "SOT-143"];
 
 /** Название корпуса: «DIP-8», «SOT-23-5». */
 export function packageName(pkg: ChipPackage | undefined, pins: number): string {
@@ -267,6 +269,7 @@ export function packageName(pkg: ChipPackage | undefined, pins: number): string 
 /** Из названия — вид и число выводов. */
 export function parsePackage(name: string): { package: ChipPackage; pins: number } {
   if (name === "SOT-23-5" || name === "SOT-23-6") return { package: name, pins: name === "SOT-23-5" ? 5 : 6 };
+  if (name === "SOT-143") return { package: name, pins: 4 };
   return { package: "DIP", pins: Number(name.replace(/\D/g, "")) || 8 };
 }
 
@@ -279,6 +282,7 @@ export function parsePackage(name: string): { package: ChipPackage; pins: number
  */
 export function pinOffsets(pkg: ChipPackage | undefined, pins: number): [number, number][] {
   if (pkg === "SOT-23-5") return [[0, 0], [1, 0], [2, 0], [2, 3], [0, 3]];
+  if (pkg === "SOT-143") return [[0, 0], [2, 0], [2, 3], [0, 3]];
   const k = pins / 2;
   return Array.from({ length: pins }, (_, i): [number, number] => (i < k ? [i, 0] : [pins - 1 - i, 3]));
 }
@@ -288,6 +292,7 @@ export const DISPLAY_OFFSETS: [number, number][] = Array.from({ length: 10 }, (_
 
 /** Словами, где какие выводы: для подсказок и панелей. */
 export function pinLayoutText(pkg: ChipPackage | undefined, pins: number): string {
+  if (pkg === "SOT-143") return "выводы 1 и 2 — по ближнему ряду слева направо, 3 — дальний справа, 4 — дальний слева (как у SOT-143; посередине рядов ножек нет)";
   if (pkg === "SOT-23-6") return "выводы 1–3 — по ближнему ряду слева направо, 4–6 — обратно по дальнему (как у SOT-23-6)";
   if (pkg === "SOT-23-5") return "выводы 1–3 — по ближнему ряду слева направо, 4 — дальний справа, 5 — дальний слева (как у SOT-23-5; посередине дальнего ряда ножки нет)";
   return `выводы 1–${pins / 2} — по ближнему ряду слева направо, ${pins / 2 + 1}–${pins} — обратно по дальнему, как у DIP`;

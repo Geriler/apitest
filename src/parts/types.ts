@@ -169,6 +169,8 @@ export interface PartDef<C extends Component = Component> {
    * Возвращает true, если деталь сошлась. Только у нелинейных деталей и только у исправных.
    */
   newton?(c: C, sim: Simulation, iter: number, shared: { flips: number; per?: Map<string, number> }): boolean;
+  /** То же, если зависит от экземпляра (кнопка с дребезгом меняется со временем). */
+  isDynamic?(c: C): boolean;
   /** Есть ли у детали ёмкости (тогда время идёт шагами и нужен remember). */
   dynamic?: boolean;
   /** После шага по времени: запомнить заряд своих ёмкостей в sim.capVoltage. */

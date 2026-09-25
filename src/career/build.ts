@@ -388,7 +388,7 @@ export function truthTable(def: ChipDef, level: Level, chips: Record<string, Chi
 }
 
 /** Стенд для одной микросхемы: питание volts, вход (если есть) — от второго блока питания, выход — на нагрузку 100 кОм к общему. */
-function bench(def: ChipDef, level: Level, chips: Record<string, ChipDef>, volts = CHECK_VOLTS) {
+function bench(def: ChipDef, level: Level, chips: Record<string, ChipDef>, volts = CHECK_VOLTS, button = false) {
   const io = gateIo(level);
   const free = { mode: "free" as const, x: 0, z: 0, rot: 0 };
   const u: Chip = { id: "U1", type: "chip", def: def.id, name: def.name, package: def.package, pins: def.pins, placement: free };
@@ -406,7 +406,11 @@ function bench(def: ChipDef, level: Level, chips: Record<string, ChipDef>, volts
     u,
     { id: "RL", type: "resistor", variant: "tht", ohms: 100_000, smdSize: "0805", placement: free },
   ];
-  if (io.inputs.length) {
+  if (button) {
+    // Кнопка между входом и общим: отпущена — вход подтягивает сама микросхема
+    components.push({ id: "SB1", type: "switch", closed: false, placement: free });
+    links.push([{ comp: "SB1", pin: 0 }, pin(io.inputs[0])], [{ comp: "SB1", pin: 1 }, minus]);
+  } else if (io.inputs.length) {
     components.push({ id: "G2", type: "psu", volts: 0, amps: 1, on: true, placement: free });
     links.push([{ comp: "G2", pin: 1 }, pin(io.inputs[0])], [{ comp: "G2", pin: 0 }, minus]);
   }
@@ -483,6 +487,84 @@ export function oscillation(def: ChipDef, level: Level, chips: Record<string, Ch
   return { period, duty, lo: Math.min(...tail), hi: Math.max(...tail), burnt: [...b.burnt] };
 }
 
+/**
+ * Дребезг контактов, мс от нажатия (отпускания): моменты, когда контакт меняет состояние. Нажатие —
+ * замкнулся, через 0,3 мс разомкнулся… с 3,2 мс замкнут; отпускание — с 1,7 мс разомкнут.
+ */
+export const BOUNCE = { press: [0, 0.3, 0.8, 1.2, 2.0, 2.3, 3.2], release: [0, 0.4, 0.6, 1.5, 1.7] };
+/** Сценарий проверки, мс: кнопка отпущена, нажатие, отпускание, импульс 1 мс, конец. */
+export const BOUNCE_AT = { press: 150, release: 400, glitch: 650, end: 750 };
+
+/** Замкнута ли кнопка в момент t (мс) сценария проверки дребезга. */
+export function buttonClosed(t: number): boolean {
+  const phase = (from: number, marks: number[], first: boolean) => {
+    const k = marks.filter((m) => t - from >= m).length;
+    return k % 2 === 1 ? first : !first;
+  };
+  if (t < BOUNCE_AT.press) return false;
+  if (t < BOUNCE_AT.release) return phase(BOUNCE_AT.press, BOUNCE.press, true);
+  if (t < BOUNCE_AT.glitch) return phase(BOUNCE_AT.release, BOUNCE.release, false);
+  return t < BOUNCE_AT.glitch + 1;
+}
+
+/**
+ * Прогнать сценарий дребезга: какой выход до нажатия и когда (мс) он переключался —
+ * с гистерезисом: ноль ниже 1,5 В, единица выше 3,5 В.
+ */
+export function bounceRun(def: ChipDef, level: Level, chips: Record<string, ChipDef>) {
+  const b = bench(def, level, chips, CHECK_VOLTS, true);
+  const sw = b.scene.components.find((c) => c.id === "SB1") as Extract<Component, { type: "switch" }>;
+  // Шаг 0,1 мс там, где контакт дребезжит, и 0,5 мс в остальное время
+  const fine = (t: number) => [BOUNCE_AT.press, BOUNCE_AT.release, BOUNCE_AT.glitch].some((a) => t >= a - 0.5 && t < a + 5);
+  let state: boolean | undefined;
+  let initial: boolean | undefined;
+  const edges: { t: number; high: boolean }[] = [];
+  let lo = Infinity, hi = -Infinity;
+  for (let t = 0, dt = 0.1; t < BOUNCE_AT.end; t += dt) {
+    dt = fine(t) ? 0.1 : 0.5;
+    sw.closed = buttonClosed(t);
+    b.step(dt / 1000);
+    const v = b.out();
+    const now = v >= 3.5 ? true : v <= 1.5 ? false : state;
+    if (t >= BOUNCE_AT.press - 20) {
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+    if (t < BOUNCE_AT.press) {
+      state = now;
+      initial = now;
+      continue;
+    }
+    if (now !== undefined && now !== state) edges.push({ t, high: now });
+    state = now;
+  }
+  return { initial, edges, lo, hi, burnt: [...b.burnt] };
+}
+
+/** Проверка подавителя дребезга: шаги, как у генератора. */
+function bounceSteps(def: ChipDef, level: Level, chips: Record<string, ChipDef>): { text: string; ok: boolean }[] {
+  const r = bounceRun(def, level, chips);
+  const [min, max] = level.delay ?? [0, 80];
+  const within = (from: number, to: number) => r.edges.filter((e) => e.t >= from && e.t < to);
+  const press = within(BOUNCE_AT.press, BOUNCE_AT.release);
+  const release = within(BOUNCE_AT.release, BOUNCE_AT.glitch);
+  const glitch = within(BOUNCE_AT.glitch, BOUNCE_AT.end);
+  const ms = (x: number) => `${String(Math.round(x * 10) / 10).replace(".", ",")} мс`;
+  const once = (es: typeof press, high: boolean, at: number, what: string) => {
+    const ok = es.length === 1 && es[0].high === high && es[0].t - at >= min && es[0].t - at <= max;
+    const now = !es.length ? "выход не переключился" : es.length > 1 ? `переключился ${es.length} раз` : es[0].high !== high ? "ушёл не туда" : `через ${ms(es[0].t - at)}`;
+    return { text: `${what}: выход один раз уходит в ${high ? "единицу" : "ноль"} через ${min ? `${min}–` : "не больше "}${max} мс — сейчас ${now}`, ok };
+  };
+  return [
+    { text: `Кнопка отпущена: на выходе единица — сейчас ${r.initial === undefined ? "ни то ни сё" : r.initial ? "единица" : "ноль"}`, ok: r.initial === true },
+    once(press, false, BOUNCE_AT.press, "Нажатие с дребезгом"),
+    once(release, true, BOUNCE_AT.release, "Отпускание с дребезгом"),
+    { text: `Импульс 1 мс — помеха: выход не меняется${glitch.length ? ` — а он переключился ${glitch.length} раз` : ""}`, ok: !glitch.length },
+    { text: `Уровни чистые: ноль не выше 1,5 В, единица не ниже 3,5 В — сейчас ${formatSI(r.lo, "В")} … ${formatSI(r.hi, "В")}`, ok: r.lo <= 1.5 && r.hi >= 3.5 },
+    { text: r.burnt.length ? `Ничего не сгорело — а сейчас: ${r.burnt.join(", ")}` : "Ничего не сгорело", ok: !r.burnt.length },
+  ];
+}
+
 /** Проверка генератора: период, скважность, размах. */
 function oscSteps(def: ChipDef, level: Level, chips: Record<string, ChipDef>): { text: string; ok: boolean }[] {
   const o = oscillation(def, level, chips);
@@ -501,9 +583,9 @@ export function checkLevel(level: Level, scene: Scene, chips: Record<string, Chi
   if (problems.length) return { ok: false, problems, rows: [] };
   const def = packageChip(scene, level.part, id);
   def.scene.chips = { ...chipsUsed(scene), ...(scene.chips ?? {}) };
-  if (level.check === "osc") {
+  if (level.check === "osc" || level.check === "bounce") {
     const all = { ...chips, ...def.scene.chips };
-    const steps = oscSteps(def, level, all);
+    const steps = level.check === "osc" ? oscSteps(def, level, all) : bounceSteps(def, level, all);
     const ok = steps.every((x) => x.ok);
     return ok
       ? { ok, problems: [], rows: [], steps, def, metrics: measure(scene, [], def, all) }
@@ -644,7 +726,8 @@ export function supplySweep(def: ChipDef, level: Level, chips: Record<string, Ch
 export function characterize(def: ChipDef, scene: Scene): ChipModel | undefined {
   const level = chipLevel(def.id);
   // Генератор моделью не описать: у него нет таблицы — считается целиком
-  if (!level || def.pins !== level.roles.length || level.check === "osc") return undefined;
+  // Генератор и подавитель дребезга живут временем (RC) — модель без времени их не заменит
+  if (!level || def.pins !== level.roles.length || level.check === "osc" || level.check === "bounce") return undefined;
   const key = `${def.id}@${def.updatedAt}`;
   const known = models.get(key);
   if (known !== undefined) return known ?? undefined;

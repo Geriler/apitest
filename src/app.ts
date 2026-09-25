@@ -2424,7 +2424,7 @@ export class App {
       // SMD-деталь — на плату под SMD: там площадки появляются под ней, где её ни поставь
       const sample = this.newComponent(t, { mode: "free", x: 0, z: 0, rot: 0 });
       const fp = footprintOf(sample);
-      const smdText = `На плате под SMD — куда угодно: под деталью появятся площадки корпуса ${fp}. R — повернуть.`;
+      const smdText = `На плате под SMD — куда угодно: ${fp && isThtFootprint(fp) ? "деталь сделает себе отверстия с площадками" : `под деталью появятся площадки корпуса ${fp}`}. R — повернуть.`;
       if (fp && smdOnly(sample)) s = `${smdText} Можно и на стол — провода паяются к выводам.`;
       else if (fp && (this.scene.boards ?? []).some(isSmdBoard)) s += ` ${smdText}`;
     }
