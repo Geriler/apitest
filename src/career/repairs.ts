@@ -18,11 +18,16 @@ import { referenceChips } from "./build";
 import type { KitItem } from "./levels";
 
 /** Стол ремонта: показаний деталей не видно. */
-const repair = (s: Scene): Scene => ({ ...s, career: { ...s.career, repair: true } });
+const repair = (s: Scene): Scene => ({
+  ...s,
+  // Всё, что стоит с начала, — не из набора: запасные ставятся сверх
+  components: s.components.map((c) => ({ ...c, stock: true as const })),
+  career: { ...s.career, repair: true },
+});
 
 const res = (id: string, ohms: number, holes: string[], extra: Partial<Component> = {}): Component =>
   ({ id, type: "resistor", variant: "tht", ohms, smdSize: "0805", placement: { mode: "board", holes }, ...extra }) as Component;
-const meter = (): Component => ({ id: "P1", type: "meter", mode: "V", placement: free(-18, 14) });
+const meter = (): Component => ({ id: "P1", type: "meter", mode: "V", placement: free(36, 20) });
 const spare = (ohms: number): KitItem => ({ part: "resistor", ohms, count: 1 });
 
 /** Светодиод с резистором от «Кроны» — как в первом уроке. */
@@ -112,11 +117,11 @@ function adderScene(id: string): Scene {
   };
   return repair({
     components: [
-      { id: "G1", type: "psu", volts: 5, amps: 0.5, on: true, placement: free(-30, 0) },
-      { id: "SA1", type: "switch", closed: false, placement: free(-18, -8) } as Component,
-      { id: "SA2", type: "switch", closed: false, placement: free(-18, 8) } as Component,
-      { id: "RA", type: "resistor", variant: "tht", ohms: 10_000, smdSize: "0805", placement: free(-10, -12) },
-      { id: "RB", type: "resistor", variant: "tht", ohms: 10_000, smdSize: "0805", placement: free(-10, 14) },
+      { id: "G1", type: "psu", volts: 5, amps: 0.5, on: true, placement: free(-44, 0) },
+      { id: "SA1", type: "switch", closed: false, placement: free(-26, -10) } as Component,
+      { id: "SA2", type: "switch", closed: false, placement: free(-26, 10) } as Component,
+      { id: "RA", type: "resistor", variant: "tht", ohms: 10_000, smdSize: "0805", placement: free(-16, -16) },
+      { id: "RB", type: "resistor", variant: "tht", ohms: 10_000, smdSize: "0805", placement: free(-16, 16) },
       chip("D1", "ref:xor", "74LVC1G86", -2),
       chip("D2", "ref:and", "74LVC1G08", 8),
       { id: "R3", type: "resistor", variant: "tht", ohms: 330, smdSize: "0805", placement: free(18, -6) },
@@ -265,7 +270,7 @@ export const REPAIRS: Lesson[] = [
     start() {
       const s = pcbScene();
       for (const t of s.traces ?? []) if (t.a === "pD8" && t.b === "pE8") t.fault = { open: true };
-      s.components.push({ id: "P1", type: "meter", mode: "V", placement: free(-18, 32) });
+      s.components.push({ id: "P1", type: "meter", mode: "V", placement: free(36, 34) });
       return repair({ ...s, career: { lesson: "fix-pcb-crack" } });
     },
     check: ledCheck,
@@ -296,7 +301,7 @@ export const REPAIRS: Lesson[] = [
     start() {
       const s = blinkerScene();
       for (const c of s.components) if (c.id === "C1") c.fault = { short: [0, 1] };
-      s.components.push({ id: "P1", type: "scope", timeDiv: 0.5, voltsDiv: [0, 0], placement: free(-18, 14) } as Component, { id: "P2", type: "meter", mode: "V", placement: free(-30, 14) });
+      s.components.push({ id: "P1", type: "scope", timeDiv: 0.5, voltsDiv: [0, 0], placement: free(-58, 18) } as Component, { id: "P2", type: "meter", mode: "V", placement: free(36, 20) });
       return repair({ ...s, boards: [{ id: "BB1", kind: "breadboard", x: 0, z: 0 }], career: { lesson: "fix-blinker" } });
     },
     check(scene) {

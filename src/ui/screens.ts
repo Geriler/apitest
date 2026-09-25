@@ -226,7 +226,7 @@ export class CareerMap {
         return `<g class="node ${isDone(l.id) ? "done" : "open"} lesson repair${this.chosen === l.id ? " chosen" : ""}" data-node="${l.id}" transform="translate(${p.x} ${p.y})" tabindex="0" role="button" aria-label="${esc(l.title)}">
           <rect width="${W}" height="${H}" rx="10"/>
           <text x="14" y="27" class="t">Ремонт ${i + 1}${isDone(l.id) ? " ✓" : ""}</text>
-          <text x="14" y="47" class="s">${esc(l.title.length > 28 ? l.title.slice(0, 27) + "…" : l.title)}</text></g>`;
+          <text x="14" y="47" class="s">${esc(l.title.length > 25 ? l.title.slice(0, 24) + "…" : l.title)}</text></g>`;
       }),
       ...LEVELS.map((l) => {
         const p = at(l.id);

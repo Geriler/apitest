@@ -3,6 +3,7 @@ import { setLibrary } from "../src/chips/registry";
 import { applyBoards } from "../src/model/breadboard";
 import type { Scene } from "../src/model/types";
 import { REPAIRS } from "../src/career/repairs";
+import { kitUsed } from "../src/career/build";
 import { Simulation } from "../src/sim/simulation";
 import { schematicSvg } from "../src/view/schematic";
 
@@ -27,6 +28,8 @@ describe("ремонт", () => {
       const start = r.start();
       applyBoards(start.boards ?? []);
       expect(start.career?.repair).toBe(true);
+      // Детали на столе с начала — не из набора: запасные все свободны
+      expect(kitUsed(r.kit, start)).toEqual(r.kit.map(() => 0));
       expect(r.check(start).every((x) => x.ok)).toBe(false);
       const fixed: Scene = JSON.parse(JSON.stringify(start));
       FIX[r.id](fixed);

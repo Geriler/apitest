@@ -110,6 +110,7 @@ export function chipFunc(defId: string): LogicFunc | undefined {
 
 /** К какой строке набора относится деталь (-1 — ни к какой). */
 export function kitIndex(kit: KitItem[], c: Component): number {
+  if (c.stock) return -1;
   return kit.findIndex((k) => {
     if (k.part === "mosfet") return c.type === "mosfet" && c.kind === k.kind;
     if (k.part === "bjt") return c.type === "transistor" && c.kind === k.kind;

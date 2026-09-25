@@ -203,6 +203,8 @@ interface Base {
   id: string;
   placement: Placement;
   fault?: Fault;
+  /** Стояла на столе с начала урока или ремонта — не из набора и в его счёт не идёт. */
+  stock?: true;
 }
 
 export interface Resistor extends Base {
