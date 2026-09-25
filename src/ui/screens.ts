@@ -136,6 +136,10 @@ const PLACE: Record<string, [number, number]> = {
   lmv331: [7, 1],
   lm393: [8, 1],
   ne555: [9, 1],
+  mag1: [7, 2.3],
+  hc85: [8, 2.3],
+  alu4: [7, 3.5],
+  hc595: [9, 8.4],
 };
 /** Короткие подписи уроков на карте. */
 const SHORT: Record<string, string> = {
@@ -152,10 +156,12 @@ const at = (id: string) => ({ x: PAD + PLACE[id][0] * COLW, y: PAD + PLACE[id][1
 /** Из каких функций собирается уровень (по микросхемам набора). */
 const needs = (l: Level): LogicFunc[] => l.kit.flatMap((k) => (k.part === "chip" ? [k.func] : []));
 
-const variant = (l: Level) => l.variant ?? (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : "из микросхем");
+const variant = (l: Level) =>
+  l.variant ??
+  (l.id.endsWith("-cmos") ? "КМОП" : l.id.endsWith("-rtl") ? "РТЛ" : l.kit.some((k) => k.part === "chip") ? "из микросхем" : l.kit.some((k) => k.part === "bjt" || k.part === "mosfet") ? "из транзисторов" : "из деталей");
 
 /** Короткие названия функций для узлов карты. */
-const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг", dlatchr: "память, сброс", dffr: "по фронту, сброс", sreg8: "сдвиг, 8 бит", tffr: "счёт по спаду", cnt393: "2 × счёт 4 бит", dec2: "выбор 1 из 4", dec3: "выбор 1 из 8", seg7: "цифра на индикатор", bcd7: "цифра, защёлка", rcdb: "без дребезга", debounce: "без дребезга, 50 мс", cmp: "сравнение напряжений", cmp2: "2 × сравнение", timer: "таймер, генератор" };
+const FUNC_SHORT: Partial<Record<LogicFunc, string>> = { xor: "Искл. ИЛИ", xnor: "XNOR", xnor4: "4 × XNOR", eq2: "сравнение", mux: "мультиплексор", add4: "сумматор 4 бит", sr: "память", dlatch: "память", dff: "память, по фронту", schmitt: "два порога", osc: "сам меняется", div2: "счёт", cnt4: "счёт", sreg4: "сдвиг", dlatchr: "память, сброс", dffr: "по фронту, сброс", sreg8: "сдвиг, 8 бит", tffr: "счёт по спаду", cnt393: "2 × счёт 4 бит", dec2: "выбор 1 из 4", dec3: "выбор 1 из 8", seg7: "цифра на индикатор", bcd7: "цифра, защёлка", rcdb: "без дребезга", debounce: "без дребезга, 50 мс", cmp: "сравнение напряжений", cmp2: "2 × сравнение", timer: "таймер, генератор", mag1: "больше, меньше, равно", mag4: "сравнение чисел", sreg595: "сдвиг и защёлка", addsub: "проект: + и −" };
 /** Подпись узла: функция и вариант; не влезает — только вариант. */
 function nodeSub(l: Level): string {
   const full = `${FUNC_SHORT[l.func] ?? FUNC_NAMES[l.func]} · ${variant(l)}`;
