@@ -60,12 +60,15 @@ export class CareerPanel {
     const check = this.host.lastCheck;
     const steps = check?.steps
       ? `<ul class="list steps">${check.steps.map((x) => `<li><span>${esc(x.text)}</span><span class="${x.ok ? "ok" : "bad"}">${x.ok ? "✓" : "✗"}</span></li>`).join("")}</ul>${
-          check.ok ? `<p class="sub"><b>Готово!</b> Урок пройден — дальше на карте.</p>` : ""
+          check.ok ? `<p class="sub"><b>Готово!</b> ${lesson.repair ? "Починено" : "Урок пройден"} — дальше на карте.</p>` : ""
         }`
       : "";
-    return `<div class="eyebrow">введение</div><h2>${esc(lesson.title)}</h2>
+    const how = lesson.repair
+      ? "Токов и напряжений деталей на ремонте не видно — меряйте приборами на столе (щупы — проводом, 2; нажмите на прибор, чтобы сменить режим). Запасные детали — в группе «Набор»; чинить можно и проводом или дорожкой (T), ставить на место — перетаскиванием."
+      : "Детали — из группы «Набор» слева; щупы приборов и соединения — проводом (2). Нажмите на прибор, чтобы сменить режим.";
+    return `<div class="eyebrow">${lesson.repair ? "ремонт" : "введение"}</div><h2>${esc(lesson.title)}</h2>
       <p>${esc(lesson.about)}</p>${kit}
-      <p class="sub">Детали — из группы «Набор» слева; щупы приборов и соединения — проводом (2). Нажмите на прибор, чтобы сменить режим.</p>
+      <p class="sub">${how}</p>
       <div class="row"><button class="btn inline" data-career-act="check">Проверить</button>
       <button class="btn inline" data-career-act="leave">К карте</button></div>
       ${steps}${this.hintsHtml(lesson)}`;

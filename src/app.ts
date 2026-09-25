@@ -47,7 +47,8 @@ import { caseOf, chipInner, dipSize, packageChip, packageProblems, spaceUsed } f
 import { chipsUsed, libraryChips, referenceList, resolveChip, setCareerChips, setChipToolSource, setLibrary, setReference } from "./chips/registry";
 import { checkLevel, levelScene, publicChips, referenceChips, type CheckResult } from "./career/build";
 import { levelById, type Level } from "./career/levels";
-import { lessonById, type Lesson } from "./career/lessons";
+import type { Lesson } from "./career/lessons";
+import { stageById } from "./career/repairs";
 import { activeLesson, activeLevel, careerDefs, isDone, passLesson, kitTools, loadSlot, missing, recordFail, recordMetrics, revealHint, saveSlot, slotOf, toolAllowed, unlock, workshopScene } from "./career/session";
 import { CareerMap, MenuScreen } from "./ui/screens";
 import { CareerPanel } from "./ui/career";
@@ -653,7 +654,9 @@ export class App {
   }
 
   private updateDots(dt: number): void {
+    // На ремонте ток не подсвечивается: его ищут приборами
     if (!this.showCurrent) return;
+    if (this.scene.career?.repair) return this.world.setDots([]);
     const items: { curve: THREE.Curve<THREE.Vector3>; phases: number[] }[] = [];
     for (const w of this.scene.wires) {
       const wv = this.wireViews.get(w.id);
@@ -1145,7 +1148,7 @@ export class App {
 
   /** Взяться за уровень: его стол, как оставили (или с чистого корпуса). */
   startLevel(id: string, fresh = false): void {
-    const lesson = lessonById(id);
+    const lesson = stageById(id);
     if (lesson) {
       const saved = fresh ? undefined : loadSlot(id);
       this.replaceScene(saved ? (JSON.parse(JSON.stringify(saved)) as Scene) : lesson.start());
@@ -1269,7 +1272,7 @@ export class App {
         <button class="btn inline" data-career-bar="check">Проверить</button>
         <button class="btn inline" data-career-bar="leave">К карте</button>`;
     } else if (this.careerLesson()) {
-      this.careerBar.innerHTML = `<span class="path"><small>введение</small> ${this.careerLesson()!.title}</span>
+      this.careerBar.innerHTML = `<span class="path"><small>${this.careerLesson()!.repair ? "ремонт" : "введение"}</small> ${this.careerLesson()!.title}</span>
         <button class="btn inline" data-career-bar="task">Задание</button>
         <button class="btn inline" data-career-bar="check">Проверить</button>
         <button class="btn inline" data-career-bar="leave">К карте</button>`;

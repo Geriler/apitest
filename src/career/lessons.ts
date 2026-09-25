@@ -18,6 +18,8 @@ export interface LessonStep {
 
 export interface Lesson {
   id: string;
+  /** Урок-ремонт: стол с неисправностью, показаний деталей не видно (Scene.career.repair). */
+  repair?: true;
   title: string;
   about: string;
   hints: [string, string];
@@ -28,10 +30,10 @@ export interface Lesson {
   check(scene: Scene): LessonStep[];
 }
 
-const free = (x: number, z: number) => ({ mode: "free" as const, x, z, rot: 0 });
+export const free = (x: number, z: number) => ({ mode: "free" as const, x, z, rot: 0 });
 
 /** Макетка и «Крона» 9 В, подключённая к верхним шинам (плюс — к «+», минус — к «−»). */
-function bench(id: string, extra: Component[] = [], wires: Scene["wires"] = []): Scene {
+export function bench(id: string, extra: Component[] = [], wires: Scene["wires"] = []): Scene {
   return {
     components: [{ id: "GB1", type: "battery", kind: "9V", placement: free(-26, -4) }, ...extra],
     wires: [
@@ -58,7 +60,7 @@ function litLed(id: string, meterMode: "ohm" | "V"): Scene {
 }
 
 /** Расчёт стола: состояние через секунду; что сгорело или перегружено сверх номинала. */
-function settle(scene: Scene, held: string[] = []): { sim: Simulation; hurt: string[] } {
+export function settle(scene: Scene, held: string[] = []): { sim: Simulation; hurt: string[] } {
   const sim = new Simulation(JSON.parse(JSON.stringify(scene)) as Scene);
   for (const id of held) sim.held.add(id);
   const hurt = new Set<string>();
@@ -70,7 +72,7 @@ function settle(scene: Scene, held: string[] = []): { sim: Simulation; hurt: str
   return { sim, hurt: [...hurt] };
 }
 
-const of = <T extends Component["type"]>(scene: Scene, type: T) => scene.components.filter((c): c is Extract<Component, { type: T }> => c.type === type);
+export const of = <T extends Component["type"]>(scene: Scene, type: T) => scene.components.filter((c): c is Extract<Component, { type: T }> => c.type === type);
 /** Номер цепи вывода детали (одинаковый — соединены). */
 const netOf = (scene: Scene) => {
   const { pins } = buildNetlist(scene);
@@ -78,10 +80,10 @@ const netOf = (scene: Scene) => {
 };
 /** Показание вольтметра: красный щуп минус чёрный. */
 const reading = (sim: Simulation, m: Component) => (sim.solution.voltage.get(pinNode(m, 1)) ?? 0) - (sim.solution.voltage.get(pinNode(m, 0)) ?? 0);
-const mA = (a: number) => formatSI(Math.abs(a), "А");
-const noHurt = (hurt: string[]): LessonStep => ({ text: hurt.length ? `Ничего не сгорело и не перегружено — а сейчас: ${hurt.join(", ")}` : "Ничего не сгорело и не перегружено", ok: !hurt.length });
+export const mA = (a: number) => formatSI(Math.abs(a), "А");
+export const noHurt = (hurt: string[]): LessonStep => ({ text: hurt.length ? `Ничего не сгорело и не перегружено — а сейчас: ${hurt.join(", ")}` : "Ничего не сгорело и не перегружено", ok: !hurt.length });
 /** Светодиод горит нормально: 5–25 мА. */
-const ledOk = (a: number) => Math.abs(a) >= 0.005 && Math.abs(a) <= 0.025;
+export const ledOk = (a: number) => Math.abs(a) >= 0.005 && Math.abs(a) <= 0.025;
 
 export const LESSONS: Lesson[] = [
   {
@@ -256,7 +258,7 @@ export const LESSONS: Lesson[] = [
 export const lessonById = (id: string) => LESSONS.find((l) => l.id === id);
 
 /** Период мигалки по коллектору первого транзистора, с (или 0, если не мигает). */
-function blinkPeriod(scene: Scene): number {
+export function blinkPeriod(scene: Scene): number {
   const vt = of(scene, "transistor")[0];
   if (!vt) return 0;
   const sim = new Simulation(JSON.parse(JSON.stringify(scene)) as Scene);

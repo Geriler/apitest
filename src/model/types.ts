@@ -193,9 +193,16 @@ export type Placement =
   | { mode: "board"; holes: string[] }
   | { mode: "free"; x: number; z: number; rot: number };
 
+/**
+ * Скрытая неисправность (для уровней ремонта): снаружи деталь, провод или дорожка выглядят целыми.
+ * open — обрыв внутри: ток не идёт; short — пробой: выводы pins[0] и pins[1] замкнуты накоротко.
+ */
+export type Fault = { open: true } | { short: [number, number] };
+
 interface Base {
   id: string;
   placement: Placement;
+  fault?: Fault;
 }
 
 export interface Resistor extends Base {
@@ -367,6 +374,8 @@ export interface Wire {
   a: Endpoint;
   b: Endpoint;
   color: string;
+  /** Провод переломлен внутри изоляции: снаружи целый, но ток не идёт. */
+  fault?: { open: true };
   /**
    * «flat» — прямая перемычка: лежит на плате, концы загнуты в отверстия. Только если оба конца
    * в отверстиях одной платы, иначе провод идёт дугой. «arc» или нет (старые схемы) — гибкий провод дугой.
@@ -411,6 +420,8 @@ export interface Trace {
   id: string;
   a: string;
   b: string;
+  /** Трещина в меди: снаружи дорожка целая, но ток не идёт. */
+  fault?: { open: true };
 }
 
 /** Ширина дорожки, мм: как диаметр площадки (0,72 шага). */
@@ -434,7 +445,8 @@ export interface Scene {
   /** Эта схема — начинка микросхемы с таким обозначением (её открыли, чтобы поправить). */
   editingChip?: string;
   /** Стол карьеры: уровень или урок введения (набор деталей ограничен) или мастерская (открытые модули). */
-  career?: { level?: string; lesson?: string; workshop?: boolean };
+  /** Стол карьеры: уровень, урок или мастерская; repair — урок-ремонт (показаний деталей не видно). */
+  career?: { level?: string; lesson?: string; workshop?: boolean; repair?: boolean };
 }
 
 /**

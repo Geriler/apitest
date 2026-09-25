@@ -9,7 +9,7 @@ import { resolveChip } from "../chips/registry";
 import { PARTS, part } from "../parts";
 import { mosfetState, type MosfetState } from "../parts/mosfet";
 import { transistorState, type TransistorState } from "../parts/transistor";
-import { endpointNode } from "./nodes";
+import { endpointNode, pinNode } from "./nodes";
 import { solveCircuit, type BranchResult, type Solution, type Topology } from "./solver";
 import { chipModel, type ChipModel } from "../chips/model";
 import * as tolerance from "./tolerance";
@@ -77,6 +77,11 @@ export function lampResistance(c: Extract<Component, { type: "lamp" }>, tol: Tol
 export function heatThreshold(c: Component): number {
   return part(c).thermal?.threshold ?? 0;
 }
+
+/** Сопротивление пробоя (скрытая неисправность short), Ом. */
+const FAULT_SHORT = 0.05;
+/** Скрытый обрыв детали (уровни ремонта). */
+const isOpen = (c: Component) => !!c.fault && "open" in c.fault;
 
 /** Шаг по времени при наличии конденсаторов, с. */
 export const SUBSTEP = 0.005;
@@ -170,19 +175,29 @@ export class Simulation {
 
   /** Есть ли что-то, что зависит от времени: конденсаторы или транзисторы (у них ёмкости переходов). */
   private hasCapacitors(): boolean {
-    return this.flat.some((c) => part(c).dynamic && !this.state(c.id).burned);
+    return this.flat.some((c) => part(c).dynamic && !this.out(c));
+  }
+
+  /** Деталь выбыла из цепи: сгорела или у неё скрытый обрыв. */
+  private out(c: Component): boolean {
+    return this.state(c.id).burned || isOpen(c);
   }
 
   /** Схема для решателя при заданных линеаризациях диодов и транзисторов и шаге h для конденсаторов. */
   private branches(h: number): Stamp {
     this.h = h;
     const s: Stamp = { out: [], extras: { currents: [], vccs: [] }, links: [] };
-    for (const c of this.flat) part(c).stamp(c, this, s);
+    for (const c of this.flat) {
+      // Скрытый обрыв — деталь в цепи не участвует; пробой — её выводы ещё и замкнуты накоротко
+      if (isOpen(c)) continue;
+      part(c).stamp(c, this, s);
+      if (c.fault && "short" in c.fault) s.out.push({ id: `${c.id}:fault`, a: pinNode(c, c.fault.short[0]), b: pinNode(c, c.fault.short[1]), r: FAULT_SHORT });
+    }
     for (const w of this.scene.wires) {
-      s.out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: wireResistance(this.scene, w) });
+      s.out.push({ id: w.id, a: endpointNode(this.scene, w.a), b: endpointNode(this.scene, w.b), r: w.fault?.open ? Infinity : wireResistance(this.scene, w) });
     }
     for (const t of this.scene.traces ?? []) {
-      s.out.push({ id: t.id, a: HOLE_BY_ID.get(t.a)!.node, b: HOLE_BY_ID.get(t.b)!.node, r: traceResistance(t.a, t.b) });
+      s.out.push({ id: t.id, a: HOLE_BY_ID.get(t.a)!.node, b: HOLE_BY_ID.get(t.b)!.node, r: t.fault?.open ? Infinity : traceResistance(t.a, t.b) });
     }
     return s;
   }
@@ -217,7 +232,7 @@ export class Simulation {
    * Возвращает false, если за 100 итераций не сошлось (бывает на резких переключениях).
    */
   private solveAt(h: number): boolean {
-    const nonlinear = this.flat.filter((c) => part(c).newton && !this.state(c.id).burned);
+    const nonlinear = this.flat.filter((c) => part(c).newton && !this.out(c));
     const shared = { flips: 0 };
     for (let iter = 1; iter <= 100; iter++) {
       const { out, extras, links } = this.branches(h);
@@ -256,7 +271,7 @@ export class Simulation {
 
   /** Расчёт установился: детали запоминают своё состояние (см. PartDef.commit). */
   private commit(): void {
-    for (const c of this.flat) if (!this.state(c.id).burned) part(c).commit?.(c, this);
+    for (const c of this.flat) if (!this.out(c)) part(c).commit?.(c, this);
   }
 
   branch(id: string): BranchResult {
@@ -346,7 +361,7 @@ export class Simulation {
     }
     this.time += h;
     for (const c of this.flat) {
-      if (!this.state(c.id).burned) part(c).remember?.(c, this);
+      if (!this.out(c)) part(c).remember?.(c, this);
     }
     return ok ? this.heat(h) : [];
   }
@@ -357,7 +372,7 @@ export class Simulation {
       const t = part(c).thermal;
       if (!t) continue;
       const s = this.state(c.id);
-      if (s.burned) continue;
+      if (s.burned || isOpen(c)) continue;
       const k = this.overload(c);
       s.heat = k > t.threshold ? s.heat + (k - t.threshold) * t.rate * dt : Math.max(0, s.heat - t.cooling * dt);
       if (s.heat >= 1) {

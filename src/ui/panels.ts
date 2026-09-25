@@ -57,9 +57,7 @@ export function componentPanel(h: PanelHost, c: Component, pinned: boolean): [st
     : `<p class="sub">Нажмите, чтобы выбрать и изменить.</p>`;
   const html = `<div class="eyebrow"><span class="ref">${c.id}</span></div>
     <h2>${title}</h2>
-    ${statusPill(h, c)}
-    ${p.readout?.(c, h.sim) ?? readout(h.sim.voltage(c), h.sim.current(c), h.sim.power(c))}
-    ${powerMeter(h, c)}
+    ${quiet(h) && !INSTRUMENTS.has(c.type) ? (h.sim.state(c.id).burned ? statusPill(h, c) : "") : `${statusPill(h, c)}${p.readout?.(c, h.sim) ?? readout(h.sim.voltage(c), h.sim.current(c), h.sim.power(c))}${powerMeter(h, c)}`}
     <div class="kv"><span>Где</span><span>${where}</span></div>
     ${actualRows(h, c)}
     ${body}
@@ -67,6 +65,14 @@ export function componentPanel(h: PanelHost, c: Component, pinned: boolean): [st
     ${actions}`;
   return [`c:${c.id}`, html];
 }
+
+/**
+ * Уровень ремонта: токов, напряжений и режимов деталей не показываем — неисправность ищут приборами.
+ * Сгоревшее видно и так (почерневший корпус).
+ */
+const quiet = (h: PanelHost) => !!h.scene.career?.repair;
+/** Приборы и блок питания показывают своё и на ремонте — для того они и есть. */
+const INSTRUMENTS = new Set(["meter", "scope", "psu"]);
 
 export function statusPill(h: PanelHost, c: Component): string {
   const p = part(c);
@@ -112,7 +118,7 @@ export function wirePanel(h: PanelHost, id: string): [string, string] {
     : `<p class="sub">Концы не на одной плате — такой провод идёт только дугой.</p>`;
   const html = `<div class="eyebrow"><span class="ref">${id}</span> · провод</div>
     <h2>${isFlatWire(w) ? "Прямая перемычка" : "Провод"}</h2>
-    ${readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
+    ${quiet(h) ? "" : readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
     <div class="kv"><span>От</span><span>${name(w.a)}</span></div>
     <div class="kv"><span>До</span><span>${name(w.b)}</span></div>
     <div class="field"><label>Цвет</label>${swatches(w.color, false)}</div>
@@ -131,7 +137,7 @@ export function tracePanel(h: PanelHost, id: string): [string, string] {
   const lengthMm = Math.hypot(a.x - c.x, a.z - c.z) * 2.54;
   const html = `<div class="eyebrow"><span class="ref">${id}</span> · дорожка</div>
     <h2>Медная дорожка</h2>
-    ${readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
+    ${quiet(h) ? "" : readout(Math.abs(b.voltage), Math.abs(b.current), b.power)}
     <div class="kv"><span>От</span><span>${holeLabel(t.a)}</span></div>
     <div class="kv"><span>До</span><span>${holeLabel(t.b)}</span></div>
     <div class="kv"><span>Длина</span><span>${String(lengthMm.toFixed(1)).replace(".", ",")} мм</span></div>

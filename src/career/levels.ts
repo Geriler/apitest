@@ -19,8 +19,12 @@ export type KitItem =
   | { part: "bjt"; kind: TransistorKind; count: number }
   | { part: "resistor"; ohms: number; count: number }
   | { part: "chip"; func: LogicFunc; count: number }
-  /** Любая другая деталь: тип, инструмент и его настройки (светодиод нужного цвета, кнопка…). */
-  | { part: "other"; type: string; tool: string; preset: Record<string, unknown>; label: string; count: number };
+  /**
+   * Любая другая деталь: тип, инструмент и его настройки (светодиод нужного цвета, кнопка…).
+   * match — по каким полям узнать поставленную деталь, если они называются не как настройки
+   * инструмента (у конденсатора настройка electrolyticUF, а у детали — uF).
+   */
+  | { part: "other"; type: string; tool: string; preset: Record<string, unknown>; label: string; count: number; match?: Record<string, unknown> };
 
 /**
  * Эталонная сборка на корпусе SOT-23-5 (поле 13 × 8, ряды A–H; выводы: 1 — снизу слева, 2 — снизу

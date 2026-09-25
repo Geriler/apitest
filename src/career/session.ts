@@ -8,7 +8,8 @@ import { PARTS, type ToolDef } from "../parts";
 import { chipTool } from "../parts/chip";
 import { chipFunc, chipLevel, kitUsed, type Metrics } from "./build";
 import { FUNC_NAMES, LEVELS, kitLabel, levelById, type KitItem, type Level } from "./levels";
-import { lessonById, type Lesson } from "./lessons";
+import type { Lesson } from "./lessons";
+import { stageById } from "./repairs";
 
 const STORE_KEY = "maketka.career.v1";
 
@@ -130,7 +131,7 @@ export function missing(level: Level | Lesson): string[] {
 
 /** Уровень, который собирают на столе (по сцене). */
 export const activeLevel = (scene: Scene): Level | undefined => (scene.career?.level ? levelById(scene.career.level) : undefined);
-export const activeLesson = (scene: Scene): Lesson | undefined => (scene.career?.lesson ? lessonById(scene.career.lesson) : undefined);
+export const activeLesson = (scene: Scene): Lesson | undefined => (scene.career?.lesson ? stageById(scene.career.lesson) : undefined);
 /** Набор деталей стола: уровня или урока. */
 const activeKit = (scene: Scene): KitItem[] | undefined => activeLevel(scene)?.kit ?? activeLesson(scene)?.kit;
 
@@ -141,7 +142,7 @@ const BUILTIN = new Set(["select", "wire", "trace", "delete", "bb", "pcb"]);
 /** Можно ли пользоваться инструментом в этой сцене. */
 export function toolAllowed(scene: Scene, tool: string): boolean {
   // Урок: только провода и набор (приборы уже на столе)
-  if (scene.career?.lesson) return ["select", "wire", "delete"].includes(tool) || tool.startsWith("kit:");
+  if (scene.career?.lesson) return ["select", "wire", "delete", ...(scene.career.repair ? ["trace"] : [])].includes(tool) || tool.startsWith("kit:");
   // Песочница и мастерская — все детали (микросхемы — по режиму: заводские или открытые)
   if (!scene.career?.level) return !tool.startsWith("kit:");
   return BUILTIN.has(tool) || TEST_TOOLS.has(tool) || tool.startsWith("kit:");

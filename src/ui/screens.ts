@@ -3,7 +3,8 @@
  * стрелки «из чего собирается», как дерево исследований.
  */
 
-import { LESSONS, lessonById, type Lesson } from "../career/lessons";
+import { LESSONS, type Lesson } from "../career/lessons";
+import { REPAIRS, stageById } from "../career/repairs";
 import { FUNC_NAMES, LEVELS, gateIo, kitLabel, type Level, type LogicFunc } from "../career/levels";
 import { bestOf, isDone, loadSlot, missing } from "../career/session";
 import { metricsHtml } from "./career";
@@ -48,7 +49,7 @@ export class MenuScreen {
         <button class="menu-card career${current === "career" ? " current" : ""}" data-mode="career">
           <b>Карьера</b>
           <span>Открывайте компоненты, собирая их из выданного набора деталей — от инвертора до четырёхразрядного сумматора.</span>
-          <small>Открыто ${done} из ${LEVELS.length} · уроков ${LESSONS.filter((l) => isDone(l.id)).length} из ${LESSONS.length}</small>
+          <small>Открыто ${done} из ${LEVELS.length} · уроков ${LESSONS.filter((l) => isDone(l.id)).length} из ${LESSONS.length} · ремонтов ${REPAIRS.filter((l) => isDone(l.id)).length} из ${REPAIRS.length}</small>
         </button>
       </div>
       <p class="sub">У каждого режима свой стол и свои сохранения.</p>
@@ -105,6 +106,14 @@ const PLACE: Record<string, [number, number]> = {
   full: [5, 3.5],
   eq2: [6, 1],
   hc283: [6, 3.5],
+  "fix-led-open": [0, 9],
+  "fix-led-dim": [1, 9],
+  "fix-divider": [2, 9],
+  "fix-switch-short": [3, 9],
+  "fix-switch-reversed": [4, 9],
+  "fix-pcb-crack": [5, 9],
+  "fix-adder": [6, 9],
+  "fix-blinker": [6, 10],
   sr: [4, 7.5],
   dlatch: [5, 7.5],
   dff: [6, 7.5],
@@ -195,6 +204,9 @@ export class CareerMap {
     };
     // Введение: урок за уроком, последний ведёт к деталям (рекомендовано, но не обязательно)
     LESSONS.forEach((l, i) => edge(l.id, LESSONS[i + 1]?.id ?? "parts", isDone(l.id)));
+    // Ремонт — отдельной цепочкой после уроков про приборы (рекомендовано, не обязательно)
+    edge(LESSONS.at(-1)!.id, REPAIRS[0].id, isDone(LESSONS.at(-1)!.id));
+    REPAIRS.slice(1).forEach((r, i) => edge(REPAIRS[i].id, r.id, isDone(REPAIRS[i].id)));
     for (const l of LEVELS) {
       const n = needs(l);
       if (!n.length) edge("parts", l.id, true);
@@ -209,6 +221,13 @@ export class CareerMap {
           <text x="14" y="27" class="t">Урок ${i + 1}${isDone(l.id) ? " ✓" : ""}</text>
           <text x="14" y="47" class="s">${esc(SHORT[l.id] ?? l.title)}</text></g>`;
       }),
+      ...REPAIRS.map((l, i) => {
+        const p = at(l.id);
+        return `<g class="node ${isDone(l.id) ? "done" : "open"} lesson repair${this.chosen === l.id ? " chosen" : ""}" data-node="${l.id}" transform="translate(${p.x} ${p.y})" tabindex="0" role="button" aria-label="${esc(l.title)}">
+          <rect width="${W}" height="${H}" rx="10"/>
+          <text x="14" y="27" class="t">Ремонт ${i + 1}${isDone(l.id) ? " ✓" : ""}</text>
+          <text x="14" y="47" class="s">${esc(l.title.length > 28 ? l.title.slice(0, 27) + "…" : l.title)}</text></g>`;
+      }),
       ...LEVELS.map((l) => {
         const p = at(l.id);
         const state = isDone(l.id) ? "done" : missing(l).length ? "locked" : "open";
@@ -219,9 +238,9 @@ export class CareerMap {
       }),
     ];
     const chosen = this.chosen ? LEVELS.find((l) => l.id === this.chosen) : undefined;
-    const lesson = this.chosen ? lessonById(this.chosen) : undefined;
+    const lesson = this.chosen ? stageById(this.chosen) : undefined;
     this.el.innerHTML = `<header class="map-head">
-        <div><div class="eyebrow">карьера</div><h2>Открыто ${done} из ${LEVELS.length} · уроков ${LESSONS.filter((l) => isDone(l.id)).length} из ${LESSONS.length}</h2></div>
+        <div><div class="eyebrow">карьера</div><h2>Открыто ${done} из ${LEVELS.length} · уроков ${LESSONS.filter((l) => isDone(l.id)).length} из ${LESSONS.length} · ремонтов ${REPAIRS.filter((l) => isDone(l.id)).length} из ${REPAIRS.length}</h2></div>
         <div class="row">
           ${this.host.hasTable() ? `<button class="btn inline" data-map="close">К столу</button>` : ""}
           <button class="btn inline" data-map="workshop">Мастерская</button>
@@ -242,7 +261,7 @@ export class CareerMap {
 
   private lessonCard(l: Lesson): string {
     const started = !!loadSlot(l.id);
-    return `<div class="eyebrow">введение · урок ${LESSONS.indexOf(l) + 1}</div>
+    return `<div class="eyebrow">${l.repair ? `ремонт ${REPAIRS.indexOf(l) + 1}` : `введение · урок ${LESSONS.indexOf(l) + 1}`}</div>
       <h3>${esc(l.title)}${isDone(l.id) ? " ✓" : ""}</h3>
       <p>${esc(l.about)}</p>
       ${l.kit.length ? `<div class="eyebrow">набор</div><ul class="kitlist">${l.kit.map((k) => `<li>${esc(kitLabel(k))} × ${k.count}</li>`).join("")}</ul>` : ""}

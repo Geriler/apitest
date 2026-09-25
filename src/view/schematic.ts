@@ -169,6 +169,8 @@ interface Placed {
  */
 export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, layout: SchematicLayout = scene.schematic ?? {}): string {
   if (!scene.components.length) return "";
+  // На уровнях ремонта токов и напряжений на схеме нет — их меряют приборами
+  const quiet = !!scene.career?.repair;
   const { nets, pins } = buildNetlist(scene);
   // Потенциал цепи — первое известное значение среди её узлов
   const volts = nets.map((nodes) => {
@@ -214,7 +216,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
       const current = Math.abs(el.current);
       const label = (lx: number, ly: number) =>
         `<text x="${num(lx)}" y="${num(ly - 6)}" class="ref">${esc(c.id)}</text><text x="${num(lx)}" y="${num(ly + 7)}">${esc(el.value)}</text>` +
-        `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`;
+        (quiet ? "" : `<text x="${num(lx)}" y="${num(ly + 20)}" class="sub">${current > 1e-9 ? formatSI(current, "А") : "0 А"}</text>`);
       if (el.flag) {
         // Вывод микросхемы: флажок с номером над линией своей цепи
         const y = Y(netOf[0]);
@@ -349,7 +351,7 @@ export function schematicSvg(scene: Scene, sim: Simulation, highlight?: string, 
     netsSvg.push(
       `<g class="net" data-net="${esc(keys[net])}" data-y="${y}">` +
         `<path class="nethit" d="M${num(a)} ${y}H${num(b)}"/><path d="M${num(a)} ${y}H${num(b)}"/>${dots}` +
-        `<text x="${num(a + 4)}" y="${num(Number(y) - 5)}" class="volt">${v === undefined ? "—" : formatVolts(v)}</text></g>`,
+        (quiet ? "" : `<text x="${num(a + 4)}" y="${num(Number(y) - 5)}" class="volt">${v === undefined ? "—" : formatVolts(v)}</text>`) + `</g>`,
     );
   }
 

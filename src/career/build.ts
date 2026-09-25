@@ -114,7 +114,7 @@ export function kitIndex(kit: KitItem[], c: Component): number {
     if (k.part === "mosfet") return c.type === "mosfet" && c.kind === k.kind;
     if (k.part === "bjt") return c.type === "transistor" && c.kind === k.kind;
     if (k.part === "resistor") return c.type === "resistor" && c.ohms === k.ohms;
-    if (k.part === "other") return c.type === k.type && Object.entries(k.preset).every(([key, v]) => (c as unknown as Record<string, unknown>)[key] === v || (key === "size" && v === "5mm" && !(c as { size?: string }).size));
+    if (k.part === "other") return c.type === k.type && Object.entries(k.match ?? k.preset).every(([key, v]) => (c as unknown as Record<string, unknown>)[key] === v || (key === "size" && v === "5mm" && !(c as { size?: string }).size));
     return c.type === "chip" && chipFunc(c.def) === k.func;
   });
 }
